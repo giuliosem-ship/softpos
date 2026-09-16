@@ -71,6 +71,70 @@
       "test_results": "PASS: ....\n----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK",
       "retries": 0,
       "completed_at": "2026-09-15T21:56:19.671764"
+    },
+    {
+      "id": "TASK-005",
+      "component": "identity",
+      "title": "RFC & CURP Algorithmic Validator & Parser",
+      "status": "completed",
+      "priority": 5,
+      "files": {
+        "tests": "tests/test_rfc_curp.py",
+        "implementation": "internal/identity/rfc_curp.py"
+      },
+      "spec": "Implement Mexican RFC and CURP validation and demographic parsing in Python 3.12:\n1. Custom exceptions: InvalidRFCError, InvalidCURPError.\n2. validate_rfc(rfc: str) -> bool: Validates RFC format using regex. Persona Física (4 letters + 6 digits + 3 alphanumeric homoclave). Persona Moral (3 letters + 6 digits + 3 alphanumeric homoclave). Also allows generic RFCs (XAXX010101000 for national public in general, XEXX010101000 for foreign).\n3. parse_rfc_type(rfc: str) -> str: Returns 'PERSONA_FISICA', 'PERSONA_MORAL', or 'GENERICO'. Raises InvalidRFCError if invalid.\n4. validate_curp(curp: str) -> bool: Validates official 18-character CURP format using standard RENAPO regex.\n5. parse_curp(curp: str) -> dict: Parses CURP and returns dictionary with: birth_date (YYYY-MM-DD string), gender ('HOMBRE' or 'MUJER'), state_code (2-letter state code, e.g. 'DF', 'NL', 'JC'). Raises InvalidCURPError if invalid.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** <span style=\"color:orange\">**Needs Revision**</span>\n**Scope:** RFC/CURP Validation Logic (Mexican Identity & Tax Compliance)\n\n---\n\n#### **1. Input Normalization & Sanitization (High Priority)**\nThe current implementation is brittle because it does not perform input normalization. If a user provides a CURP or RFC with leading/trailing whitespace or lowercase characters (e.g., `\" garm850101abc \"`), the validation will fail.\n*   **Recommendation:** Implement `.strip().upper()` on all inputs before passing them to the regex engine to ensure the parser is resilient to common user entry errors.\n\n#### **2. SAT Compliance & State Code Accuracy (Medium Priority)**\nThe `CURP_STATE_CODES` dictionary contains `DF` (Distrito Federal), which is technically deprecated in favor of `CDMX` (Ciudad de México). In a financial system, using outdated state codes can lead to data integrity issues during KYC (Know Your Customer) reporting.\n*   **Recommendation:** Update the mapping to include `CDMX` and consider a \"Legacy\" flag or a warning if `DF` is encountered to maintain compatibility with older records while adhering to current standards.\n\n#### **3. RFC Pattern Strictness (Medium Priority)**\nThe `RFC_PF_PATTERN` (`^[A-Z]{4}\\d{6}[A-Z0-9]{3}$`) is too permissive for a financial system. For *Persona Física*, the 4th and 5th characters must be letters (representing the first two letters of the name), and the 6th through 11th characters must be digits (birth date). Your current regex allows digits in the 4th and",
+      "test_results": "PASS: .......\n----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK",
+      "retries": 3,
+      "completed_at": "2026-09-15T22:09:28.312315"
+    },
+    {
+      "id": "TASK-006",
+      "component": "identity",
+      "title": "SAT CSF (Constancia de Situación Fiscal) Parser & Profiler",
+      "status": "pending",
+      "priority": 6,
+      "files": {
+        "tests": "tests/test_csf_parser.py",
+        "implementation": "internal/identity/csf_parser.py"
+      },
+      "spec": "Implement a structured parser for SAT Constancia de Situación Fiscal (CSF) text:\n1. Custom exception: InvalidCSFError.\n2. CSFProfile dataclass (frozen=True):\n   rfc: str\n   razon_social: str\n   codigo_postal: str\n   regimenes: list[dict] (each has 'clave' and 'descripcion')\n   estatus_padron: str (e.g. 'ACTIVO')\n   is_resico: bool\n3. parse_csf_text(text: str) -> CSFProfile:\n   - Extracts RFC using RFC regex.\n   - Extracts Denominación/Razón Social or Nombre Completo.\n   - Extracts 5-digit Código Postal (indispensable for CFDI 4.0 validation).\n   - Extracts all registered tax regimes (e.g., '626 - Régimen Simplificado de Confianza', '612 - Personas Físicas con Actividades Empresariales y Profesionales').\n   - Sets is_resico to True if regime '626' is found.\n   - Raises InvalidCSFError if mandatory fields (RFC, postal code) are missing.",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
+    },
+    {
+      "id": "TASK-007",
+      "component": "identity",
+      "title": "SAT Article 69-B (EFOS) Blacklist Validator",
+      "status": "pending",
+      "priority": 7,
+      "files": {
+        "tests": "tests/test_blacklist.py",
+        "implementation": "internal/identity/blacklist.py"
+      },
+      "spec": "Implement the SAT Article 69-B list validator (EFOS - Empresas que Facturan Operaciones Simuladas):\n1. Enum BlacklistStatus: CLEAN, PRESUNTO, DESVIRTUADO, DEFINITIVO, SENTENCIA_FAVORABLE.\n2. Custom exception: BlacklistedEntityError.\n3. BlacklistService class:\n   - add_entry(rfc: str, status: BlacklistStatus, oficio_sat: str = '') -> None\n   - get_status(rfc: str) -> BlacklistStatus (returns CLEAN if not listed)\n   - validate_merchant_eligibility(rfc: str) -> bool: Returns True if CLEAN, DESVIRTUADO, or SENTENCIA_FAVORABLE. Raises BlacklistedEntityError with explicit reason if status is DEFINITIVO or PRESUNTO (blocking onboarding).",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
+    },
+    {
+      "id": "TASK-008",
+      "component": "identity",
+      "title": "CSD Cryptographic Vault with Envelope Encryption",
+      "status": "pending",
+      "priority": 8,
+      "files": {
+        "tests": "tests/test_csd_vault.py",
+        "implementation": "internal/identity/csd_vault.py"
+      },
+      "spec": "Implement a secure cryptographic vault for Certificados de Sello Digital (CSD) using Envelope Encryption (AES-GCM simulation):\n1. EncryptedCSD dataclass (frozen=True): merchant_id, encrypted_cer, encrypted_key, encrypted_password, encrypted_dek, iv, auth_tag.\n2. DecryptedCSD dataclass (frozen=True): merchant_id, cer_bytes, key_bytes, password.\n3. Custom exception: CSDVaultError.\n4. CSDVaultService(master_key_hex: str):\n   - store_csd(merchant_id: str, cer_bytes: bytes, key_bytes: bytes, password: str) -> EncryptedCSD: Generates a random 256-bit DEK (Data Encryption Key), encrypts the CSD payload with the DEK using AES-GCM (or SHA256/HMAC authenticated container), and encrypts the DEK with the master key. Validates non-empty inputs.\n   - decrypt_csd_for_signing(encrypted_csd: EncryptedCSD) -> DecryptedCSD: Decrypts the DEK with master key, then decrypts the CSD in memory. Raises CSDVaultError if authentication tag fails or decryption fails.",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
     }
   ]
 }

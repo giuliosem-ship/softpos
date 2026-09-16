@@ -1,0 +1,76 @@
+{
+  "project": "SoftPOS Hybrid Fiscal & Payment Platform (Mexico)",
+  "version": "1.0.0",
+  "orchestrator": {
+    "architect": "Antigravity (Gemini 3.8 Flash)",
+    "coder": "qwen2.5-coder-14b-instruct-mlx",
+    "auditor": "google/gemma-4-12b-qat",
+    "test_framework": "unittest"
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "component": "ledger",
+      "title": "Double-Entry Ledger Domain Models & Invariants",
+      "status": "completed",
+      "priority": 1,
+      "files": {
+        "tests": "tests/test_ledger_models.py",
+        "implementation": "internal/ledger/models.py"
+      },
+      "spec": "Implement strictly immutable Double-Entry bookkeeping domain models in Python 3.12:\n1. Money: Value object holding amount in integer cents (to avoid floating-point errors) and currency ('MXN'). Must support addition, subtraction, and comparison.\n2. AccountType: Enum with ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE.\n3. Account: id, code (e.g. 'LIABILITY:MERCHANT:123:AVAILABLE', 'LIABILITY:MERCHANT:123:TAX_ESCROW', 'ASSET:STP_CONCENTRATOR', 'REVENUE:FEES'), name, type, balance.\n4. Entry: account_id, direction (DEBIT or CREDIT), money.\n5. JournalEntry: id, timestamp, description, entries (list of Entry), metadata. MUST enforce rule: sum(debits) == sum(credits). If unbalanced, raise UnbalancedJournalError. Entries list cannot be empty.",
+      "audit_notes": "### **Security & Architecture Audit Report**\n\n**Status:** ⚠️ **Action Required**\n**Scope:** Double-Entry Ledger Domain Models\n\n#### **1. State Integrity & Source of Truth (Critical)**\nThe `Account` model stores `balance` as a mutable/static field. In a robust double-entry system, **balance must be a derived state**, not a stored property. \n*   **Risk:** Storing a balance field allows for \"State Drift,\" where the sum of all `JournalEntry` records disagrees with the `Account.balance`. \n*   **Recommendation:** Remove `balance` from the `Account` dataclass. Implement a `LedgerService` that calculates balances by summing entries, or use a \"Snapshot\" pattern where balances are periodically persisted and reconciled against the journal.\n\n#### **2. Currency Hardcoding & Property Logic (High)**\nThe `total_debit` and `total_credit` properties in `JournalEntry` hardcode the currency to `\"MXN\"`.\n*   **Risk:** If the system expands to support USD or EUR, these properties will either throw errors or return incorrect data because they ignore the `currency` attribute of the underlying `Money` objects.\n*   **Recommendation:** The properties should extract the currency from the first entry in the list (after validating all entries share the same currency) or raise a `CurrencyMismatchError` if a mix is detected.\n\n#### **3. Precision & Rounding for SAT Compliance (Medium)**\nWhile using `int` for `amount_cents` is correct for storage, the implementation lacks a strategy for **intermediate calculations** (e.g., the 2.9% fee + IVA).\n*   **Risk:** Standard float multiplication for tax calculations will lead to rounding errors that violate SAT (Mexico) requirements for CFDI (electronic invoicing) consistency.\n*   **Recommendation:** Use the `decimal.Decimal` library for all intermediate calculations (fees, taxes, discounts). Only convert to `int` (cents) at the final step of creating the `Money` object.\n\n#### **4. Concurrency & Atomicity (Medium)**\nThe current models are \"pure,\" but they do not account for the **Atomic Transition** required to move funds.\n*   **Risk:** There is no mechanism to prevent \"Double Spending.\" If two processes read an account balance simultaneously and attempt to create two different `JournalEntry` objects, the ledger could be corrupted.\n*   **Recommendation:** Ensure the persistence layer uses `SELECT FOR UPDATE` (pessimistic locking) or a versioning system (optimistic locking) on the `Account` record during the creation of a `JournalEntry`.\n\n#### **5. Audit Trail & Traceability (Low)**\nThe `JournalEntry` metadata is a generic dictionary.\n*   **Risk:** For SAT compliance, specific fields (e.g., `UUID` of the",
+      "test_results": "PASS: ......\n----------------------------------------------------------------------\nRan 6 tests in 0.000s\n\nOK",
+      "retries": 1,
+      "completed_at": "2026-09-15T21:23:04.625955"
+    },
+    {
+      "id": "TASK-002",
+      "component": "ledger",
+      "title": "In-Memory Double-Entry Ledger Engine with Split Support",
+      "status": "pending",
+      "priority": 2,
+      "files": {
+        "tests": "tests/test_ledger_engine.py",
+        "implementation": "internal/ledger/engine.py"
+      },
+      "spec": "Build the LedgerEngine that manages accounts, balances, and atomic postings:\n1. create_account(code, account_type, name) -> Account\n2. post_transaction(journal_entry: JournalEntry) -> executes atomically. Updates cached balances of touched accounts. If any account does not exist, rollback and raise AccountNotFoundError.\n3. get_balance(account_code) -> Money\n4. helper method record_split_payment(gross_mxn_cents: int, merchant_id: str, platform_fee_cents: int, tax_escrow_cents: int, rbf_sweep_cents: int) -> JournalEntry. Validates that (platform_fee + tax_escrow + rbf_sweep + net_available) == gross_mxn_cents, and posts debit to ASSET:ACQUIRER_RECEIVABLE and credits to REVENUE:FEES, LIABILITY:MERCHANT:tax_escrow, ASSET:RBF_LOANS, and LIABILITY:MERCHANT:available.",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
+    },
+    {
+      "id": "TASK-003",
+      "component": "stp",
+      "title": "STP 18-digit CLABE Generator & Webhook Signature Verifier",
+      "status": "pending",
+      "priority": 3,
+      "files": {
+        "tests": "tests/test_stp_clabe.py",
+        "implementation": "internal/stp/clabe.py"
+      },
+      "spec": "Implement Mexican banking standard CLABE (18 digits) generation and validation under STP bank code (646):\n1. Bank code: 646 (STP).\n2. Plaza code: 3-digit plaza code (default '180' CDMX).\n3. Account number: 11-digit merchant unique account.\n4. Check digit (dígito de control): Standard Modulo 10 weight algorithm with weights [3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7]. For each digit, multiply by weight, take mod 10, sum results, take mod 10, then subtract from 10 (if 10, result is 0).\n5. validate_clabe(clabe_str: str) -> bool.\n6. generate_clabe(account_seq: int, plaza='180') -> str: returns fully compliant 18-digit CLABE.\n7. verify_webhook_signature(payload_bytes: bytes, signature_str: str, public_key_pem: str) -> bool: handles verification for STP webhooks.",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
+    },
+    {
+      "id": "TASK-004",
+      "component": "fiscal",
+      "title": "RESICO Tax Segregation & Monthly Tier Calculator",
+      "status": "pending",
+      "priority": 4,
+      "files": {
+        "tests": "tests/test_resico_calculator.py",
+        "implementation": "internal/fiscal/resico.py"
+      },
+      "spec": "Implement the official Mexican SAT RESICO (Régimen Simplificado de Confianza) Persona Física calculator for 2024-2026:\n1. Monthly brackets according to Art. 113-E LISR:\n   - Up to $25,000.00 MXN: 1.00%\n   - Up to $50,000.00 MXN: 1.10%\n   - Up to $83,333.33 MXN: 1.50%\n   - Up to $208,333.33 MXN: 2.00%\n   - Up to $291,666.66 MXN: 2.50%\n2. calculate_resico_tax_split(gross_amount_cents: int, accumulated_monthly_sales_cents: int, customer_is_persona_moral: bool = False):\n   - Base income excluding 16% IVA.\n   - IVA = Base * 0.16.\n   - ISR rate determined by projected bracket from accumulated sales.\n   - If customer_is_persona_moral is True, calculate mandatory 1.25% ISR withholding (Art. 113-J).\n   - Returns dictionary with: base_cents, iva_cents, isr_rate, isr_escrow_cents, net_merchant_cents.",
+      "audit_notes": null,
+      "test_results": null,
+      "retries": 0,
+      "completed_at": null
+    }
+  ]
+}

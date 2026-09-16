@@ -135,6 +135,22 @@
       "test_results": "PASS: ....\n----------------------------------------------------------------------\nRan 4 tests in 0.001s\n\nOK",
       "retries": 3,
       "completed_at": "2026-09-15T22:20:47.149261"
+    },
+    {
+      "id": "TASK-009",
+      "component": "identity",
+      "title": "SAT Article 69-B Ingestion Worker & Sync Engine",
+      "status": "completed",
+      "priority": 9,
+      "files": {
+        "tests": "tests/test_sat_worker.py",
+        "implementation": "internal/identity/sat_worker.py"
+      },
+      "spec": "Implement the automated SAT 69-B CSV Ingestion and Sync Engine in Python 3.12:\n1. Dataclasses (frozen=True):\n   - SyncResult: status (str, e.g. 'SUCCESS', 'SKIPPED_UNCHANGED', 'ERROR'), total_records_parsed: int, records_updated: int, sha256_hash: str\n   - FlaggedMerchant: rfc: str, status: BlacklistStatus, oficio_sat: str\n2. SATIngestionWorker(blacklist_service: BlacklistService, default_url: str = 'http://omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv'):\n   - parse_csv_content(csv_bytes: bytes) -> list[tuple[str, BlacklistStatus, str]]:\n     - Tries decoding as utf-8, falls back to latin-1 / iso-8859-1.\n     - Uses csv.reader, detects delimiter (',' or ';'), skips introductory metadata lines until finding header row containing 'RFC'.\n     - Normalizes situational text to BlacklistStatus (Presunto -> PRESUNTO, Definitivo -> DEFINITIVO, Desvirtuado -> DESVIRTUADO, Sentencia Favorable -> SENTENCIA_FAVORABLE).\n     - Extracts RFC, status, and oficio string.\n   - sync_from_bytes(csv_bytes: bytes, force: bool = False) -> SyncResult:\n     - Computes SHA256 of csv_bytes. If equal to last_hash and not force, returns SyncResult with status='SKIPPED_UNCHANGED'.\n     - Otherwise, parses records and calls blacklist_service.add_entry for each. Updates last_hash.\n     - Returns SyncResult with status='SUCCESS'.\n   - retroscreen_merchants(active_rfcs: list[str]) -> list[FlaggedMerchant]:\n     - Checks each active RFC. If status is DEFINITIVO or PRESUNTO, appends FlaggedMerchant.\n     - Returns list of FlaggedMerchant for payout freeze triggering.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report: SAT Article 69-B Ingestion**\n\n**Status:** <span style=\"color:orange\">**Needs Improvement**</span>\n**Scope:** Data Integrity, Concurrency, Memory Management, and Compliance Robustness.\n\n---\n\n#### **1. Memory Exhaustion Risk (OOM Vulnerability)**\nThe current implementation uses `csv_bytes.decode()` and `content.splitlines()`, which loads the entire CSV into memory as a string, and then again as a list of strings. \n*   **Risk:** SAT 69-B files can be large. Processing these in a memory-constrained environment (e.g., a small Docker container or Lambda function) could trigger Out-of-Memory (OOM) kills.\n*   **Recommendation:** Use `io.BytesIO(csv_bytes)` and pass it directly to `csv.reader`. This allows for line-by-line streaming/iteration, significantly reducing the memory footprint.\n\n#### **2. Statefulness & Concurrency Issues**\nThe `SATIngestionWorker` maintains `self.last_hash` as an instance variable.\n*   **Risk:** If this worker is deployed in a distributed environment (e.g., Celery, RQ, or multiple Kubernetes pods), the \"skipped\" logic will fail because each pod will have its own `last_hash`. If it is used in a multi-threaded environment, `self.last_hash` is not thread-safe.\n*   **Recommendation:** Move the `last_hash` to a persistent cache (e.g., Redis) or pass it as an argument to the sync method to ensure consistency across distributed workers.\n\n#### **3. Fragile Heuristic Parsing (Compliance Risk)**\nThe logic for identifying the \"Oficio\" (official notice) and \"Situation\" relies on substring matching (`\"500-\" in cell_clean`",
+      "test_results": "PASS: ...\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK",
+      "retries": 0,
+      "completed_at": "2026-09-16T10:11:12.548381"
     }
   ]
 }

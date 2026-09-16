@@ -167,6 +167,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-16T10:52:26.681184"
+    },
+    {
+      "id": "TASK-GO-002",
+      "component": "ledger",
+      "title": "Thread-Safe Double-Entry Ledger Engine with Split Support in Go",
+      "status": "completed",
+      "priority": 11,
+      "files": {
+        "tests": "pkg/ledger/engine_test.go",
+        "implementation": "pkg/ledger/engine.go"
+      },
+      "spec": "Build the thread-safe LedgerEngine in Go 1.22+ with sync.RWMutex managing accounts, balances, and atomic postings:\n1. Custom sentinel errors:\n   - ErrAccountNotFound = errors.New(\"account not found\")\n   - ErrDuplicateAccount = errors.New(\"duplicate account code\")\n   - ErrInvalidAmount = errors.New(\"amount must be non-negative\")\n   - ErrDeductionsExceedGross = errors.New(\"total deductions exceed gross amount\")\n2. LedgerEngine struct:\n   - Protected by sync.RWMutex for high-throughput concurrent reads and atomic writes.\n   - Maintains accounts map[string]Account, entriesByAccount map[string][]Entry, and journals []*JournalEntry.\n3. Methods on LedgerEngine:\n   - NewLedgerEngine() *LedgerEngine: initializes maps and mutex.\n   - CreateAccount(code string, accType AccountType, name string) (Account, error): Write lock. Returns ErrDuplicateAccount if code exists. Creates and stores Account{ID: code, Code: code, Name: name, Type: accType}.\n   - GetAccount(accountCode string) (Account, error): Read lock. Returns Account or ErrAccountNotFound.\n   - GetBalance(accountCode string) (Money, error): Read lock. Returns ErrAccountNotFound if account does not exist. Adheres to normal accounting balances: For AccountAsset and AccountExpense, balance = sum(debits) - sum(credits). For AccountLiability, AccountEquity, and AccountRevenue, balance = sum(credits) - sum(debits). Returns NewMoney(balanceCents, \"MXN\").\n   - PostTransaction(journal *JournalEntry) error: Write lock. Validates journal is not nil and journal.IsBalanced() (returns ErrUnbalancedJournal if unbalanced). Validates that all entry.AccountID exist in accounts (returns ErrAccountNotFound if any unknown account). Atomically appends journal and each entry to entriesByAccount.\n   - RecordSplitPayment(grossMxnCents int64, merchantID string, platformFeeCents int64, taxEscrowCents int64, rbfSweepCents int64) (*JournalEntry, error):\n     - Validates all amounts >= 0 (returns ErrInvalidAmount if any < 0).\n     - Validates total deductions (fee + tax + rbf) <= grossMxnCents (returns ErrDeductionsExceedGross if exceeded).\n     - Calculates netAvailableCents = grossMxnCents - totalDeductions.\n     - Constructs 5 entries:\n       1. Debit ASSET:ACQUIRER_RECEIVABLE grossMxnCents\n       2. Credit REVENUE:FEES platformFeeCents\n       3. Credit LIABILITY:MERCHANT:<merchantID>:TAX_ESCROW taxEscrowCents\n       4. Credit ASSET:RBF_LOANS_RECEIVABLE rbfSweepCents\n       5. Credit LIABILITY:MERCHANT:<merchantID>:AVAILABLE netAvailableCents\n     - Constructs JournalEntry with unique ID (e.g. fmt.Sprintf(\"split_tx_%d\", time.Now().UnixNano())).\n     - Posts transaction atomically via PostTransaction and returns *JournalEntry.",
+      "audit_notes": "Senior",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-16T15:33:46.365463"
     }
   ]
 }

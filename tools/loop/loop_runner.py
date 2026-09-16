@@ -36,41 +36,54 @@ def save_tasks(data: Dict[str, Any]) -> None:
     with open(TASKS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def extract_python_code(text: str) -> str:
+def extract_code(text: str, is_go: bool = False) -> str:
     """Extract code block from LLM markdown response."""
-    code_blocks = re.findall(r"```(?:python)?\s*\n(.*?)\n```", text, re.DOTALL)
+    pattern = r"```(?:go|golang)?\s*\n(.*?)\n```" if is_go else r"```(?:python)?\s*\n(.*?)\n```"
+    code_blocks = re.findall(pattern, text, re.DOTALL)
     if code_blocks:
-        # Return the largest code block if multiple exist
         return max(code_blocks, key=len).strip()
     return text.strip()
 
 def run_tests_for_task(test_path: str) -> subprocess.CompletedProcess:
-    """Run python unittest for the specified test file."""
+    """Run tests for the specified test file (Go or Python)."""
     full_path = REPO_ROOT / test_path
     if not full_path.exists():
         raise FileNotFoundError(f"Test file not found: {full_path}")
     
-    # Run test with PYTHONPATH set to project root
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    
-    venv_py = REPO_ROOT / ".venv" / "bin" / "python"
-    py_exec = str(venv_py) if venv_py.exists() else sys.executable
+    is_go = test_path.endswith("_test.go") or test_path.endswith(".go")
 
-    proc = subprocess.run(
-        [py_exec, "-m", "unittest", str(full_path)],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False
-    )
-    return proc
+    if is_go:
+        test_dir = full_path.parent
+        rel_pkg = "./" + str(test_dir.relative_to(REPO_ROOT))
+        proc = subprocess.run(
+            ["/opt/homebrew/bin/go", "test", "-v", rel_pkg],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        return proc
+    else:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        venv_py = REPO_ROOT / ".venv" / "bin" / "python"
+        py_exec = str(venv_py) if venv_py.exists() else sys.executable
+
+        proc = subprocess.run(
+            [py_exec, "-m", "unittest", str(full_path)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False
+        )
+        return proc
 
 def coder_generate_implementation(task: Dict[str, Any], previous_error: Optional[str] = None) -> str:
     """Prompt Qwen 2.5 Coder to write or fix implementation."""
     impl_path = REPO_ROOT / task["files"]["implementation"]
     test_path = REPO_ROOT / task["files"]["tests"]
+    is_go = str(impl_path).endswith(".go")
     
     with open(test_path, "r", encoding="utf-8") as f:
         test_code = f.read()
@@ -80,28 +93,40 @@ def coder_generate_implementation(task: Dict[str, Any], previous_error: Optional
         with open(impl_path, "r", encoding="utf-8") as f:
             current_code = f.read()
 
-    system_prompt = (
-        "You are a Principal Software Engineer implementing a high-throughput financial and fiscal platform in Mexico.\n"
-        "Write pure, production-grade, type-annotated Python 3.12 code. Follow PEP8, clean architecture, and strict immutability.\n"
-        "IMPORTANT RULES:\n"
-        "- For immutable data models requiring initialization validation (such as enforcing balanced debits/credits or non-empty lists), use `@dataclass(frozen=True)`. Do NOT use `NamedTuple` with `__post_init__` because NamedTuple does NOT call `__post_init__`.\n"
-        "- Ensure all imports, types, and exceptions match the specification and tests exactly.\n"
-        "Return ONLY the complete, executable Python code inside a ```python ``` block."
-    )
+    if is_go:
+        system_prompt = (
+            "You are a Principal Go Software Engineer implementing a high-throughput, low-latency financial and fiscal platform in Mexico.\n"
+            "Write pure, production-grade, idiomatic Go 1.22+ code. Follow effective Go, explicit error handling, strict concurrency safety (sync.Mutex / RWMutex), zero allocations in hot paths, and immutability where required.\n"
+            "IMPORTANT RULES:\n"
+            "- Use proper package name matching the directory (e.g. package ledger, package stp, package fiscal, package identity).\n"
+            "- Ensure all types, structs, exported methods, and functions match the test suite and specification exactly.\n"
+            "Return ONLY the complete, compilable Go code inside a ```go ``` block."
+        )
+        lang_tag = "go"
+    else:
+        system_prompt = (
+            "You are a Principal Software Engineer implementing a high-throughput financial and fiscal platform in Mexico.\n"
+            "Write pure, production-grade, type-annotated Python 3.12 code. Follow PEP8, clean architecture, and strict immutability.\n"
+            "IMPORTANT RULES:\n"
+            "- For immutable data models requiring initialization validation, use `@dataclass(frozen=True)`.\n"
+            "- Ensure all imports, types, and exceptions match the specification and tests exactly.\n"
+            "Return ONLY the complete, executable Python code inside a ```python ``` block."
+        )
+        lang_tag = "python"
 
     prompt = f"TASK ID: {task['id']}\n"
     prompt += f"TITLE: {task['title']}\n"
     prompt += f"SPECIFICATION:\n{task['spec']}\n\n"
-    prompt += f"TEST SUITE ({task['files']['tests']}):\n```python\n{test_code}\n```\n\n"
+    prompt += f"TEST SUITE ({task['files']['tests']}):\n```{lang_tag}\n{test_code}\n```\n\n"
 
     if previous_error:
-        prompt += f"CURRENT IMPLEMENTATION:\n```python\n{current_code}\n```\n\n"
-        prompt += f"THE TEST FAILED WITH THIS ERROR TRACE:\n```\n{previous_error}\n```\n\n"
-        prompt += "Please fix the implementation so that all unit tests pass completely."
+        prompt += f"CURRENT IMPLEMENTATION:\n```{lang_tag}\n{current_code}\n```\n\n"
+        prompt += f"THE TEST FAILED WITH THIS ERROR TRACE / COMPILER OUTPUT:\n```\n{previous_error}\n```\n\n"
+        prompt += "Please fix the implementation so that all tests pass completely."
     else:
         prompt += f"Implement the required module to be saved at `{task['files']['implementation']}` so that all tests pass."
 
-    print(f"\n🤖 [Coder: Qwen 2.5 Coder] Generating implementation for {task['id']}...")
+    print(f"\n🤖 [Coder: Qwen 2.5 Coder] Generating implementation for {task['id']} ({'Go' if is_go else 'Python'})...")
     reply = chat_completion(
         model_name="qwen",
         messages=[{"role": "user", "content": prompt}],
@@ -109,7 +134,7 @@ def coder_generate_implementation(task: Dict[str, Any], previous_error: Optional
         temperature=0.1,
         max_tokens=3000
     )
-    code = extract_python_code(reply)
+    code = extract_code(reply, is_go=is_go)
     
     # Write to target file
     impl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,21 +147,23 @@ def auditor_review_code(task: Dict[str, Any]) -> str:
     """Prompt Gemma 4 to review implementation and tests."""
     impl_path = REPO_ROOT / task["files"]["implementation"]
     test_path = REPO_ROOT / task["files"]["tests"]
+    is_go = str(impl_path).endswith(".go")
 
     with open(impl_path, "r", encoding="utf-8") as f:
         impl_code = f.read()
     with open(test_path, "r", encoding="utf-8") as f:
         test_code = f.read()
 
+    lang_tag = "go" if is_go else "python"
     system_prompt = (
         "You are a Senior Security Auditor and Financial Systems Architect.\n"
-        "Review the code for: numerical precision (avoiding float for money), concurrency safety, SAT tax compliance, edge cases.\n"
+        "Review the code for: numerical precision (int64 cents vs float), concurrency safety (mutexes, race conditions), SAT tax compliance, edge cases.\n"
         "Provide a concise, constructive audit report with 3-5 bullet points."
     )
 
     prompt = f"TASK: {task['title']}\n\n"
-    prompt += f"IMPLEMENTATION:\n```python\n{impl_code}\n```\n\n"
-    prompt += f"TESTS:\n```python\n{test_code}\n```\n\n"
+    prompt += f"IMPLEMENTATION:\n```{lang_tag}\n{impl_code}\n```\n\n"
+    prompt += f"TESTS:\n```{lang_tag}\n{test_code}\n```\n\n"
     prompt += "Audit this implementation and summarize your findings."
 
     print(f"\n🔍 [Auditor: Gemma 4] Reviewing code for {task['id']}...")

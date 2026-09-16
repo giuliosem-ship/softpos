@@ -199,6 +199,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-16T15:36:30.225848"
+    },
+    {
+      "id": "TASK-GO-004",
+      "component": "fiscal",
+      "title": "SAT RESICO & IVA Segregation and Withholding Engine in Go",
+      "status": "completed",
+      "priority": 13,
+      "files": {
+        "tests": "pkg/fiscal/resico_test.go",
+        "implementation": "pkg/fiscal/resico.go"
+      },
+      "spec": "Implement the official Mexican SAT RESICO (Régimen Simplificado de Confianza) Persona Física calculator in Go 1.22+ according to Art. 113-E & 113-J LISR:\n1. Package name: fiscal\n2. Sentinel error: ErrInvalidTaxAmount = errors.New(\"tax amounts cannot be negative or invalid\")\n3. ResicoSplitResult struct:\n   - BaseAmountCents int64\n   - IVAAmountCents int64\n   - ISRRate float64\n   - ISREscrowCents int64\n   - TotalTaxEscrowCents int64\n   - NetMerchantCents int64\n   - IsPersonaMoralWithholding bool\n4. GetResicoMonthlyRate(accumulatedSalesCents int64) float64:\n   - <= 2,500,000 cents: 0.010\n   - <= 5,000,000 cents: 0.011\n   - <= 8,333,333 cents: 0.015\n   - <= 20,833,333 cents: 0.020\n   - > 20,833,333 cents: 0.025\n5. CalculateResicoTaxSplit(grossAmountCents int64, accumulatedMonthlySalesCents int64, customerIsPersonaMoral bool) (ResicoSplitResult, error):\n   - Returns (ResicoSplitResult{}, ErrInvalidTaxAmount) if grossAmountCents <= 0 or accumulatedMonthlySalesCents < 0.\n   - baseAmountCents = int64(math.Round(float64(grossAmountCents) / 1.16))\n   - ivaAmountCents = grossAmountCents - baseAmountCents\n   - If customerIsPersonaMoral is true:\n       isrRate = 0.0125\n       isrEscrowCents = int64(math.Round(float64(baseAmountCents) * isrRate))\n       totalTaxEscrowCents = ivaAmountCents\n       netMerchantCents = baseAmountCents - isrEscrowCents\n       isPM = true\n   - Else:\n       isrRate = GetResicoMonthlyRate(accumulatedMonthlySalesCents + baseAmountCents)\n       isrEscrowCents = int64(math.Round(float64(baseAmountCents) * isrRate))\n       totalTaxEscrowCents = ivaAmountCents + isrEscrowCents\n       netMerchantCents = grossAmountCents - totalTaxEscrowCents\n       isPM = false\n   - Returns ResicoSplitResult{...}, nil.",
+      "audit_notes": "Senior",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-16T15:55:04.628531"
     }
   ]
 }

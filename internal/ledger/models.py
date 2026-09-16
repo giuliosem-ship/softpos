@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime
 
 class CurrencyMismatchError(Exception):
@@ -61,11 +61,20 @@ class AccountType(Enum):
 
 @dataclass(frozen=True)
 class Account:
-    id: str
-    code: str
-    name: str
-    type: AccountType
+    id: str = ""
+    code: str = ""
+    name: str = ""
+    type: Optional[AccountType] = None
+    account_type: Optional[AccountType] = None
     balance: Money = field(default_factory=lambda: Money(0, "MXN"))
+
+    def __post_init__(self):
+        if not self.id and self.code:
+            object.__setattr__(self, "id", self.code)
+        if self.type is None and self.account_type is not None:
+            object.__setattr__(self, "type", self.account_type)
+        elif self.account_type is None and self.type is not None:
+            object.__setattr__(self, "account_type", self.type)
 
 class Direction(Enum):
     DEBIT = "DEBIT"

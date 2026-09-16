@@ -29,6 +29,13 @@ class BlacklistService:
     def get_status(self, rfc: str) -> BlacklistStatus:
         return self._blacklist.get(rfc, BlacklistEntry(rfc=rfc, status=BlacklistStatus.CLEAN)).status
 
+    def get_entry(self, rfc: str):
+        return self._blacklist.get(rfc)
+
+    def get_oficio(self, rfc: str) -> str:
+        entry = self._blacklist.get(rfc)
+        return entry.oficio_sat if entry else ""
+
     def validate_merchant_eligibility(self, rfc: str) -> bool:
         status = self.get_status(rfc)
         if status in {BlacklistStatus.DEFINITIVO, BlacklistStatus.PRESUNTO}:

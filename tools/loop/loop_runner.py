@@ -54,8 +54,11 @@ def run_tests_for_task(test_path: str) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
     
+    venv_py = REPO_ROOT / ".venv" / "bin" / "python"
+    py_exec = str(venv_py) if venv_py.exists() else sys.executable
+
     proc = subprocess.run(
-        [sys.executable, "-m", "unittest", str(full_path)],
+        [py_exec, "-m", "unittest", str(full_path)],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,

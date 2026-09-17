@@ -183,6 +183,14 @@ def git_commit_task(task: Dict[str, Any]) -> None:
         task["files"]["implementation"],
         "tools/loop/tasks.json"
     ]
+    if "extra_files" in task.get("files", {}):
+        files_to_add.extend(task["files"]["extra_files"])
+    
+    # If Go package, ensure all package files are added
+    impl_parent = Path(task["files"]["implementation"]).parent
+    if impl_parent.name != "internal" and impl_parent.name != "pkg":
+        files_to_add.append(str(impl_parent))
+
     for rel_path in files_to_add:
         full = REPO_ROOT / rel_path
         if full.exists():

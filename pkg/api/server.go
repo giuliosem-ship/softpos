@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -47,7 +48,20 @@ func NewServer(
 	return s
 }
 
-func (s *Server) RegisterMerchant(id string, rfc string, name string, isRESICO bool) {
+// RegisterMerchant ensures ledger accounts are created before committing merchant state (Prepare-Commit pattern).
+func (s *Server) RegisterMerchant(id string, rfc string, name string, isRESICO bool) error {
+	availCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", id)
+	escrowCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", id)
+
+	// Prepare phase: validate and create accounts first
+	if _, err := s.ledger.CreateAccount(availCode, ledger.AccountLiability, name+" Available"); err != nil && !errors.Is(err, ledger.ErrDuplicateAccount) {
+		return err
+	}
+	if _, err := s.ledger.CreateAccount(escrowCode, ledger.AccountLiability, name+" Tax Escrow"); err != nil && !errors.Is(err, ledger.ErrDuplicateAccount) {
+		return err
+	}
+
+	// Commit phase: persist in memory
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -57,18 +71,18 @@ func (s *Server) RegisterMerchant(id string, rfc string, name string, isRESICO b
 		Name:     name,
 		IsRESICO: isRESICO,
 	}
-
-	// Ensure ledger accounts exist
-	_, _ = s.ledger.CreateAccount(fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", id), ledger.AccountLiability, name+" Available")
-	_, _ = s.ledger.CreateAccount(fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", id), ledger.AccountLiability, name+" Tax Escrow")
+	return nil
 }
 
-func (s *Server) RegisterMerchantCLABE(clabe string, merchantID string, rfc string) {
-	s.RegisterMerchant(merchantID, rfc, "Merchant "+merchantID, true)
+func (s *Server) RegisterMerchantCLABE(clabe string, merchantID string, rfc string) error {
+	if err := s.RegisterMerchant(merchantID, rfc, "Merchant "+merchantID, true); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clabeToMerchant[clabe] = merchantID
+	return nil
 }
 
 func (s *Server) GetMerchant(id string) (Merchant, bool) {

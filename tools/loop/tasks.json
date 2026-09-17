@@ -215,6 +215,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-16T15:55:04.628531"
+    },
+    {
+      "id": "TASK-GO-005",
+      "component": "identity",
+      "title": "RFC & CURP Algorithmic Validator & Demographic Parser in Go",
+      "status": "completed",
+      "priority": 14,
+      "files": {
+        "tests": "pkg/identity/rfc_curp_test.go",
+        "implementation": "pkg/identity/rfc_curp.go"
+      },
+      "spec": "Implement Mexican RFC and CURP validation and demographic parsing in Go 1.22+:\n1. Package name: identity\n2. Sentinel errors: ErrInvalidRFC = errors.New(\"invalid Mexican RFC\"), ErrInvalidCURP = errors.New(\"invalid Mexican CURP\")\n3. Enum RFCType string: RFCPersonaFisica (\"PERSONA_FISICA\"), RFCPersonaMoral (\"PERSONA_MORAL\"), RFCGenerico (\"GENERICO\")\n4. CURPDemographics struct: BirthDate string (YYYY-MM-DD), Gender string (\"HOMBRE\" or \"MUJER\"), StateCode string (e.g. \"DF\", \"NL\")\n5. ValidateRFC(rfc string) bool:\n   - Normalizes strings.ToUpper(strings.TrimSpace(rfc)).\n   - Returns true for generic RFCs: \"XAXX010101000\" and \"XEXX010101000\".\n   - Validates Persona Fisica (4 letters + 6 digits + 3 alphanumeric homoclave, len 13, regexp: ^[A-Z&Ñ]{4}\\d{6}[A-Z0-9]{3}$).\n   - Validates Persona Moral (3 letters + 6 digits + 3 alphanumeric homoclave, len 12, regexp: ^[A-Z&Ñ]{3}\\d{6}[A-Z0-9]{3}$).\n   - Returns true if valid, false otherwise.\n6. ParseRFCType(rfc string) (RFCType, error):\n   - If not ValidateRFC(rfc), returns (\"\", ErrInvalidRFC).\n   - If \"XAXX010101000\" or \"XEXX010101000\", returns (RFCGenerico, nil).\n   - If len 13, returns (RFCPersonaFisica, nil).\n   - If len 12, returns (RFCPersonaMoral, nil).\n7. ValidateCURP(curp string) bool:\n   - Normalizes strings.ToUpper(strings.TrimSpace(curp)).\n   - Validates official 18-char RENAPO regex: ^[A-Z][AEIOUX][A-Z]{2}\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])[HM](AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-Z]{3}[0-9A-Z]\\d$\n8. ParseCURP(curp string) (CURPDemographics, error):\n   - If not ValidateCURP(curp), returns (CURPDemographics{}, ErrInvalidCURP).\n   - Gender: curp[10] == 'H' ? \"HOMBRE\" : \"MUJER\".\n   - StateCode: curp[11:13].\n   - BirthDate: Parses YY (curp[4:6]), MM (curp[6:8]), DD (curp[8:10]). If char 16 (curp[16]) is a digit '0'..'9', century is 1900; if letter 'A'..'Z', century is 2000. Formats YYYY-MM-DD.\n   - Returns CURPDemographics, nil.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** ⚠️ **Action Required** (Performance & Logic Integrity)\n**Scope:** RFC/CURP Validation & Parsing Logic\n\n---\n\n#### **1. Performance Bottleneck: Regex Re-compilation**\nThe current implementation calls `regexp.MatchString` inside every validation function. In Go, this causes the regex engine to re-parse and compile the pattern string on **every single request**. \n*   **Impact:** High CPU overhead and latency in high-throughput financial gateways.\n*   **Recommendation:** Move all regex patterns to package-level variables using `regexp.MustCompile`. This ensures they are compiled once at startup.\n\n#### **2. Logic Flaw: Calendar Date Validation**\nThe `ValidateCURP` regex checks for the *format* of the month and day (e.g., `01-31`), but it does not validate the *existence* of the date.\n*   **Edge Case:** The regex currently accepts `GARM920231...` (February 31st) as a valid CURP.\n*   **Impact:** Data integrity issues in demographic records.\n*   **Recommendation:** After regex validation, use `time.Parse(\"06-02-02\", year+month+day)` to ensure the date is a valid calendar day before returning the `CURPDemographics` struct.\n\n#### **3. Robustness: Brittle String Indexing**\n`ParseCURP` relies on hardcoded magic numbers for string slicing (e.g., `curp[10]`, `curp[11:13]`). \n*",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-16T23:52:41.737134"
     }
   ]
 }

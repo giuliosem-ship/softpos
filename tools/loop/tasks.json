@@ -295,6 +295,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-17T00:09:29.890837"
+    },
+    {
+      "id": "TASK-GO-010",
+      "component": "stp",
+      "title": "STP Canonical Signature Verifier & Generator in Go",
+      "status": "completed",
+      "priority": 19,
+      "files": {
+        "tests": "pkg/stp/signer_test.go",
+        "implementation": "pkg/stp/signer.go"
+      },
+      "spec": "Implement Banxico/STP cryptographic signature generator and verifier in Go 1.22+:\n1. Package name: stp\n2. STPSigner struct holding stpPublicKey *rsa.PublicKey, myPrivateKey *rsa.PrivateKey, hmacSecret []byte.\n3. Constructors:\n   - NewSTPSigner(pubKey *rsa.PublicKey, privKey *rsa.PrivateKey, hmacSecret string) *STPSigner\n   - NewSTPSignerFromPEM(pubPEM string, privPEM string, hmacSecret string) (*STPSigner, error): parses PEM blocks for RSA keys (supports PKCS1 and PKIX for public key, PKCS1 and PKCS8 for private key).\n4. Methods on STPSigner:\n   - BuildAbonoCanonicalString(cuentaBeneficiario string, montoCents int64, claveRastreo string, institucionOrdenante string, cuentaOrdenante string) string: returns format `||%s|%.2f|%s|%s|%s||` with float64(montoCents)/100.0.\n   - VerifyRSASignature(canonicalData string, signatureBase64 string) bool: decodes base64 signature, hashes data with sha256.Sum256, verifies using rsa.VerifyPKCS1v15. Returns true if valid, false on error or mismatch.\n   - SignRSA(canonicalData string) (string, error): hashes data with sha256.Sum256, signs using rsa.SignPKCS1v15(rand.Reader, s.myPrivateKey, crypto.SHA256, hash[:]), returns base64 string.\n   - SignHMAC(canonicalData string) string: computes hmac.New(sha256.New, s.hmacSecret), returns hex string.\n   - VerifyHMAC(canonicalData string, signatureHex string) bool: verifies signatureHex using hmac.Equal.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** ⚠️ **Action Required** (Critical issues regarding numerical precision and canonicalization)\n\n#### **1. Critical: Floating-Point Currency Representation**\nThe `BuildAbonoCanonicalString` method converts `int64` cents to `float64` before formatting:\n`monto := float64(montoCents) / 100.0`\n*   **Risk:** Floating-point math is non-deterministic for certain decimal values and can lead to precision loss in high-value transactions (e.g., millions of units). In financial systems, this can cause signature mismatches between different CPU architectures or rounding errors.\n*   **Recommendation:** Perform string formatting directly on the `int64` or use a fixed-point decimal library. If you must format to two decimals, use `fmt.Sprintf(\"%.2f\", float64(montoCents)/100.0)` only as a last resort, but ideally, the canonical string should represent the amount in a way that avoids intermediate float conversion.\n\n#### **2. High: Canonicalization & Injection Vulnerability**\nThe canonical string is constructed using simple delimiters (`||` and `|`) without escaping the input fields.\n*   **Risk:** If any input field (e.g., `cuentaBeneficiario` or `claveRastreo`) contains the pipe character `|`, an attacker could inject additional fields or shift values into different positions, potentially altering the meaning of the payload while maintaining a valid signature (Canonicalization Attack).\n*   **Recommendation:** Implement strict input validation (regex) to ensure fields do not contain delimiters, or use a standard encoding like JSON (with sorted keys) or Protobuf to generate the canonical byte array.\n\n#### **3. Medium: Cryptographic Standard Selection**\nThe implementation uses `rsa.SignPKCS1v15` and `rsa.VerifyPKCS1v15`.\n*   **",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-17T00:26:16.204162"
     }
   ]
 }

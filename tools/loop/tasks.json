@@ -263,6 +263,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-16T23:58:26.442456"
+    },
+    {
+      "id": "TASK-GO-008",
+      "component": "identity",
+      "title": "CSD Cryptographic Vault with Envelope Encryption (AES-256-GCM) in Go",
+      "status": "completed",
+      "priority": 17,
+      "files": {
+        "tests": "pkg/identity/csd_vault_test.go",
+        "implementation": "pkg/identity/csd_vault.go"
+      },
+      "spec": "Implement a secure cryptographic vault for Certificados de Sello Digital (CSD) using Envelope Encryption with AES-256-GCM in Go 1.22+:\n1. Package name: identity\n2. Sentinel error: ErrCSDVault = errors.New(\"CSD cryptographic operation failed\")\n3. Structs:\n   - EncryptedCSD: MerchantID string, EncryptedCER []byte, EncryptedKey []byte, EncryptedPassword []byte, EncryptedDEK []byte, IV []byte\n   - DecryptedCSD: MerchantID string, CERBytes []byte, KeyBytes []byte, Password string\n   - CSDVaultService: masterKey []byte\n4. Methods on CSDVaultService:\n   - NewCSDVaultService(masterKeyHex string) (*CSDVaultService, error): decodes hex. Validates masterKey length == 32 bytes. Returns (nil, ErrCSDVault) if invalid.\n   - StoreCSD(merchantID string, cerBytes []byte, keyBytes []byte, password string) (EncryptedCSD, error):\n     - Validates non-empty inputs (returns error if any empty).\n     - Generates 32-byte DEK (rand.Read) and 12-byte IV (rand.Read).\n     - Uses AES-256-GCM (cipher.NewGCM) with DEK to encrypt cerBytes, keyBytes, and []byte(password).\n     - Uses AES-256-GCM with masterKey to encrypt DEK.\n     - Returns EncryptedCSD.\n   - DecryptCSDForSigning(enc EncryptedCSD) (DecryptedCSD, error):\n     - Uses masterKey to decrypt EncryptedDEK via AES-GCM. Returns ErrCSDVault on failure / tag mismatch.\n     - Uses decrypted DEK to decrypt EncryptedCER, EncryptedKey, and EncryptedPassword via AES-GCM. Returns ErrCSDVault on failure.\n     - Returns DecryptedCSD.",
+      "audit_notes": "Senior### **Security Audit Report: CSD Cryptographic Vault**\n\n**Status:** 🔴 **CRITICAL VULNERABILITIES FOUND**\n\nAs a Senior Security Auditor, I have reviewed the provided implementation. While the choice of AES-256-GCM is appropriate for financial systems, the current implementation contains a catastrophic cryptographic failure regarding Initialization Vector (IV) management.\n\n#### **Audit Findings:**\n\n*   **CRITICAL: IV Reuse in AES-GCM (Nonce Reuse)**\n    The implementation uses the **same IV** for every `gcm.Seal` operation within `StoreCSD` (for the CER, Key, Password, and DEK). In AES-GCM, reusing a nonce with the same key is a catastrophic failure. It allows an attacker to perform a \"Forbidden Attack,\" potentially recovering the plaintext of all encrypted fields via XOR analysis.\n    *   *Fix:* Generate a unique 12-byte IV for **every** individual `gcm.Seal` call, or better yet, concatenate the data into a single byte slice and encrypt it as one block to ensure only one IV is needed per record.\n\n*   **HIGH: Sensitive Data Persistence in Memory**\n    The `DecryptedCSD` struct stores the `Password` as a `string`. In Go, strings are immutable; once the password is converted to a string, it cannot be zeroed out of memory, potentially persisting in the heap until the next GC cycle or longer.\n    *   *Fix:* Use `[]byte` for all sensitive fields (CER, Key, Password) and implement a `Wipe()` method that explicitly overwrites the byte slices with zeros (`copy(buf, make([]byte, len(buf)))`) immediately after use.\n\n*   **MEDIUM: Lack of Master Key Rotation & HSM Integration**\n    The `masterKey` is stored as a raw byte slice in the `CSDVaultService` struct. For financial systems (PCI-DSS/SOC2 compliance), a static master key in memory is a high-risk target.\n    *   *Fix:* Transition to a Key Management Service (KMS) or Hardware Security Module (HSM). The service should request the KMS to \"unwrap\" the DEK rather than holding the master key in the application's memory space.\n\n*   **LOW: Concurrency & Thread Safety**\n    The `CSDVaultService`",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-17T00:01:47.336763"
     }
   ]
 }

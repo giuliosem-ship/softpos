@@ -279,6 +279,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-17T00:01:47.336763"
+    },
+    {
+      "id": "TASK-GO-009",
+      "component": "identity",
+      "title": "SAT Article 69-B Ingestion Worker & Sync Engine in Go",
+      "status": "completed",
+      "priority": 18,
+      "files": {
+        "tests": "pkg/identity/sat_worker_test.go",
+        "implementation": "pkg/identity/sat_worker.go"
+      },
+      "spec": "Implement the automated SAT 69-B CSV Ingestion and Sync Engine in Go 1.22+:\n1. Package name: identity\n2. Structs:\n   - SyncResult: Status string, TotalRecordsParsed int, RecordsUpdated int, SHA256Hash string\n   - FlaggedMerchant: RFC string, Status BlacklistStatus, OficioSAT string\n   - SATBlacklistRecord: RFC string, Status BlacklistStatus, OficioSAT string\n   - SATIngestionWorker: blacklistService *BlacklistService, lastHash string, mu sync.Mutex\n3. Methods on SATIngestionWorker:\n   - NewSATIngestionWorker(service *BlacklistService) *SATIngestionWorker\n   - ParseCSVContent(csvBytes []byte) ([]SATBlacklistRecord, error):\n     - Handles UTF-8 or Latin-1 / ISO-8859-1 encoding.\n     - Skips introductory metadata lines until finding header row containing \"RFC\".\n     - Uses csv.Reader with FieldsPerRecord = -1.\n     - Normalizes situational text to BlacklistStatus (Definitivo -> BlacklistDefinitivo, Presunto -> BlacklistPresunto, Desvirtuado -> BlacklistDesvirtuado, Sentencia Favorable -> BlacklistSentenciaFavorable).\n     - Extracts RFC, status, and oficio (matching \"500-\").\n     - Returns slice of SATBlacklistRecord.\n   - SyncFromBytes(csvBytes []byte, force bool) (SyncResult, error):\n     - Thread-safe via mutex.\n     - Computes SHA256 hash in hex. If hash == lastHash and not force, returns SyncResult with Status = \"SKIPPED_UNCHANGED\".\n     - Otherwise parses records, calls blacklistService.AddEntry for each, updates lastHash, and returns SyncResult with Status = \"SUCCESS\".\n   - RetroscreenMerchants(activeRFCs []string) []FlaggedMerchant:\n     - Checks each active RFC. If status is BlacklistDefinitivo or BlacklistPresunto, appends FlaggedMerchant.\n     - Returns list of flagged merchants.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** ⚠️ **Action Required** (High Priority on Concurrency & Memory)\n\n#### **1. Concurrency & Race Conditions**\n*   **Critical Risk:** The `RetroscreenMerchants` method accesses `w.blacklistService` without any mutex protection. While `SyncFromBytes` is locked, `RetroscreenMerchants` is a public method that could be called concurrently with a sync operation. \n*   **Recommendation:** Ensure `BlacklistService` is internally thread-safe (e.g., using `sync.RWMutex` for its internal map) or wrap the calls in `RetroscreenMerchants` with a read-lock. If `AddEntry` modifies a map while `GetStatus` reads it, the application will panic with a concurrent map read/write error.\n\n#### **2. Memory Management & Scalability**\n*   **Risk:** The use of `reader.ReadAll()` in `ParseCSVContent` loads the entire SAT CSV into memory. SAT \"Listados\" can be extremely large (tens of thousands of records). This risks **OOM (Out of Memory)** errors in containerized environments with tight memory limits.\n*   **Recommendation:** Refactor `ParseCSVContent` to use a streaming approach. Iterate through records using `reader.Read()` in a loop to process and ingest records one by one, significantly reducing the memory footprint.\n\n#### **3. SAT Compliance & Data Integrity**\n*   **Logic Gap:** The `RetroscreenMerchants` method only flags `Definitivo` and `Presunto`. While these are the primary risks, `Sentencia Favorable` and `Desvirtuado` records are often required for \"Know Your Customer\" (KYC) audit trails to prove",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-17T00:09:29.890837"
     }
   ]
 }

@@ -7,8 +7,12 @@ import (
 )
 
 var (
-	ErrInvalidRFC = errors.New("invalid Mexican RFC")
+	ErrInvalidRFC  = errors.New("invalid Mexican RFC")
 	ErrInvalidCURP = errors.New("invalid Mexican CURP")
+
+	rfcPFRegex = regexp.MustCompile(`^[A-Z&Ñ]{4}\d{6}[A-Z0-9]{3}$`)
+	rfcPMRegex = regexp.MustCompile(`^[A-Z&Ñ]{3}\d{6}[A-Z0-9]{3}$`)
+	curpRegex  = regexp.MustCompile(`^[A-Z][AEIOUX][A-Z]{2}\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])[HM](AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-Z]{3}[0-9A-Z]\d$`)
 )
 
 type RFCType string
@@ -35,14 +39,12 @@ func ValidateRFC(rfc string) bool {
 
 	// Persona Fisica
 	if len(rfc) == 13 {
-		matched, _ := regexp.MatchString(`^[A-Z&Ñ]{4}\d{6}[A-Z0-9]{3}$`, rfc)
-		return matched
+		return rfcPFRegex.MatchString(rfc)
 	}
 
 	// Persona Moral
 	if len(rfc) == 12 {
-		matched, _ := regexp.MatchString(`^[A-Z&Ñ]{3}\d{6}[A-Z0-9]{3}$`, rfc)
-		return matched
+		return rfcPMRegex.MatchString(rfc)
 	}
 
 	return false
@@ -70,8 +72,7 @@ func ParseRFCType(rfc string) (RFCType, error) {
 
 func ValidateCURP(curp string) bool {
 	curp = strings.ToUpper(strings.TrimSpace(curp))
-	matched, _ := regexp.MatchString(`^[A-Z][AEIOUX][A-Z]{2}\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])[HM](AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-Z]{3}[0-9A-Z]\d$`, curp)
-	return matched
+	return curpRegex.MatchString(curp)
 }
 
 func ParseCURP(curp string) (CURPDemographics, error) {

@@ -95,6 +95,9 @@ func (s *STPSigner) BuildAbonoCanonicalString(cuentaBeneficiario string, montoCe
 
 // VerifyRSASignature verifies the RSA signature of the canonical data.
 func (s *STPSigner) VerifyRSASignature(canonicalData string, signatureBase64 string) bool {
+	if s.stpPublicKey == nil {
+		return false
+	}
 	hash := sha256.Sum256([]byte(canonicalData))
 	signature, err := base64.StdEncoding.DecodeString(signatureBase64)
 	if err != nil {
@@ -107,6 +110,9 @@ func (s *STPSigner) VerifyRSASignature(canonicalData string, signatureBase64 str
 
 // SignRSA signs the canonical data using RSA.
 func (s *STPSigner) SignRSA(canonicalData string) (string, error) {
+	if s.myPrivateKey == nil {
+		return "", errors.New("RSA private key not configured")
+	}
 	hash := sha256.Sum256([]byte(canonicalData))
 	signature, err := rsa.SignPKCS1v15(rand.Reader, s.myPrivateKey, crypto.SHA256, hash[:])
 	if err != nil {
@@ -124,6 +130,9 @@ func (s *STPSigner) SignHMAC(canonicalData string) string {
 
 // VerifyHMAC verifies the HMAC signature of the canonical data.
 func (s *STPSigner) VerifyHMAC(canonicalData string, signatureHex string) bool {
+	if len(s.hmacSecret) == 0 {
+		return false
+	}
 	expectedSig := s.SignHMAC(canonicalData)
 	return hmac.Equal([]byte(expectedSig), []byte(signatureHex))
 }

@@ -87,10 +87,10 @@ func NewSTPSignerFromPEM(pubPEM string, privPEM string, hmacSecret string) (*STP
 	}, nil
 }
 
-// BuildAbonoCanonicalString constructs the canonical string for an abono.
+// BuildAbonoCanonicalString constructs the canonical string for an abono without floating point math.
 func (s *STPSigner) BuildAbonoCanonicalString(cuentaBeneficiario string, montoCents int64, claveRastreo string, institucionOrdenante string, cuentaOrdenante string) string {
-	monto := float64(montoCents) / 100.0
-	return fmt.Sprintf("||%s|%.2f|%s|%s|%s||", cuentaBeneficiario, monto, claveRastreo, institucionOrdenante, cuentaOrdenante)
+	montoStr := fmt.Sprintf("%d.%02d", montoCents/100, montoCents%100)
+	return fmt.Sprintf("||%s|%s|%s|%s|%s||", cuentaBeneficiario, montoStr, claveRastreo, institucionOrdenante, cuentaOrdenante)
 }
 
 // VerifyRSASignature verifies the RSA signature of the canonical data.

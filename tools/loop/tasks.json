@@ -231,6 +231,22 @@
       "test_results": "PASS: ",
       "retries": 0,
       "completed_at": "2026-09-16T23:52:41.737134"
+    },
+    {
+      "id": "TASK-GO-006",
+      "component": "identity",
+      "title": "SAT CSF (Constancia de Situación Fiscal) Text Parser in Go",
+      "status": "completed",
+      "priority": 15,
+      "files": {
+        "tests": "pkg/identity/csf_test.go",
+        "implementation": "pkg/identity/csf.go"
+      },
+      "spec": "Implement a structured parser for SAT Constancia de Situación Fiscal (CSF) text in Go 1.22+:\n1. Package name: identity\n2. Sentinel error: ErrInvalidCSF = errors.New(\"invalid or missing required fields in CSF document\")\n3. RegimenFiscal struct: Clave string, Descripcion string\n4. CSFProfile struct:\n   - RFC string\n   - RazonSocial string\n   - CodigoPostal string\n   - Regimenes []RegimenFiscal\n   - EstatusPadron string\n   - IsResico bool\n5. ParseCSFText(text string) (CSFProfile, error):\n   - Uses package-level compiled regexes.\n   - Extracts RFC via regex `RFC:\\s*([A-Z0-9]{12,13})`. If missing, returns (CSFProfile{}, ErrInvalidCSF).\n   - Extracts Código Postal via regex `Código Postal:\\s*(\\d{5})`. If missing, returns (CSFProfile{}, ErrInvalidCSF).\n   - Extracts Razón Social via regex `Denominación/Razón Social:\\s*(.+?)(?:\\n|Régimen|Datos|$)`. Defaults to \"SIN RAZON SOCIAL\" if absent.\n   - Extracts Estatus en el padrón via regex `Estatus en el padrón:\\s*([A-Z]+)`. Defaults to \"ACTIVO\" if absent.\n   - Extracts all regímenes fiscales via `FindAllStringSubmatch` with `Régimen:\\s*(\\d{3})\\s*-\\s*([^\\n\\r]+?)(?:\\s+Fecha|\\n|$)`.\n   - Determines IsResico: true if any regimen has Clave == \"626\", else false.\n   - Returns populated CSFProfile, nil.",
+      "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** <span style=\"color:orange\">**CAUTION**</span> (Functional, but requires hardening for production financial environments)\n\n#### **1. Data Integrity & Sanitization (Edge Cases)**\n*   **Trailing Whitespace/Newlines:** The `razonSocialRegex` uses `(.+?)` followed by a non-capturing group. Depending on the",
+      "test_results": "PASS: ",
+      "retries": 0,
+      "completed_at": "2026-09-16T23:55:42.609184"
     }
   ]
 }

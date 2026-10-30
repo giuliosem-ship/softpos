@@ -437,17 +437,17 @@
       "id": "AND-03",
       "component": "android-codi",
       "title": "Android Banxico CoDi ISO/IEC 18004 QR Matrix Generator in Kotlin",
-      "status": "review",
+      "status": "completed",
       "priority": 27,
       "files": {
         "tests": "mobile/android/app/src/test/java/mx/softpos/app/ui/codi/CodiQrGeneratorTest.kt",
         "implementation": "mobile/android/app/src/main/java/mx/softpos/app/ui/codi/CodiQrGenerator.kt"
       },
       "spec": "Implement Banxico CoDi ISO/IEC 18004 QR Code Matrix generator using ZXing in Kotlin 2.0:\n1. Package: package mx.softpos.app.ui.codi\n2. Data class CodiQrMatrix(\n   val width: Int,\n   val height: Int,\n   val pixels: BooleanArray,\n   val payloadJson: String,\n   val expiresAtEpochSec: Long\n) {\n   fun isExpired(nowEpochSec: Long): Boolean = nowEpochSec >= expiresAtEpochSec\n   fun getModule(x: Int, y: Int): Boolean {\n       require(x in 0 until width && y in 0 until height) { \"Coordinates out of bounds\" }\n       return pixels[y * width + x]\n   }\n}\n3. Object CodiQrGenerator:\n   - fun generateQr(payloadJson: String, sizePx: Int = 256, expiresAtEpochSec: Long): CodiQrMatrix\n     - Requires payloadJson.isNotBlank() and sizePx >= 64 (throws IllegalArgumentException otherwise).\n     - Uses com.google.zxing.qrcode.QRCodeWriter, com.google.zxing.BarcodeFormat.QR_CODE, and com.google.zxing.EncodeHintType.ERROR_CORRECTION set to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M.\n     - Converts BitMatrix into BooleanArray of size width * height where pixels[y * width + x] = bitMatrix.get(x, y).\n     - Returns CodiQrMatrix.",
-      "audit_notes": "",
+      "audit_notes": "**Audit Report: CoDi QR Matrix Generator**\n\n**1. Numerical Precision & Overflow Safety**\n- **Finding:** The `expiresAtEpochSec` uses `Long`, preventing overflow issues for timestamps within reasonable ranges.\n- **Recommendation:** No changes needed.\n\n**2. Concurrency Safety**\n- **Finding:** `CodiQrMatrix` is immutable, ensuring thread-safety when used across multiple threads.\n- **Recommendation:** Continue using immutable data structures in related components.\n\n**3. Regulatory Compliance (Mexican SAT/Banxico)**\n- **Finding:** Uses ZXing correctly but doesn't validate QR code dimensions against CoDi specifications.\n- **Recommendation:** Add checks to ensure QR matrix dimensions match the requested `sizePx`.\n\n**4. Edge Cases & Invariant Violations**\n- **Finding:** No checks for payload size vs. QR capacity, potentially leading to smaller matrices than expected.\n- **Recommendation:** Implement validation to ensure generated QR codes meet CoDi size requirements.\n\n---\n\n**Actionable Bullet Points:**\n\n1. **Validate QR Code Dimensions**: Ensure the generated matrix matches `sizePx` by checking `bitMatrix.width` and `height` against `sizePx`.\n\n2. **Check Payload Fit**: Verify that the payload fits within the requested size to prevent smaller matrices than intended.\n\n3. **Regulatory Compliance Review**: Confirm all cryptographic and regulatory requirements are met per Banxico guidelines beyond current implementation.\n\n---\n\n**Summary:** The code is mostly correct but requires checks for QR matrix dimensions and possible payload overflow issues.",
       "test_results": "PASS: > Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED\n> Task :app:compileKotlin UP-TO-DATE\n> Task :app:compileJava NO-SOURCE\n> Task :app:processResources NO-SOURCE\n> Task :app:classes UP-TO-DATE\n> Task :app:jar UP-TO-DATE\n> Task :app:compileTestKotlin UP-TO-DATE\n> Task :app:compileTestJava NO-SOURCE\n> Task :app:processTestResources NO-SOURCE\n> Task :app:testClasses UP-TO-DATE\n\n> Task :app:test\n\nCodiQrGeneratorTest > generateQr produces valid ISO-18004 QR matrix with ZXing and checks exp",
       "retries": 3,
-      "completed_at": null
+      "completed_at": "2026-10-30T16:22:29.322552"
     },
     {
       "id": "AND-04",

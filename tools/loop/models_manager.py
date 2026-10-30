@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 models_manager.py
-Manages hot-swapping and inference requests between Qwen 2.5 Coder and Gemma 4
-via LM Studio CLI (`lms`) and its OpenAI-compatible local API.
+Manages hot-swapping and inference requests between Qwen 2.5 Coder, DeepSeek R1 Distill,
+and Gemma 4 via LM Studio CLI (`lms`) and its OpenAI-compatible local API.
 """
 
 import json
+import re
 import subprocess
 import time
 import urllib.request
@@ -19,39 +20,57 @@ MODELS_CONFIG = {
     "qwen": {
         "key": "qwen2.5-coder-14b-instruct-mlx",
         "identifier": "qwen2.5-coder",
-        "role": "The Coder (Implementation & TDD greening)"
+        "role": "The Coder (Implementation & TDD greening)",
+        "default_temp": 0.1,
+        "default_max_tokens": 3000,
+        "is_reasoning": False
+    },
+    "deepseek": {
+        "key": "deepseek-r1-distill-qwen-14b",
+        "identifier": "deepseek-r1-distill-qwen-14b",
+        "role": "The Auditor & Security Reasoner (Deep CoT verification, concurrency & SAT compliance)",
+        "default_temp": 0.6,
+        "default_max_tokens": 4096,
+        "is_reasoning": True
     },
     "gemma": {
         "key": "google/gemma-4-12b-qat",
         "identifier": "gemma-4",
-        "role": "The Auditor (Security, edge cases & code review)"
+        "role": "Secondary Auditor (Fast review fallback)",
+        "default_temp": 0.2,
+        "default_max_tokens": 1500,
+        "is_reasoning": False
     }
 }
 
+def strip_thinking_blocks(text: str) -> str:
+    """Remove <think>...</think> blocks emitted by DeepSeek R1 models."""
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # In case an unclosed <think> tag was truncated, strip up to a markdown header if present
+    if "<think>" in cleaned and "</think>" not in cleaned:
+        parts = cleaned.split("<think>", 1)
+        cleaned = parts[0]
+    return cleaned.strip()
+
 def get_loaded_model_identifier() -> Optional[str]:
-    """Check which model is currently loaded in memory via LM Studio API."""
+    """Check which model is currently loaded in memory via LM Studio CLI (`lms ps`)."""
     try:
-        req = urllib.request.Request(f"{BASE_URL}/models")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            models = data.get("data", [])
-            # Check via lms ps for precise loaded status
-            ps_proc = subprocess.run(
-                [LMS_BIN, "ps"],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            for target_name, cfg in MODELS_CONFIG.items():
-                if cfg["identifier"] in ps_proc.stdout or cfg["key"] in ps_proc.stdout:
-                    return cfg["identifier"]
-            return None
-    except Exception as e:
+        ps_proc = subprocess.run(
+            [LMS_BIN, "ps"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        for target_name, cfg in MODELS_CONFIG.items():
+            if cfg["identifier"] in ps_proc.stdout or cfg["key"] in ps_proc.stdout:
+                return cfg["identifier"]
+        return None
+    except Exception:
         return None
 
 def ensure_model(model_name: str) -> str:
     """
-    Ensure the requested model ('qwen' or 'gemma') is loaded in LM Studio.
+    Ensure the requested model ('qwen', 'deepseek', or 'gemma') is loaded in LM Studio.
     If another model is loaded, unloads it and loads the target.
     Returns the identifier to use for inference.
     """
@@ -91,15 +110,21 @@ def ensure_model(model_name: str) -> str:
 def chat_completion(
     model_name: str,
     messages: List[Dict[str, str]],
-    temperature: float = 0.2,
-    max_tokens: int = 2048,
-    system_prompt: Optional[str] = None
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    system_prompt: Optional[str] = None,
+    timeout: int = 180
 ) -> str:
     """
     Ensures the model is loaded and sends a chat completion request to LM Studio.
-    Returns the assistant text response.
+    Handles Chain-of-Thought (reasoning_content / <think> tags) cleanly.
+    Returns the cleaned assistant text response.
     """
     model_id = ensure_model(model_name)
+    cfg = MODELS_CONFIG[model_name]
+
+    effective_temp = temperature if temperature is not None else cfg.get("default_temp", 0.2)
+    effective_max_tokens = max_tokens if max_tokens is not None else cfg.get("default_max_tokens", 2048)
 
     full_messages = []
     if system_prompt:
@@ -109,8 +134,8 @@ def chat_completion(
     payload = {
         "model": model_id,
         "messages": full_messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
+        "temperature": effective_temp,
+        "max_tokens": effective_max_tokens,
         "stream": True
     }
 
@@ -123,7 +148,8 @@ def chat_completion(
 
     try:
         collected_content: List[str] = []
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        collected_reasoning: List[str] = []
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             for line_bytes in resp:
                 line = line_bytes.decode("utf-8").strip()
                 if not line or not line.startswith("data: "):
@@ -136,15 +162,26 @@ def chat_completion(
                     choice = chunk.get("choices", [{}])[0]
                     delta = choice.get("delta", {})
                     content = delta.get("content")
+                    reasoning = delta.get("reasoning_content")
+                    if reasoning:
+                        collected_reasoning.append(reasoning)
                     if content:
                         collected_content.append(content)
-                    elif delta.get("reasoning_content"):
-                        # Only collect reasoning if no content has arrived yet
-                        if not collected_content:
-                            collected_content.append(delta["reasoning_content"])
                 except json.JSONDecodeError:
                     continue
-        return "".join(collected_content).strip()
+
+        raw_output = "".join(collected_content).strip()
+        if not raw_output and collected_reasoning:
+            # Fallback if the server only populated reasoning_content
+            raw_output = "".join(collected_reasoning).strip()
+
+        if cfg.get("is_reasoning"):
+            if collected_reasoning:
+                reasoning_chars = len("".join(collected_reasoning))
+                print(f"[ModelManager] DeepSeek R1 completed reasoning chain ({reasoning_chars} chars).")
+            return strip_thinking_blocks(raw_output)
+
+        return raw_output
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"LM Studio HTTP error {e.code}: {err_body}")
@@ -152,11 +189,11 @@ def chat_completion(
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        target = sys.argv[2] if len(sys.argv) > 2 else "qwen"
+        target = sys.argv[2] if len(sys.argv) > 2 else "deepseek"
         print(f"Testing chat completion with '{target}'...")
         reply = chat_completion(
             model_name=target,
             messages=[{"role": "user", "content": "Respond only with: READY_FOR_ENGINEERING"}],
-            max_tokens=20
+            max_tokens=512
         )
         print(f"Response: {reply}")

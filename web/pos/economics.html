@@ -1,0 +1,1244 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- MANDATORY: Declare support for both light and dark themes to prevent FOUC -->
+  <meta name="color-scheme" content="light dark">
+  <title>SoftPOS México — Unit Economics, Métodos de Pago y Roadmap de Comisiones</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+
+      --bg-light: #f8fafc;
+      --bg-dark: #0b0f19;
+      --surface-light: #ffffff;
+      --surface-dark: #121826;
+      --surface-card-light: #f1f5f9;
+      --surface-card-dark: #1a2234;
+      --border-light: #cbd5e1;
+      --border-dark: #232f45;
+      --text-light: #0f172a;
+      --text-dark: #f1f5f9;
+      --text-muted-light: #475569;
+      --text-muted-dark: #94a3b8;
+
+      --blue-light: #0284c7;
+      --blue-dark: #38bdf8;
+      --green-light: #059669;
+      --green-dark: #34d399;
+      --purple-light: #7c3aed;
+      --purple-dark: #a78bfa;
+      --amber-light: #d97706;
+      --amber-dark: #fbbf24;
+      --rose-light: #e11d48;
+      --rose-dark: #fb7185;
+
+      --bg: light-dark(var(--bg-light), var(--bg-dark));
+      --surface: light-dark(var(--surface-light), var(--surface-dark));
+      --surface-card: light-dark(var(--surface-card-light), var(--surface-card-dark));
+      --border: light-dark(var(--border-light), var(--border-dark));
+      --text: light-dark(var(--text-light), var(--text-dark));
+      --text-muted: light-dark(var(--text-muted-light), var(--text-muted-dark));
+
+      --accent-blue: light-dark(var(--blue-light), var(--blue-dark));
+      --accent-green: light-dark(var(--green-light), var(--green-dark));
+      --accent-purple: light-dark(var(--purple-light), var(--purple-dark));
+      --accent-amber: light-dark(var(--amber-light), var(--amber-dark));
+      --accent-rose: light-dark(var(--rose-light), var(--rose-dark));
+
+      --scrollbar-track: light-dark(#e2e8f0, #121826);
+      --scrollbar-thumb: light-dark(#64748b, #475569);
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-width: thin;
+
+      --radius: 12px;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    html {
+      accent-color: var(--accent-blue);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    /* Top Navigation */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      font-weight: 800;
+      font-size: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--accent-blue);
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.5rem 0.95rem;
+      border-radius: 8px;
+      background: var(--surface-card);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .nav-btn:hover {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    /* Hero */
+    .hero {
+      margin-bottom: 3rem;
+    }
+
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.9rem;
+      background: rgba(56, 189, 248, 0.14);
+      color: var(--accent-blue);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+
+    h1 {
+      font-size: clamp(1.85rem, 3.5vw, 2.6rem);
+      font-weight: 800;
+      line-height: 1.18;
+      margin-bottom: 0.9rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-lead {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      max-width: 900px;
+    }
+
+    /* Section Headings */
+    .section-header {
+      margin: 3.25rem 0 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-size: 1.65rem;
+      font-weight: 750;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .section-subtitle {
+      color: var(--text-muted);
+      font-size: 0.96rem;
+      margin-top: 0.25rem;
+    }
+
+    /* Payment Methods Grid */
+    .methods-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.15rem;
+      margin-bottom: 2rem;
+    }
+
+    .method-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.35rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      position: relative;
+    }
+
+    .method-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+
+    .method-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .rail-tag {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .method-desc {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      flex-grow: 1;
+    }
+
+    .method-meta {
+      font-size: 0.8rem;
+      padding-top: 0.6rem;
+      border-top: 1px dashed var(--border);
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+
+    .method-meta strong {
+      color: var(--text);
+      font-family: var(--font-mono);
+    }
+
+    /* Interactive Simulator Layout */
+    .sim-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    @media (max-width: 900px) {
+      .sim-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.6rem;
+    }
+
+    .panel h3 {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .control-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .control-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+
+    .control-val {
+      font-family: var(--font-mono);
+      color: var(--accent-blue);
+      font-weight: 700;
+    }
+
+    .stage-pills, .pay-pills {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.35rem;
+    }
+
+    .pill-btn {
+      background: var(--surface-card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+
+    .pill-btn:hover {
+      border-color: var(--accent-blue);
+    }
+
+    .pill-btn.active {
+      background: rgba(56, 189, 248, 0.16);
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    .pill-sub {
+      display: block;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-weight: 400;
+      margin-top: 0.15rem;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      cursor: pointer;
+    }
+
+    /* Results Breakdown */
+    .result-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0;
+      border-bottom: 1px dashed var(--border);
+      font-size: 0.92rem;
+    }
+
+    .result-row:last-child {
+      border-bottom: none;
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.85rem;
+      margin-top: 1.2rem;
+    }
+
+    .kpi-box {
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.95rem;
+    }
+
+    .kpi-label {
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .kpi-number {
+      font-family: var(--font-mono);
+      font-size: 1.3rem;
+      font-weight: 800;
+    }
+
+    /* Responsive Table (modern-web-guidance: responsive-table) */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(560px, 80vh);
+      container-type: inline-size;
+      scrollbar-gutter: stable;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      margin: 1.5rem 0;
+    }
+
+    table.matrix-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.9rem;
+      --label-2: "Riel / Tecnología";
+      --label-3: "Fase 1: Plug & Play (Stripe + STP)";
+      --label-4: "Fase 2: PayFac / Sub-Agregador (Kushki / Blumon)";
+      --label-5: "Fase 3: Agregador Propio (Phos/MineSec + Prosa)";
+      --label-6: "Tarifa Sugerida al Comercio";
+    }
+
+    table.matrix-table caption {
+      text-align: left;
+      padding: 1rem 1.25rem;
+      font-weight: 700;
+      font-size: 1rem;
+      background: var(--surface-card);
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.matrix-table th,
+    table.matrix-table td {
+      padding: 0.85rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Sticky column headers (desktop) */
+    table.matrix-table thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--surface-card);
+    }
+
+    table.matrix-table thead th {
+      background: var(--surface-card);
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    /* Sticky row headers (desktop) */
+    table.matrix-table tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--surface);
+      font-weight: 700;
+      border-right: 1px solid var(--border);
+    }
+
+    @container (width < 720px) {
+      table.matrix-table,
+      table.matrix-table thead,
+      table.matrix-table tbody,
+      table.matrix-table tr,
+      table.matrix-table th,
+      table.matrix-table td {
+        display: block;
+      }
+
+      table.matrix-table thead {
+        /* MANDATORY: Hide column header from layout and screen readers */
+        display: none;
+      }
+
+      table.matrix-table tr {
+        margin-block-end: 1rem;
+        border-bottom: 2px solid var(--border);
+      }
+
+      table.matrix-table tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--surface-card);
+        border-right: none;
+      }
+
+      table.matrix-table td:nth-child(2)::before {
+        content: var(--label-2) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.matrix-table td:nth-child(3)::before {
+        content: var(--label-3) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.matrix-table td:nth-child(4)::before {
+        content: var(--label-4) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.matrix-table td:nth-child(5)::before {
+        content: var(--label-5) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.matrix-table td:nth-child(6)::before {
+        content: var(--label-6) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+    }
+
+    /* Timeline of Milestones */
+    .timeline {
+      position: relative;
+      margin: 2rem 0;
+      padding-left: 2rem;
+      border-left: 3px solid var(--accent-blue);
+      display: flex;
+      flex-direction: column;
+      gap: 1.75rem;
+    }
+
+    .timeline-item {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: -2.65rem;
+      top: 1.5rem;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      border: 4px solid var(--bg);
+    }
+
+    .timeline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .timeline-phase {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+    }
+
+    .timeline-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 0.75rem;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .tm-metric {
+      font-size: 0.83rem;
+    }
+
+    .tm-metric span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .tm-metric strong {
+      font-family: var(--font-mono);
+      font-size: 0.95rem;
+    }
+
+    .tag-loss { color: var(--accent-rose); font-weight: 700; }
+    .tag-ok { color: var(--accent-amber); font-weight: 700; }
+    .tag-win { color: var(--accent-green); font-weight: 700; }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Top Navigation -->
+    <header class="top-nav">
+      <a href="/pos/overview.html" class="nav-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        <span>SoftPOS México • Estrategia & Unit Economics</span>
+      </a>
+      <div class="nav-links">
+        <a href="/pos/overview.html" class="nav-btn">📘 Arquitectura & Modelo</a>
+        <a href="/pos/tech_roadmap.html" class="nav-btn">🛠️ Roadmap Técnico & Gaps</a>
+        <a href="/pos/" class="nav-btn">📱 Ir a la Terminal POS</a>
+      </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="badge-pill">Estrategia de Precios, Rieles de Pago y Escalamiento</div>
+      <h1>Evolución de Comisiones por Método de Pago y Milestones</h1>
+      <p class="hero-lead">
+        Cómo lanzar en semanas sin gastar $150,000 USD en certificaciones EMV, qué métodos de pago acepta el usuario final (TDD, TDC, Apple/Google Pay, SPEI/CoDi, Vales y Amex) y cómo tus costos de procesamiento caen conforme alcanzas cada hito de volumen.
+      </p>
+    </section>
+
+    <!-- SECTION 1: ALL USER PAYMENT METHODS -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">💳 1. Ecosistema de Métodos de Pago del Usuario en México</h2>
+        <p class="section-subtitle">No todos los pagos pasan por el mismo riel ni cuestan igual. Así opera cada método dentro de SoftPOS:</p>
+      </div>
+
+      <div class="methods-grid">
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">⚡ SPEI / CoDi QR</div>
+            <span class="rail-tag">Banxico / STP</span>
+          </div>
+          <p class="method-desc">
+            El comprador escanea el QR dinámico desde la app de su banco (BBVA, Nu, Santander, Banorte). Liquidación en 3 segundos 24/7 sin pasar por Visa/Mastercard y <strong>cero riesgo de contracargos</strong>.
+          </p>
+          <div class="method-meta">
+            <span>Costo Mayorista STP:</span>
+            <strong class="tag-win">$1.80 – $3.50 MXN fijos</strong>
+          </div>
+        </div>
+
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">🏧 TDD (Tarjeta Débito)</div>
+            <span class="rail-tag">EMV NFC (Prosa)</span>
+          </div>
+          <p class="method-desc">
+            Representa más del 68% de las tarjetas en México. La tasa de intercambio (Interchange) que se queda el banco emisor está topada por regulación de Banxico, lo que deja el mayor margen MDR en tarjetas.
+          </p>
+          <div class="method-meta">
+            <span>Interchange Base MX:</span>
+            <strong class="tag-win">~0.75% – 1.15%</strong>
+          </div>
+        </div>
+
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">💎 TDC (Tarjeta Crédito)</div>
+            <span class="rail-tag">EMV NFC (Visa/MC)</span>
+          </div>
+          <p class="method-desc">
+            Mayor ticket promedio. El banco emisor cobra mayor tasa de intercambio para financiar puntos, recompensas y riesgo crediticio del tarjetahabiente.
+          </p>
+          <div class="method-meta">
+            <span>Interchange Base MX:</span>
+            <strong class="tag-ok">~1.55% – 1.95%</strong>
+          </div>
+        </div>
+
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">🍎 Apple Pay & Google Pay</div>
+            <span class="rail-tag">Token DPAN + CDCVM</span>
+          </div>
+          <p class="method-desc">
+            El reloj o teléfono del comprador transmite un token EMV (DPAN) validado con FaceID/Huella. <strong>No tiene sobrecargo de Apple/Google para el comercio</strong>: cuesta exactamente lo mismo que la TDD o TDC subyacente, pero permite cobrar montos altos sin pedir PIN en pantalla.
+          </p>
+          <div class="method-meta">
+            <span>Costo Extra Wallet:</span>
+            <strong class="tag-win">0.00% (Mismo que TDD/TDC)</strong>
+          </div>
+        </div>
+
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">🌎 Amex & Internacionales</div>
+            <span class="rail-tag">Amex / Cross-Border</span>
+          </div>
+          <p class="method-desc">
+            Tarjetas American Express o emitidas en EE.UU./Europa (clave en zonas turísticas, médicos y restaurantes premium). Tienen el costo de intercambio más alto.
+          </p>
+          <div class="method-meta">
+            <span>Costo Mayorista:</span>
+            <strong class="tag-loss">~2.60% – 3.40%</strong>
+          </div>
+        </div>
+
+        <div class="method-card">
+          <div class="method-card-header">
+            <div class="method-title">🛒 Vales de Despensa</div>
+            <span class="rail-tag">Carnet NFC (Edenred/Pluxee)</span>
+          </div>
+          <p class="method-desc">
+            Prestación laboral masiva en México (Edenred, Sí Vale, Pluxee, Up, Broxel). Operan sobre la red nacional <strong>Carnet (Prosa)</strong> y son vitales para abarrotes, farmacias y restaurantes.
+          </p>
+          <div class="method-meta">
+            <span>Costo Red Carnet/Emisor:</span>
+            <strong class="tag-ok">~1.80% – 2.50%</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: INTERACTIVE SIMULATOR -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">🧮 2. Simulador Interactivo de Unit Economics y Split</h2>
+        <p class="section-subtitle">Compara cuánto te cuesta cada cobro y cuánto ganas según la etapa tecnológica y el método de pago elegido por el cliente.</p>
+      </div>
+
+      <div class="sim-grid">
+        <!-- Controls Panel -->
+        <div class="panel">
+          <h3>⚙️ Parámetros del Escenario</h3>
+
+          <div class="control-group">
+            <div class="control-label">
+              <span>1. Etapa de Infraestructura SoftPOS</span>
+            </div>
+            <div class="stage-pills" id="stageSelector">
+              <button type="button" class="pill-btn active" data-stage="stage1">
+                Fase 1: Plug & Play
+                <span class="pill-sub">Stripe Terminal + STP Directo</span>
+              </button>
+              <button type="button" class="pill-btn" data-stage="stage2">
+                Fase 2: PayFac Alianza
+                <span class="pill-sub">Kushki/Blumon + SDK Android</span>
+              </button>
+              <button type="button" class="pill-btn" data-stage="stage3">
+                Fase 3: Agregador Propio
+                <span class="pill-sub">Phos/MineSec + Prosa Directo</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-label">
+              <span>2. Método de Pago del Comprador</span>
+            </div>
+            <div class="pay-pills" id="methodSelector">
+              <button type="button" class="pill-btn active" data-method="tdd">
+                🏧 TDD Débito
+                <span class="pill-sub">Contactless NFC</span>
+              </button>
+              <button type="button" class="pill-btn" data-method="tdc">
+                💎 TDC Crédito
+                <span class="pill-sub">Contactless NFC</span>
+              </button>
+              <button type="button" class="pill-btn" data-method="wallet">
+                🍎 Apple / Google Pay
+                <span class="pill-sub">Token NFC (Mix 70% TDD)</span>
+              </button>
+              <button type="button" class="pill-btn" data-method="spei">
+                ⚡ SPEI / CoDi QR
+                <span class="pill-sub">Riel STP Banxico</span>
+              </button>
+              <button type="button" class="pill-btn" data-method="amex">
+                🌎 Amex / Intl
+                <span class="pill-sub">Tarjetas Premium/Turista</span>
+              </button>
+              <button type="button" class="pill-btn" data-method="vales">
+                🛒 Vales Despensa
+                <span class="pill-sub">Red Carnet / Edenred</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-label">
+              <label for="ticketSlider">Monto de la Venta (Ticket Bruto)</label>
+              <span class="control-val" id="ticketDisplay">$1,160.00 MXN</span>
+            </div>
+            <input type="range" id="ticketSlider" min="100" max="10000" step="20" value="1160">
+          </div>
+
+          <div class="control-group">
+            <div class="control-label">
+              <label for="merchantsSlider">Comercios Activos en Plataforma (MAT)</label>
+              <span class="control-val" id="merchantsDisplay">100 comercios</span>
+            </div>
+            <input type="range" id="merchantsSlider" min="10" max="5000" step="10" value="100">
+          </div>
+
+          <div class="control-group">
+            <div class="control-label">
+              <label for="tpvSlider">Ventas Mensuales Promedio por Comercio</label>
+              <span class="control-val" id="tpvDisplay">$85,000 MXN/mes</span>
+            </div>
+            <input type="range" id="tpvSlider" min="20000" max="300000" step="5000" value="85000">
+          </div>
+        </div>
+
+        <!-- Live Output Panel -->
+        <div class="panel">
+          <h3>📊 Resultado por Transacción y Margen Mensual</h3>
+
+          <div class="result-row">
+            <span>Cobro Bruto al Cliente Final</span>
+            <span class="mono" id="outGross">$1,160.00 MXN</span>
+          </div>
+          <div class="result-row">
+            <span>Comisión Cobrada al Comercio (<span id="outMerchantRateLabel">2.90%</span>)</span>
+            <span class="mono" id="outFeeCharged">$33.64 MXN</span>
+          </div>
+          <div class="result-row">
+            <span>Costo Mayorista del Riel (<span id="outCostFormula">3.6% + $5.00</span>)</span>
+            <span class="mono" id="outWholesaleCost" style="color: var(--accent-rose);">-$46.76 MXN</span>
+          </div>
+          <div class="result-row">
+            <span><strong>Margen Neto MDR en esta Venta</strong></span>
+            <span class="mono" id="outNetPaymentMargin">-$13.12 MXN</span>
+          </div>
+          <div class="result-row">
+            <span>Apartado Bóveda Fiscal RESICO (IVA 16% + ISR 1%)</span>
+            <span class="mono" style="color: var(--accent-amber);" id="outTaxVault">$170.00 MXN</span>
+          </div>
+          <div class="result-row">
+            <span>Retención Automática Crédito RBF (10%)</span>
+            <span class="mono" style="color: var(--accent-purple);" id="outRbfSweep">$116.00 MXN</span>
+          </div>
+          <div class="result-row">
+            <span><strong>Líquido Depositado al Comercio (T+0)</strong></span>
+            <span class="mono" style="color: var(--accent-green);" id="outMerchantNet">$839.20 MXN</span>
+          </div>
+
+          <div class="kpi-strip">
+            <div class="kpi-box">
+              <div class="kpi-label">Volumen Total Procesado (TPV/Mes)</div>
+              <div class="kpi-number" id="kpiTotalTPV">$8.50M MXN</div>
+            </div>
+            <div class="kpi-box">
+              <div class="kpi-label">Costo Fijo Mensual SDK / Mínimos</div>
+              <div class="kpi-number" id="kpiFixedSdkCost">$0 MXN</div>
+            </div>
+            <div class="kpi-box">
+              <div class="kpi-label">Ingresos RBF + Float Fiscal + SaaS</div>
+              <div class="kpi-number" style="color: var(--accent-purple);" id="kpiEcosystemRev">$142,500 MXN</div>
+            </div>
+            <div class="kpi-box">
+              <div class="kpi-label">Utilidad Neta Mensual Total</div>
+              <div class="kpi-number" id="kpiTotalProfit">$115,000 MXN</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: MATRIX TABLE OF COMMISSIONS BY PAYMENT METHOD & STAGE -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">📉 3. Matriz de Reducción de Costos por Método de Pago y Etapa</h2>
+        <p class="section-subtitle">Cómo baja tu costo mayorista conforme migras de un agregador llave en mano hacia tu propia infraestructura certificada.</p>
+      </div>
+
+      <div tabindex="0" role="region" aria-labelledby="matrix-table-caption" class="table-wrapper">
+        <table class="matrix-table">
+          <caption id="matrix-table-caption">Comparativa de Costos Mayoristas de Procesamiento en México (sin IVA)</caption>
+          <thead>
+            <tr>
+              <th>Método de Pago</th>
+              <th>Riel / Tecnología</th>
+              <th>Fase 1: Plug & Play<br><small>(Stripe Terminal + STP)</small></th>
+              <th>Fase 2: PayFac Alianza<br><small>(Kushki / Blumon + Prosa)</small></th>
+              <th>Fase 3: Agregador Propio<br><small>(Phos/MineSec + Evo/Prosa)</small></th>
+              <th>Tarifa Sugerida al Comercio</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>⚡ SPEI / CoDi QR</th>
+              <td>Banxico / STP Directo</td>
+              <td class="tag-win">$2.50 MXN fijos</td>
+              <td class="tag-win">$1.80 MXN fijos</td>
+              <td class="tag-win">$1.20 MXN fijos</td>
+              <td><strong>0.50% o $4.50 MXN fijos</strong> (Gancho comercial)</td>
+            </tr>
+            <tr>
+              <th>🏧 TDD (Débito Nacional)</th>
+              <td>NFC EMV L2 (Visa/MC/Carnet)</td>
+              <td class="tag-loss">3.60% + $5.00 MXN</td>
+              <td class="tag-ok">1.45% + $0.50 MXN</td>
+              <td class="tag-win">1.18% + $0.25 MXN</td>
+              <td><strong>2.60% – 2.90% + IVA</strong></td>
+            </tr>
+            <tr>
+              <th>💎 TDC (Crédito Nacional)</th>
+              <td>NFC EMV L2 (Visa/MC)</td>
+              <td class="tag-loss">3.60% + $5.00 MXN</td>
+              <td class="tag-ok">2.15% + $0.50 MXN</td>
+              <td class="tag-win">1.82% + $0.25 MXN</td>
+              <td><strong>2.90% – 3.20% + IVA</strong></td>
+            </tr>
+            <tr>
+              <th>🍎 Apple Pay & Google Pay</th>
+              <td>Token DPAN + Biometría (CDCVM)</td>
+              <td class="tag-loss">3.60% + $5.00 MXN</td>
+              <td class="tag-ok">1.45% (TDD) / 2.15% (TDC)</td>
+              <td class="tag-win">1.18% (TDD) / 1.82% (TDC)</td>
+              <td><strong>2.90% + IVA</strong> (Sin costo extra de Apple/Google)</td>
+            </tr>
+            <tr>
+              <th>🌎 Amex & Internacionales</th>
+              <td>Amex OptBlue / Cross-Border</td>
+              <td class="tag-loss">4.10% + $5.00 MXN</td>
+              <td class="tag-ok">2.95% + $1.00 MXN</td>
+              <td class="tag-win">2.55% + $0.50 MXN</td>
+              <td><strong>3.50% – 3.90% + IVA</strong></td>
+            </tr>
+            <tr>
+              <th>🛒 Vales de Despensa</th>
+              <td>Carnet NFC (Edenred / Pluxee / Sí Vale)</td>
+              <td>No soportado en Tap-to-Pay básico</td>
+              <td class="tag-ok">2.20% + $0.50 MXN</td>
+              <td class="tag-win">1.85% + $0.25 MXN</td>
+              <td><strong>3.20% + IVA</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SECTION 4: TIMELINE OF MILESTONES -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">🗺️ 4. Línea del Tiempo y Milestones para Desbloquear cada Nivel</h2>
+        <p class="section-subtitle">No contrates infraestructura cara antes de tiempo. Usa cada hito de tracción comercial para financiar y negociar el siguiente escalón.</p>
+      </div>
+
+      <div class="timeline">
+        <!-- Milestone 1 -->
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div class="timeline-header">
+            <h3>Hito 1: Validación "SPEI-First" + Tap-to-Pay Plug & Play</h3>
+            <span class="timeline-phase">Meses 1 a 3 • Piloto Comercial</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.94rem;">
+            Sales al mercado en 3 semanas conectando <strong>STP directo</strong> para cobros QR SPEI/CoDi, PAC de facturación CFDI 4.0 y <strong>Stripe Terminal SDK</strong> para tarjetas sin contacto. En esta fase no absorbes la comisión de Stripe: cobras <strong>0.5% en QR SPEI</strong> (donde ganas amplio margen) y <strong>3.8% en tarjeta</strong>, posicionando la <strong>Bóveda Fiscal Automática RESICO</strong> como el producto estrella.
+          </p>
+          <div class="timeline-metrics">
+            <div class="tm-metric">
+              <span>Presupuesto Inicial Requerido</span>
+              <strong class="tag-win">&lt; $3,500 USD</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Meta para pasar al Hito 2</span>
+              <strong>50 Comercios Activos / $4M MXN TPV</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Costo por Terminal Activa (MAT)</span>
+              <strong class="tag-win">$0 USD / mes</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Hito de Producto</span>
+              <strong>Primeros 15 créditos RBF originados</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Milestone 2 -->
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div class="timeline-header">
+            <h3>Hito 2: Alianza Sub-Agregador / PayFac + SDK SoftPOS Certificado</h3>
+            <span class="timeline-phase">Meses 4 a 6 • Expansión vía Contadores</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.94rem;">
+            Con $4M+ MXN mensuales demostrados, firmas contrato con un PayFac/Procesador en México (ej. <strong>Kushki / Blumon Pay</strong>) que ya tiene el SDK Tap-to-Phone certificado ante <strong>Prosa</strong>. Bajas tu comisión al comercio al <strong>2.9% competitivo</strong> porque tu costo en TDD cae al <strong>1.45%</strong> y en Apple/Google Pay no pagas los $5.00 MXN fijos de Stripe. Se habilita aceptación de <strong>Vales de Despensa Carnet</strong>.
+          </p>
+          <div class="timeline-metrics">
+            <div class="tm-metric">
+              <span>Inversión Setup / Onboarding</span>
+              <strong class="tag-ok">$5,000 – $12,000 USD</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Meta para pasar al Hito 3</span>
+              <strong>300 Comercios / $25M MXN TPV</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Costo por Terminal Activa (MAT)</span>
+              <strong>~$3.00 USD / mes</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Reducción de Costo en Tarjetas</span>
+              <strong class="tag-win">Baja de ~4.0% a ~1.65% promedio</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Milestone 3 -->
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div class="timeline-header">
+            <h3>Hito 3: Registro de Agregador Propio (CNBV/Banxico) + Apple Tap to Pay Entitlement</h3>
+            <span class="timeline-phase">Meses 7 a 9 • Escalamiento Nacional</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.94rem;">
+            Tramitas tu propio número de <strong>Agregador de Pagos</strong> ante Banxico/CNBV y conectas directo a un adquirente bancario (<strong>Evo Payments / Getnet / Banorte</strong>) con liquidación directa a tu cuenta concentradora en STP. Solicitas a Apple el <em>Tap to Pay on iPhone Entitlement</em> para que tus comercios cobren tanto en Android como en iOS con tu propia marca.
+          </p>
+          <div class="timeline-metrics">
+            <div class="tm-metric">
+              <span>Inversión Legal + Auditoría PCI</span>
+              <strong class="tag-ok">$15,000 – $25,000 USD</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Meta para pasar al Hito 4</span>
+              <strong>1,000 Comercios / $85M MXN TPV</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Flujo en Bóveda Fiscal (Float)</span>
+              <strong class="tag-win">~$14.5M MXN en custodia mensual</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Cartera Activa RBF</span>
+              <strong>$5M+ MXN colocados con 0% mora fija</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Milestone 4 -->
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div class="timeline-header">
+            <h3>Hito 4: Licencia Enterprise Directa (Phos / MineSec) + Switch Prosa Directo</h3>
+            <span class="timeline-phase">Meses 10 a 12+ • Dominio de Margen (Interchange++)</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.94rem;">
+            Al superar las 1,000 terminales activas, negocias tarifa corporativa por volumen directamente con <strong>MineSec o Phos (by Ingenico)</strong> eliminando intermediarios. Tu costo por terminal activa baja a <strong>~$1.50–$2.00 USD/mes</strong> y procesas en esquema <strong>Interchange++ puro</strong> (~1.18% en TDD y ~1.82% en TDC), logrando márgenes de nivel bancario.
+          </p>
+          <div class="timeline-metrics">
+            <div class="tm-metric">
+              <span>Inversión Licencia Enterprise</span>
+              <strong>$25,000 – $35,000 USD</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Escala Objetivo</span>
+              <strong class="tag-win">2,500 a 10,000+ Comercios</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Take-Rate Neto Combinado</span>
+              <strong class="tag-win">&gt; 240 bps (MDR + RBF + Float)</strong>
+            </div>
+            <div class="tm-metric">
+              <span>Valuación Serie A Ready</span>
+              <strong class="tag-win">Infraestructura Propia End-to-End</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>SoftPOS Hybrid Fiscal & Payment Platform (México) • Simulador Financiero y Roadmap de Adquirencia</p>
+    </footer>
+
+  </div>
+
+  <script>
+    (function () {
+      const stages = {
+        stage1: {
+          name: "Fase 1: Plug & Play (Stripe + STP)",
+          merchantDefaultRateBps: 290, // 2.90%
+          fixedMonthlyUsd: 0,
+          matFeeUsd: 0,
+          methods: {
+            tdd:    { rateBps: 360, fixedCents: 500, label: "3.60% + $5.00 MXN (Stripe Tap-to-Pay)" },
+            tdc:    { rateBps: 360, fixedCents: 500, label: "3.60% + $5.00 MXN (Stripe Tap-to-Pay)" },
+            wallet: { rateBps: 360, fixedCents: 500, label: "3.60% + $5.00 MXN (Apple/Google Pay)" },
+            spei:   { rateBps: 0,   fixedCents: 250, label: "$2.50 MXN fijos (STP SPEI QR)" },
+            amex:   { rateBps: 410, fixedCents: 500, label: "4.10% + $5.00 MXN (Amex/Intl)" },
+            vales:  { rateBps: 360, fixedCents: 500, label: "3.60% + $5.00 MXN (Fallback)" }
+          }
+        },
+        stage2: {
+          name: "Fase 2: PayFac Alianza (Kushki / Blumon)",
+          merchantDefaultRateBps: 290,
+          fixedMonthlyUsd: 1000,
+          matFeeUsd: 3.0,
+          methods: {
+            tdd:    { rateBps: 145, fixedCents: 50,  label: "1.45% + $0.50 MXN (Interchange TDD)" },
+            tdc:    { rateBps: 215, fixedCents: 50,  label: "2.15% + $0.50 MXN (Interchange TDC)" },
+            wallet: { rateBps: 166, fixedCents: 50,  label: "1.66% prom. + $0.50 MXN (Token DPAN)" },
+            spei:   { rateBps: 0,   fixedCents: 180, label: "$1.80 MXN fijos (STP Volumen)" },
+            amex:   { rateBps: 295, fixedCents: 100, label: "2.95% + $1.00 MXN (Amex OptBlue)" },
+            vales:  { rateBps: 220, fixedCents: 50,  label: "2.20% + $0.50 MXN (Red Carnet)" }
+          }
+        },
+        stage3: {
+          name: "Fase 3: Agregador Propio (Phos/MineSec + Prosa)",
+          merchantDefaultRateBps: 290,
+          fixedMonthlyUsd: 1800,
+          matFeeUsd: 1.8,
+          methods: {
+            tdd:    { rateBps: 118, fixedCents: 25,  label: "1.18% + $0.25 MXN (Switch Prosa TDD)" },
+            tdc:    { rateBps: 182, fixedCents: 25,  label: "1.82% + $0.25 MXN (Switch Prosa TDC)" },
+            wallet: { rateBps: 137, fixedCents: 25,  label: "1.37% prom. + $0.25 MXN (Token Nativo)" },
+            spei:   { rateBps: 0,   fixedCents: 120, label: "$1.20 MXN fijos (STP Tier Corporativo)" },
+            amex:   { rateBps: 255, fixedCents: 50,  label: "2.55% + $0.50 MXN (Directo)" },
+            vales:  { rateBps: 185, fixedCents: 25,  label: "1.85% + $0.25 MXN (Carnet Directo)" }
+          }
+        }
+      };
+
+      let currentStage = "stage1";
+      let currentMethod = "tdd";
+
+      const ticketSlider = document.getElementById("ticketSlider");
+      const merchantsSlider = document.getElementById("merchantsSlider");
+      const tpvSlider = document.getElementById("tpvSlider");
+
+      function formatMXN(cents) {
+        const sign = cents < 0 ? "-" : "";
+        const abs = Math.abs(cents) / 100;
+        return sign + "$" + abs.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MXN";
+      }
+
+      function formatCompactMXN(pesos) {
+        const sign = pesos < 0 ? "-" : "";
+        const abs = Math.abs(pesos);
+        if (abs >= 1000000) {
+          return sign + "$" + (abs / 1000000).toFixed(2) + "M MXN";
+        }
+        return sign + "$" + Math.round(abs).toLocaleString("es-MX") + " MXN";
+      }
+
+      function recalculate() {
+        const ticketPesos = parseInt(ticketSlider.value, 10);
+        const merchants = parseInt(merchantsSlider.value, 10);
+        const tpvPerMerchant = parseInt(tpvSlider.value, 10);
+
+        document.getElementById("ticketDisplay").textContent = "$" + ticketPesos.toLocaleString("es-MX") + ".00 MXN";
+        document.getElementById("merchantsDisplay").textContent = merchants.toLocaleString("es-MX") + " comercios";
+        document.getElementById("tpvDisplay").textContent = "$" + tpvPerMerchant.toLocaleString("es-MX") + " MXN/mes";
+
+        const grossCents = ticketPesos * 100;
+        const stageObj = stages[currentStage];
+        const methodObj = stageObj.methods[currentMethod];
+
+        // Charged to merchant (2.9% default, or 0.5% on SPEI QR)
+        const chargedRateBps = currentMethod === "spei" ? 50 : stageObj.merchantDefaultRateBps;
+        const feeChargedCents = Math.round((grossCents * chargedRateBps) / 10000);
+        // IVA on fee (16%) deducted in split simulator
+        const feeWithIvaCents = Math.round(feeChargedCents * 1.16);
+
+        // Wholesale processing cost
+        const wholesaleCostCents = Math.round((grossCents * methodObj.rateBps) / 10000) + methodObj.fixedCents;
+        const netMarginCents = feeChargedCents - wholesaleCostCents;
+
+        // Tax split (Base = Gross / 1.16, IVA = 16%, ISR RESICO = 1%)
+        const baseCents = Math.floor((grossCents * 100 + 58) / 116);
+        const ivaCents = grossCents - baseCents;
+        const isrCents = Math.floor((baseCents * 100 + 5000) / 10000);
+        const totalTaxVaultCents = ivaCents + isrCents;
+
+        // RBF 10% holdback
+        const rbfSweepCents = Math.round(grossCents * 0.10);
+        const merchantNetCents = grossCents - feeWithIvaCents - totalTaxVaultCents - rbfSweepCents;
+
+        document.getElementById("outGross").textContent = formatMXN(grossCents);
+        document.getElementById("outMerchantRateLabel").textContent = (chargedRateBps / 100).toFixed(2) + "%";
+        document.getElementById("outFeeCharged").textContent = formatMXN(feeChargedCents);
+        document.getElementById("outCostFormula").textContent = methodObj.label;
+        document.getElementById("outWholesaleCost").textContent = "-" + formatMXN(wholesaleCostCents);
+
+        const marginEl = document.getElementById("outNetPaymentMargin");
+        marginEl.textContent = (netMarginCents >= 0 ? "+" : "") + formatMXN(netMarginCents);
+        marginEl.className = "mono " + (netMarginCents >= 0 ? "tag-win" : "tag-loss");
+
+        document.getElementById("outTaxVault").textContent = formatMXN(totalTaxVaultCents);
+        document.getElementById("outRbfSweep").textContent = formatMXN(rbfSweepCents);
+        document.getElementById("outMerchantNet").textContent = formatMXN(merchantNetCents);
+
+        // Monthly Platform KPIs
+        const totalTPVPesos = merchants * tpvPerMerchant;
+        const txCountPerMonth = Math.max(1, Math.round(totalTPVPesos / ticketPesos));
+        const monthlyMdrProfitPesos = (txCountPerMonth * netMarginCents) / 100;
+
+        const fxUsdMxn = 20.0;
+        const sdkFixedCostPesos = Math.max(stageObj.fixedMonthlyUsd, merchants * stageObj.matFeeUsd) * fxUsdMxn;
+
+        // Ecosystem revenue:
+        // 1) Tax Escrow Float (~17% of TPV held on avg 15 days at 10.5% annual yield)
+        const avgTaxCustodyPesos = totalTPVPesos * 0.146 * 0.5;
+        const floatYieldMonthlyPesos = avgTaxCustodyPesos * (0.105 / 12);
+        // 2) RBF Fee Revenue (assume 35% of merchants have active $25k advance rotating every 3 months at 10% fee => ~$833 MXN/mo per active RBF merchant)
+        const rbfMonthlyRevPesos = merchants * 0.35 * 833;
+        // 3) CFDI SaaS ($199 MXN/mo per merchant)
+        const saasMonthlyRevPesos = merchants * 199;
+
+        const ecosystemRevPesos = floatYieldMonthlyPesos + rbfMonthlyRevPesos + saasMonthlyRevPesos;
+        const totalNetProfitPesos = monthlyMdrProfitPesos + ecosystemRevPesos - sdkFixedCostPesos;
+
+        document.getElementById("kpiTotalTPV").textContent = formatCompactMXN(totalTPVPesos);
+        document.getElementById("kpiFixedSdkCost").textContent = "-" + formatCompactMXN(sdkFixedCostPesos);
+        document.getElementById("kpiEcosystemRev").textContent = "+" + formatCompactMXN(ecosystemRevPesos);
+
+        const profitEl = document.getElementById("kpiTotalProfit");
+        profitEl.textContent = (totalNetProfitPesos >= 0 ? "+" : "") + formatCompactMXN(totalNetProfitPesos);
+        profitEl.className = "kpi-number " + (totalNetProfitPesos >= 0 ? "tag-win" : "tag-loss");
+      }
+
+      document.querySelectorAll("#stageSelector .pill-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("#stageSelector .pill-btn").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentStage = btn.getAttribute("data-stage");
+          recalculate();
+        });
+      });
+
+      document.querySelectorAll("#methodSelector .pill-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("#methodSelector .pill-btn").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentMethod = btn.getAttribute("data-method");
+          recalculate();
+        });
+      });
+
+      [ticketSlider, merchantsSlider, tpvSlider].forEach((slider) => {
+        slider.addEventListener("input", recalculate);
+      });
+
+      recalculate();
+    })();
+  </script>
+</body>
+</html>

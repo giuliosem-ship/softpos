@@ -108,7 +108,7 @@ func TestRecordSplitPayment(t *testing.T) {
 	_, _ = engine.CreateAccount("ASSET:ACQUIRER_RECEIVABLE", AccountAsset, "Acquirer Receivable")
 	_, _ = engine.CreateAccount("REVENUE:FEES", AccountRevenue, "Platform Fees")
 	_, _ = engine.CreateAccount("LIABILITY:MERCHANT:"+merchantID+":TAX_ESCROW", AccountLiability, "Tax Escrow")
-	_, _ = engine.CreateAccount("ASSET:RBF_LOANS_RECEIVABLE", AccountAsset, "RBF Loan Receivable")
+	_, _ = engine.CreateAccount("ASSET:RBF_LOANS_RECEIVABLE:"+merchantID, AccountAsset, "RBF Loan Receivable")
 	_, _ = engine.CreateAccount("LIABILITY:MERCHANT:"+merchantID+":AVAILABLE", AccountLiability, "Merchant Available")
 
 	// Gross $100.00 (10000 cents)
@@ -141,7 +141,7 @@ func TestRecordSplitPayment(t *testing.T) {
 	}
 
 	// RBF Receivable is an Asset with credit entry -> balance = Debits - Credits = -1000
-	rbfBal, _ := engine.GetBalance("ASSET:RBF_LOANS_RECEIVABLE")
+	rbfBal, _ := engine.GetBalance("ASSET:RBF_LOANS_RECEIVABLE:" + merchantID)
 	if rbfBal.AmountCents != -1000 {
 		t.Errorf("expected RBF balance -1000, got %d", rbfBal.AmountCents)
 	}

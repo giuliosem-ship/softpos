@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>SoftPOS México — Modelo de Negocios y Arquitectura Técnica</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --surface: #121826;
+      --surface-card: #1a2234;
+      --border: #232f45;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent-blue: #38bdf8;
+      --accent-green: #34d399;
+      --accent-purple: #a78bfa;
+      --accent-amber: #fbbf24;
+      --accent-rose: #f43f5e;
+      --radius: 12px;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --surface-card: #f1f5f9;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --accent-blue: #0284c7;
+        --accent-green: #059669;
+        --accent-purple: #7c3aed;
+        --accent-amber: #d97706;
+        --accent-rose: #e11d48;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    /* Navigation Bar */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      font-weight: 700;
+      font-size: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--accent-blue);
+    }
+
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      background: var(--surface-card);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      transition: all 0.2s ease;
+    }
+
+    .nav-btn:hover {
+      background: var(--border);
+      color: var(--accent-blue);
+    }
+
+    /* Hero Header */
+    .hero {
+      margin-bottom: 3.5rem;
+      text-align: left;
+    }
+
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.8rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 1rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-lead {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 850px;
+    }
+
+    /* Grid Layouts */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.75rem;
+      position: relative;
+    }
+
+    .card h3 {
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .card p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 1rem;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .card-highlight {
+      border-left: 4px solid var(--accent-blue);
+    }
+
+    .card-tax {
+      border-left: 4px solid var(--accent-green);
+    }
+
+    .card-rbf {
+      border-left: 4px solid var(--accent-purple);
+    }
+
+    .card-risk {
+      border-left: 4px solid var(--accent-rose);
+    }
+
+    /* Split Simulator Display Box */
+    .split-simulator {
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-top: 1.5rem;
+    }
+
+    .split-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0;
+      border-bottom: 1px dashed var(--border);
+      font-size: 0.95rem;
+    }
+
+    .split-row:last-child {
+      border-bottom: none;
+      font-weight: 700;
+      font-size: 1.05rem;
+      padding-top: 0.8rem;
+    }
+
+    .split-tag {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    /* Section Headings */
+    .section-header {
+      margin: 3.5rem 0 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-size: 1.8rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .section-subtitle {
+      color: var(--text-muted);
+      font-size: 1rem;
+      margin-top: 0.25rem;
+    }
+
+    /* Diagram Styles */
+    .flow-diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      margin: 2rem 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .flow-steps {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .flow-step {
+      flex: 1 1 180px;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .flow-step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      color: #000;
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 0.5rem;
+    }
+
+    .flow-step-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+    }
+
+    .flow-step-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* Code Tags & Architecture Badges */
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      padding: 0.15em 0.4em;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      color: var(--accent-blue);
+    }
+
+    .arch-spec-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      font-size: 0.95rem;
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .arch-spec-table th, .arch-spec-table td {
+      padding: 0.85rem 1.25rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .arch-spec-table th {
+      background: var(--surface-card);
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .arch-spec-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .status-green { background: rgba(52, 211, 153, 0.2); color: var(--accent-green); }
+    .status-blue { background: rgba(56, 189, 248, 0.2); color: var(--accent-blue); }
+    .status-purple { background: rgba(167, 139, 250, 0.2); color: var(--accent-purple); }
+
+    /* Footer */
+    footer {
+      margin-top: 5rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Top Navigation -->
+    <header class="top-nav">
+      <div class="nav-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        <span>SoftPOS México</span>
+      </div>
+      <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+        <a href="/pos/economics.html" class="nav-btn">
+          📊 Unit Economics y Comisiones
+        </a>
+        <a href="/pos/tech_roadmap.html" class="nav-btn">
+          🛠️ Roadmap Técnico & Gaps
+        </a>
+        <a href="/pos/" class="nav-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+          Ir a la Terminal de Cobro
+        </a>
+      </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="badge-pill">FinTech + TaxTech Platform (México)</div>
+      <h1>Plataforma Híbrida SoftPOS & Automatización Fiscal</h1>
+      <p class="hero-lead">
+        Infraestructura integral de cobro sin contacto (Tap-to-Phone NFC y CoDi/SPEI), contabilidad de partida doble en tiempo real (T+0), segregación tributaria automática (RESICO + IVA), timbrado CFDI 4.0 y financiamiento flexible RBF.
+      </p>
+    </section>
+
+    <!-- SECTION 1: BUSINESS MODEL -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2.2">
+            <line x1="12" y1="1" x2="12" y2="23"></line>
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+          </svg>
+          1. Modelo de Negocios
+        </h2>
+        <p class="section-subtitle">Resolviendo la asimetría financiera, fiscal y de crédito para comercios en México.</p>
+      </div>
+
+      <div class="grid-3">
+        <div class="card card-highlight">
+          <h3>📱 1. Cero Hardware</h3>
+          <p>
+            Elimina el pago y mantenimiento de terminales POS tradicionales. Cualquier smartphone Android con NFC opera como punto de cobro bancario de tarjetas y lector de QR CoDi.
+          </p>
+        </div>
+
+        <div class="card card-tax">
+          <h3>🛡️ 2. Paz Fiscal en T+0</h3>
+          <p>
+            Evita el colapso financiero a fin de mes. Al instante de cada venta, el sistema segrega el 16% de IVA y el 1.0%–2.5% de ISR en una <strong>Bóveda Fiscal</strong> protegida.
+          </p>
+        </div>
+
+        <div class="card card-rbf">
+          <h3>📈 3. Capital RBF</h3>
+          <p>
+            Financiamiento basado en ingresos (Revenue-Based Financing). Sin pagos fijos: el comercio amortiza el adelanto mediante deducciones porcentuales de sus ventas diarias.
+          </p>
+        </div>
+      </div>
+
+      <!-- Simulator Example -->
+      <div class="card">
+        <h3>💡 Ejemplo de Split en Tiempo Real (Venta de $1,160.00 MXN)</h3>
+        <p>Cuando un comercio RESICO cobra $1,160.00 MXN brutos, el motor ejecuta la siguiente partición atómica:</p>
+        <div class="split-simulator">
+          <div class="split-row">
+            <span>Cobro Bruto Transaccionado</span>
+            <strong>$1,160.00 MXN</strong>
+          </div>
+          <div class="split-row">
+            <span>Comisión SoftPOS Platform Fee (2.9% + IVA) <span class="split-tag">REVENUE:FEES</span></span>
+            <span style="color: var(--accent-rose);">- $34.80 MXN</span>
+          </div>
+          <div class="split-row">
+            <span>Apartado Fiscal IVA 16% <span class="split-tag">LIABILITY:TAX_ESCROW</span></span>
+            <span style="color: var(--accent-amber);">- $160.00 MXN</span>
+          </div>
+          <div class="split-row">
+            <span>Apartado Fiscal ISR RESICO (1.0% s/Base) <span class="split-tag">LIABILITY:TAX_ESCROW</span></span>
+            <span style="color: var(--accent-amber);">- $10.00 MXN</span>
+          </div>
+          <div class="split-row">
+            <span>Amortización RBF Loan Sweep (10% s/Venta) <span class="split-tag">ASSET:RBF_LOANS</span></span>
+            <span style="color: var(--accent-purple);">- $116.00 MXN</span>
+          </div>
+          <div class="split-row">
+            <span><strong>Saldo Líquido Disponible al Comercio</strong> <span class="split-tag">LIABILITY:AVAILABLE</span></span>
+            <strong style="color: var(--accent-green); font-size: 1.15rem;">$839.20 MXN</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Monetization Streams -->
+      <div class="grid-4" style="margin-top: 1.5rem;">
+        <div class="card">
+          <h4>💳 Comisiones MDR</h4>
+          <p style="font-size: 0.85rem;">Take-rate por procesamiento en tarjetas chip/contactless y transferencias SPEI/CoDi.</p>
+        </div>
+        <div class="card">
+          <h4>📊 Cuota Fija RBF</h4>
+          <p style="font-size: 0.85rem;">Margen por originación de adelantos de capital (ej. 8% a 15% del principal prestado).</p>
+        </div>
+        <div class="card">
+          <h4>🧾 Timbrado SaaS</h4>
+          <p style="font-size: 0.85rem;">Cuota mensual o por paquete de timbres fiscales CFDI 4.0 con multi-PAC failover.</p>
+        </div>
+        <div class="card">
+          <h4>🏦 Float de Custodia</h4>
+          <p style="font-size: 0.85rem;">Rendimiento financiero de los fondos acumulados en Bóveda Fiscal hasta la fecha de pago al SAT.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: SYSTEM ARCHITECTURE -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2.2">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          2. Arquitectura Técnica
+        </h2>
+        <p class="section-subtitle">Diseño modular de baja latencia en Go 1.22+, concurrencia thread-safe y cero floats.</p>
+      </div>
+
+      <!-- Architectural Workflow -->
+      <div class="flow-diagram">
+        <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Flujo de Datos Transaccional (End-to-End)</h3>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <div class="flow-step-title">Captura POS</div>
+            <div class="flow-step-desc">Web NFC / CoDi QR genera payload BER-TLV o SPEI</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <div class="flow-step-title">Idempotencia</div>
+            <div class="flow-step-desc">Cache distribuida en Redis evita duplicidad de pagos</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <div class="flow-step-title">Split Fiscal</div>
+            <div class="flow-step-desc">Calculadora RESICO determina IVA e ISR en centavos exactos</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <div class="flow-step-title">Core Ledger</div>
+            <div class="flow-step-desc">Partida doble atómica con bloqueo pesimista en PostgreSQL</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <div class="flow-step-title">Timbrado CFDI</div>
+            <div class="flow-step-desc">Firma CSD (AES-GCM) + Multi-PAC con Failover &lt;1.5s</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-step-num">6</div>
+            <div class="flow-step-title">Dispersión STP</div>
+            <div class="flow-step-desc">Liquidación SPEI y conciliación con CEP de Banxico</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modules Specification Table -->
+      <table class="arch-spec-table">
+        <thead>
+          <tr>
+            <th>Paquete / Módulo</th>
+            <th>Propósito y Responsabilidad</th>
+            <th>Estándar Regulatorio / Técnico</th>
+            <th>Garantía de Resiliencia</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pkg/ledger</code></td>
+            <td>Motor contable de partida doble inmutable (Double-Entry General Ledger).</td>
+            <td>Principios Contables IFRS / NIF A-1</td>
+            <td><span class="status-badge status-green">Cero Floats (int64)</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/fiscal</code></td>
+            <td>Calculadora RESICO persona física y retención Persona Moral; generador CFDI 4.0.</td>
+            <td>Art. 113-E & 113-J LISR / SAT Anexo 20</td>
+            <td><span class="status-badge status-blue">Aritmética Entera</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/pac</code></td>
+            <td>Orquestador de timbrado con conmutación por error entre PACs certificados.</td>
+            <td>Timbre Fiscal Digital v1.1 SAT</td>
+            <td><span class="status-badge status-purple">Failover &lt;1.5s</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/identity</code></td>
+            <td>Bóveda CSD con Envelope Encryption y sincronización con Lista Negra 69-B.</td>
+            <td>AES-256-GCM / SAT Art. 69-B (EFOS)</td>
+            <td><span class="status-badge status-green">Nonces Únicos & Bloqueo</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/stp</code></td>
+            <td>Generador de CLABEs de 18 dígitos, firmas HMAC/RSA y conciliación CEP.</td>
+            <td>Banxico SPEI / STP / Circular 3/2012</td>
+            <td><span class="status-badge status-blue">Validación Modulo 10</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/rbf</code></td>
+            <td>Originación de créditos, control de Repayment Cap y retenciones automáticas.</td>
+            <td>Revenue-Based Financing</td>
+            <td><span class="status-badge status-purple">Tope Estricto (Cap)</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/payments</code></td>
+            <td>Decodificador EMV L2 contactless BER-TLV y servicio CoDi.</td>
+            <td>EMV Book 3 & 4 / CoDi Banxico</td>
+            <td><span class="status-badge status-green">Transiciones de Estado</span></td>
+          </tr>
+          <tr>
+            <td><code>pkg/store</code></td>
+            <td>Persistencia en PostgreSQL con bloqueo pesimista y Redis para idempotencia.</td>
+            <td>ACID Transaccional / Redis RESP</td>
+            <td><span class="status-badge status-blue">SELECT ... FOR UPDATE</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Autonomous Loop Section -->
+      <div class="card card-highlight" style="margin-top: 2rem;">
+        <h3>🤖 Orquestación de Desarrollo Autónomo Multi-Modelo</h3>
+        <p>
+          Este repositorio incorpora un orquestador en <code>tools/loop/</code> que coordina el ciclo TDD con tres inteligencias artificiales especializadas:
+        </p>
+        <ul style="padding-left: 1.5rem; color: var(--text-muted); font-size: 0.95rem; line-height: 1.8;">
+          <li><strong>Architect & Orchestrator (Antigravity / Gemini 3.8 Flash):</strong> Define especificaciones formales, contratos de tipos y escribe suites completas de pruebas unitarias (Fase RED).</li>
+          <li><strong>The Coder (Qwen 2.5 Coder 14B vía LM Studio):</strong> Implementa el código de producción hasta que todos los tests pasen (Fase GREEN) con auto-healing.</li>
+          <li><strong>The Auditor & Critic (Gemma 4 vía LM Studio):</strong> Audita la solución buscando condiciones de carrera, precisión numérica (evitar floats en dinero) y edge cases del SAT.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>SoftPOS Hybrid Fiscal & Payment Platform (México) • 2026</p>
+      <p style="margin-top: 0.3rem;">Servidor en Go 1.22+ compilado con soporte para PostgreSQL y Redis.</p>
+    </footer>
+
+  </div>
+</body>
+</html>

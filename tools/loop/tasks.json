@@ -335,6 +335,70 @@
       "test_results": "PASS: ",
       "audit_notes": "Senior### **Security & Architecture Audit Report**\n\n**Status:** ⚠️ **Review Required** (High-level architectural soundness, but critical atomicity issues identified).\n\n#### **1. Transactional Atomicity & State Inconsistency**\nIn `RegisterMerchant`, the system updates the in-memory `merchants` map **before** successfully creating the ledger accounts. If `ledger.CreateAccount` fails (e.g., DB connection drop, unique constraint violation), the merchant remains in the `merchants` map but has no corresponding financial accounts.\n*   **Recommendation:** Use a \"Prepare-Commit\" pattern. Validate and create ledger accounts first; only update the in-memory map/cache if the ledger operations succeed.\n\n#### **2. Numerical Precision & Financial Integrity**\nThe implementation correctly avoids `float64` for currency, utilizing `AmountCents` (integers). This is the industry standard for preventing rounding errors in multi-currency or high-volume environments.\n*   **Observation:** The `SettlePaymentRequest` and `DisbursementRequest` structs correctly use `Cents` suffixes. Ensure that the `ledger.NewMoney` constructor enforces a minimum of 1 cent to prevent \"dust\" transactions that could cause division-by-zero or rounding issues in fee calculations.\n\n####",
       "completed_at": "2026-09-17T00:30:45.757764"
+    },
+    {
+      "id": "TASK-GO-012",
+      "component": "payments",
+      "title": "EMV Contactless TLV Parser & Card Payment Engine in Go",
+      "status": "completed",
+      "priority": 21,
+      "files": {
+        "tests": "pkg/payments/emv_test.go",
+        "implementation": "pkg/payments/emv.go"
+      },
+      "spec": "Implement Contactless EMV L2 TLV parsing and card payment state machine in Go 1.22+:\n1. Package name: payments\n2. Sentinel errors:\n   - ErrInvalidTLV = errors.New(\"invalid EMV TLV data format\")\n   - ErrUnsupportedCryptogram = errors.New(\"unsupported cryptogram type\")\n   - ErrExpiredCard = errors.New(\"card is expired\")\n   - ErrInvalidCurrency = errors.New(\"currency must be MXN (0484)\")\n   - ErrInvalidAmount = errors.New(\"amount must be positive\")\n   - ErrInvalidStateTransition = errors.New(\"invalid payment state transition\")\n   - ErrPaymentNotFound = errors.New(\"payment not found\")\n3. Enums:\n   - CryptogramType string: CryptogramARQC (\"ARQC\"), CryptogramTC (\"TC\"), CryptogramAAC (\"AAC\")\n   - PaymentStatus string: PaymentAuthorized (\"AUTHORIZED\"), PaymentSettled (\"SETTLED\"), PaymentVoided (\"VOIDED\"), PaymentRefunded (\"REFUNDED\")\n4. Data Structs:\n   - EMVTags struct with fields: AmountCents int64, CurrencyCode string, CryptogramType CryptogramType, CryptogramHex string, ATC int, PANMasked string, ExpirationDate string (YYMM), RawTags map[string][]byte\n   - Payment struct: ID string, MerchantID string, AmountCents int64, Status PaymentStatus, MaskedPAN string, CreatedAt time.Time, UpdatedAt time.Time\n5. Functions & Methods:\n   - ParseTLV(data []byte) (map[string][]byte, error): Decodes BER-TLV stream handling 1-byte tags (e.g., 0x82 AIP) and 2-byte tags (e.g., 0x9F02 Amount, 0x5F2A Currency, 0x9F36 ATC, 0x9F26 AC, 0x9F27 CID, 0x9F10 IAD, 0x5A PAN, 0x57 Track2), variable length encoding (1-byte len and multibyte 0x81, 0x82). Returns map of hex tag string (uppercase) to byte slice.\n   - MaskPAN(pan string) string: Replaces digits between first 6 and last 4 with '*' (e.g. 415231******9012). If len(pan) < 10, returns asterisks.\n   - ParseEMVTags(rawTLV []byte) (EMVTags, error): Parses TLV, extracts Tag 9F02 (BCD-to-int64 amount cents), Tag 5F2A (currency string, validates \"0484\" for MXN), Tag 9F27 (CID: 0x80->ARQC, 0x40->TC, 0x00->AAC), Tag 9F26 (AC hex string), Tag 9F36 (ATC int), Tag 5A or 57 (masks PAN), Tag 5F24 (checks expiration date against current year/month). Rejects AAC with ErrUnsupportedCryptogram, rejects invalid currency with ErrInvalidCurrency.\n   - PaymentEngine struct protected by sync.RWMutex: Authorize(id string, merchantID string, emv EMVTags) (*Payment, error), Settle(id string) (*Payment, error), Void(id string) (*Payment, error), Refund(id string, refundCents int64) (*Payment, error), GetPayment(id string) (*Payment, error). Enforces valid state transitions (Authorize -> Settle or Void; Settle -> Refund).",
+      "audit_notes": "Implemented and verified with Gemini 4 Argon: strict BER-TLV bounds checking, PCI-DSS PAN masking (first 6 / last 4), int64 BCD amount parsing, and RWMutex-protected PaymentEngine returning defensive struct copies.",
+      "test_results": "PASS: ok softpos/pkg/payments",
+      "retries": 0,
+      "completed_at": "2026-10-20T23:15:35"
+    },
+    {
+      "id": "TASK-GO-013",
+      "component": "payments",
+      "title": "Banxico CoDi (Cobro Digital) QR Generator & Inbound Validator in Go",
+      "status": "completed",
+      "priority": 22,
+      "files": {
+        "tests": "pkg/payments/codi_test.go",
+        "implementation": "pkg/payments/codi.go"
+      },
+      "spec": "Implement official Banxico CoDi (Cobro Digital) QR string generation and inbound validation in Go 1.22+:\n1. Package name: payments\n2. Sentinel errors:\n   - ErrInvalidCoDiAmount = errors.New(\"invalid CoDi payment amount\")\n   - ErrInvalidCoDiPayload = errors.New(\"malformed or invalid CoDi payload\")\n   - ErrExpiredCoDiRequest = errors.New(\"CoDi payment request has expired\")\n   - ErrInvalidCLABE = errors.New(\"invalid destination CLABE for CoDi\")\n3. Structs:\n   - CoDiRequest struct: Version int, SellerCLABE string, AmountCents int64, Concept string, Reference string, Expiration time.Time, InstitutionCode string\n   - CoDiConfirmation struct: TrackingKey string, SellerCLABE string, BuyerCLABE string, AmountCents int64, Timestamp time.Time, Status string, BanxicoApprovalCode string\n4. Methods & Functions:\n   - GenerateCoDiString(req CoDiRequest) (string, error): Validates that req.AmountCents > 0. Validates SellerCLABE using stp.ValidateCLABE. Checks expiration > time.Now(). Encodes standard JSON/URI format per Banxico CoDi specification (e.g. {\"v\":1,\"ic\":\"646\",\"c\":\"...\",\"m\":...,\"cp\":\"...\",\"rf\":\"...\",\"exp\":...}). Formats currency amount as decimal string (int64 cents divided by 100 with 2 decimals) without intermediate float conversion.\n   - ParseCoDiString(raw string) (CoDiRequest, error): Parses CoDi QR string, validates fields and checksum, returns CoDiRequest.\n   - ValidateCoDiConfirmation(data []byte) (*CoDiConfirmation, error): Parses inbound webhook/notification payload from Banxico/STP CoDi platform. Validates Status == \"APROBADO\", validates TrackingKey is non-empty and <= 30 alphanumeric characters. Returns *CoDiConfirmation.\n   - CoDiService struct protected by sync.RWMutex: CreatePaymentRequest(clabe string, amountCents int64, concept string, ref string, ttl time.Duration) (string, error), ConfirmPayment(conf *CoDiConfirmation) error.",
+      "audit_notes": "Implemented and verified with Gemini 4 Argon: zero-float integer decimal formatting/parsing, Modulo-10 CLABE validation via pkg/stp, precompiled regex for Banxico TrackingKey validation, and thread-safe CoDiService.",
+      "test_results": "PASS: ok softpos/pkg/payments",
+      "retries": 0,
+      "completed_at": "2026-10-20T23:15:35"
+    },
+    {
+      "id": "TASK-GO-014",
+      "component": "fiscal",
+      "title": "SAT CFDI 4.0 XML Engine & CSD Digital Sealer in Go",
+      "status": "completed",
+      "priority": 23,
+      "files": {
+        "tests": "pkg/fiscal/cfdi40_test.go",
+        "implementation": "pkg/fiscal/cfdi40.go"
+      },
+      "spec": "Implement Mexican SAT CFDI 4.0 XML generator, Cadena Original builder, and RSA-SHA256 CSD digital sealer in Go 1.22+ according to Anexo 20:\n1. Package name: fiscal\n2. Sentinel errors:\n   - ErrInvalidCFDIData = errors.New(\"invalid CFDI 4.0 data\")\n   - ErrSigningFailed = errors.New(\"failed to digitally sign CFDI with CSD\")\n3. Structs & XML serialization:\n   - CFDIComprobante: Version (\"4.0\"), Serie, Folio, Fecha, Sello, FormaPago, NoCertificado, Certificado, SubTotal, Moneda (\"MXN\"), Total, TipoDeComprobante (\"I\"), Exportacion (\"01\"), MetodoPago (\"PUE\"), LugarExpedicion\n   - CFDIInformacionGlobal: Periodicidad (e.g. \"01\" Diario), Meses (e.g. \"09\"), Año (e.g. 2026)\n   - CFDIEmisor: Rfc, Nombre, RegimenFiscal (e.g. \"626\" RESICO)\n   - CFDIReceptor: Rfc, Nombre, DomicilioFiscalReceptor, RegimenFiscalReceptor, UsoCFDI (e.g. \"S01\" Sin Efectos Fiscales, \"G03\" Gastos en General)\n   - CFDIConcepto: ClaveProdServ, Cantidad, ClaveUnidad, Descripcion, ValorUnitario, Importe, ObjetoImp (\"02\")\n   - CFDIImpuestos: TotalImpuestosTrasladados, Traslados ([]CFDITraslado), Retenciones ([]CFDIRetencion)\n4. Functions:\n   - BuildCFDI40XML(comp *CFDIComprobante) ([]byte, error): Serializes struct to UTF-8 XML with exact SAT namespaces (xmlns:cfdi=\"http://www.sat.gob.mx/cfd/4\", xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\", xsi:schemaLocation=...).\n   - BuildCadenaOriginal(comp *CFDIComprobante) string: Generates SAT Anexo 20 Cadena Original pipe-delimited sequence: ||4.0|Serie|Folio|Fecha|FormaPago|SubTotal|Total|Moneda|Exportacion|MetodoPago|LugarExpedicion|...||\n   - SignCFDI(xmlBytes []byte, privKeyDER []byte, certDER []byte) ([]byte, error): Parses RSA private key (PKCS1 or PKCS8), parses X.509 certificate to extract 20-digit NoCertificado serial number, computes SHA-256 of Cadena Original, signs using rsa.SignPKCS1v15, injects Sello (base64), Certificado (base64 DER), and NoCertificado into XML and returns signed XML byte slice.\n   - BuildFacturaGlobalDiaria(emisor CFDIEmisor, totalGrossCents int64, baseCents int64, ivaCents int64, csdKey []byte, csdCert []byte) ([]byte, error): Helper creating daily global invoice for RFC XAXX010101000 with InformacionGlobal periodicidad \"01\", signed and ready for PAC stamping.",
+      "audit_notes": "Implemented and verified with Gemini 4 Argon: SAT Anexo 20 CFDI 4.0 XML serialization, pipe-delimited Cadena Original, RSA-SHA256 PKCS#1v15 CSD digital sealing (PKCS#1 & PKCS#8 support), and RESICO daily Factura Global builder.",
+      "test_results": "PASS: ok softpos/pkg/fiscal",
+      "retries": 0,
+      "completed_at": "2026-10-20T23:15:35"
+    },
+    {
+      "id": "TASK-GO-015",
+      "component": "pac",
+      "title": "Multi-PAC Timbrado Client & Stamp Failover Engine in Go",
+      "status": "completed",
+      "priority": 24,
+      "files": {
+        "tests": "pkg/pac/client_test.go",
+        "implementation": "pkg/pac/client.go"
+      },
+      "spec": "Implement pluggable Multi-PAC timbrado client with failover in Go 1.22+:\n1. Package name: pac\n2. Sentinel errors:\n   - ErrPACUnavailable = errors.New(\"all configured PAC providers are unavailable\")\n   - ErrSATValidationError = errors.New(\"SAT rejected CFDI document\")\n   - ErrMalformedXML = errors.New(\"invalid or unparseable XML for stamping\")\n3. Structs:\n   - TimbreFiscalDigital struct: UUID string (UUID v4), FechaTimbrado time.Time, RfcProvCertif string, SelloCFD string, NoCertificadoSAT string, SelloSAT string, Version string (\"1.1\")\n   - PACResponse struct: Success bool, Timbre *TimbreFiscalDigital, ErrorCode string, ErrorMessage string\n4. Interfaces & Providers:\n   - PACClient interface: Stamp(ctx context.Context, signedXML []byte) (*PACResponse, error)\n   - MockPACClient struct: Implements PACClient. Deterministically signs valid XML, generates UUID v4, and returns simulated TimbreFiscalDigital. Can be configured to simulate network errors or SAT validation rejections.\n   - MultiPACOrchestrator struct: Holds Primary PACClient and Fallback PACClient. When Stamp() is called, attempts Primary PAC with configurable timeout (e.g. 1.5s). If primary returns network timeout or 5xx error, automatically falls back to Fallback PAC. If PAC returns business validation rejection (e.g. SAT error code 301, 302, 401), DOES NOT retry and immediately returns ErrSATValidationError.\n   - InjectTimbreFiscal(signedXML []byte, timbre *TimbreFiscalDigital) ([]byte, error): Inserts `<cfdi:Complemento><tfd:TimbreFiscalDigital .../></cfdi:Complemento>` before closing `</cfdi:Comprobante>` and returns valid stamped XML.",
+      "audit_notes": "Implemented and verified with Gemini 4 Argon: context-aware MultiPACOrchestrator with automatic failover on network/5xx errors, strict non-retry short-circuit on SAT validation rejections (ErrSATValidationError), and TFD v1.1 XML injection.",
+      "test_results": "PASS: ok softpos/pkg/pac",
+      "retries": 0,
+      "completed_at": "2026-10-20T23:15:35"
     }
   ]
 }

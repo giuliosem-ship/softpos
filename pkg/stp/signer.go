@@ -93,6 +93,48 @@ func (s *STPSigner) BuildAbonoCanonicalString(cuentaBeneficiario string, montoCe
 	return fmt.Sprintf("||%s|%s|%s|%s|%s||", cuentaBeneficiario, montoStr, claveRastreo, institucionOrdenante, cuentaOrdenante)
 }
 
+// BuildRegistraOrdenCanonicalString constructs the Banxico/STP pipe-delimited canonical string for outbound registraOrden requests without float64.
+func (s *STPSigner) BuildRegistraOrdenCanonicalString(
+	institucionContraparte string,
+	empresa string,
+	fechaOperacion string,
+	claveRastreo string,
+	institucionOperante string,
+	montoCents int64,
+	tipoPago int,
+	cuentaOrdenante string,
+	cuentaBeneficiario string,
+	rfcCurpBeneficiario string,
+	conceptoPago string,
+) string {
+	montoStr := fmt.Sprintf("%d.%02d", montoCents/100, montoCents%100)
+	return fmt.Sprintf(
+		"||%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s||",
+		institucionContraparte,
+		empresa,
+		fechaOperacion,
+		claveRastreo,
+		institucionOperante,
+		montoStr,
+		tipoPago,
+		cuentaOrdenante,
+		cuentaBeneficiario,
+		rfcCurpBeneficiario,
+		conceptoPago,
+	)
+}
+
+// SignCanonical signs canonical data using the configured RSA private key, or falls back to HMAC-SHA256 in sandbox/test environments.
+func (s *STPSigner) SignCanonical(canonicalData string) (string, error) {
+	if s.myPrivateKey != nil {
+		return s.SignRSA(canonicalData)
+	}
+	if len(s.hmacSecret) > 0 {
+		return s.SignHMAC(canonicalData), nil
+	}
+	return "", errors.New("no signing key configured on STPSigner")
+}
+
 // VerifyRSASignature verifies the RSA signature of the canonical data.
 func (s *STPSigner) VerifyRSASignature(canonicalData string, signatureBase64 string) bool {
 	if s.stpPublicKey == nil {
@@ -136,3 +178,4 @@ func (s *STPSigner) VerifyHMAC(canonicalData string, signatureHex string) bool {
 	expectedSig := s.SignHMAC(canonicalData)
 	return hmac.Equal([]byte(expectedSig), []byte(signatureHex))
 }
+

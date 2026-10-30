@@ -2,28 +2,30 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"softpos/pkg/ledger"
 )
 
 type STPAbonoRequest struct {
-	ID                    int64   `json:"id"`
-	FechaOperacion        int     `json:"fechaOperacion"`
-	InstitucionOrdenante  string  `json:"institucionOrdenante"`
-	InstitucionBeneficiaria string `json:"institucionBeneficiaria"`
-	ClaveRastreo          string  `json:"claveRastreo"`
-	Monto                 float64 `json:"monto"`
-	NombreOrdenante       string  `json:"nombreOrdenante"`
-	CuentaOrdenante       string  `json:"cuentaOrdenante"`
-	RfcCurpOrdenante      string  `json:"rfcCurpOrdenante"`
-	NombreBeneficiario    string  `json:"nombreBeneficiario"`
-	CuentaBeneficiario    string  `json:"cuentaBeneficiario"`
-	ConceptoPago          string  `json:"conceptoPago"`
-	Firma                 string  `json:"firma"`
+	ID                      int64       `json:"id"`
+	FechaOperacion          int         `json:"fechaOperacion"`
+	InstitucionOrdenante    string      `json:"institucionOrdenante"`
+	InstitucionBeneficiaria string      `json:"institucionBeneficiaria"`
+	ClaveRastreo            string      `json:"claveRastreo"`
+	Monto                   json.Number `json:"monto"`
+	NombreOrdenante         string      `json:"nombreOrdenante"`
+	CuentaOrdenante         string      `json:"cuentaOrdenante"`
+	RfcCurpOrdenante        string      `json:"rfcCurpOrdenante"`
+	NombreBeneficiario      string      `json:"nombreBeneficiario"`
+	CuentaBeneficiario      string      `json:"cuentaBeneficiario"`
+	ConceptoPago            string      `json:"conceptoPago"`
+	Firma                   string      `json:"firma"`
 }
 
 type STPAbonoResponse struct {
@@ -31,14 +33,61 @@ type STPAbonoResponse struct {
 	Mensaje string `json:"mensaje"`
 }
 
+// parseSTPMontoToCents converts a JSON decimal token (e.g. "500.00" or "125.5") directly into integer cents without float64.
+func parseSTPMontoToCents(num json.Number) (int64, error) {
+	raw := strings.TrimSpace(num.String())
+	if raw == "" {
+		return 0, errors.New("empty monto")
+	}
+
+	parts := strings.Split(raw, ".")
+	if len(parts) > 2 {
+		return 0, errors.New("invalid decimal format")
+	}
+
+	pesos, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || pesos < 0 {
+		return 0, errors.New("invalid integer part")
+	}
+
+	var centavos int64
+	if len(parts) == 2 {
+		frac := parts[1]
+		if len(frac) == 1 {
+			frac += "0"
+		} else if len(frac) == 0 {
+			frac = "00"
+		} else if len(frac) > 2 {
+			return 0, errors.New("more than 2 decimal places not allowed")
+		}
+		centavos, err = strconv.ParseInt(frac, 10, 64)
+		if err != nil || centavos < 0 {
+			return 0, errors.New("invalid fractional part")
+		}
+	}
+
+	totalCents := pesos*100 + centavos
+	if totalCents <= 0 {
+		return 0, errors.New("monto must be positive")
+	}
+	return totalCents, nil
+}
+
 func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 	var req STPAbonoRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
 
-	montoCents := int64(math.Round(req.Monto * 100.0))
+	montoCents, err := parseSTPMontoToCents(req.Monto)
+	if err != nil {
+		http.Error(w, `{"error":"INVALID_AMOUNT"}`, http.StatusBadRequest)
+		return
+	}
+
 	canonical := s.stpSigner.BuildAbonoCanonicalString(
 		req.CuentaBeneficiario,
 		montoCents,

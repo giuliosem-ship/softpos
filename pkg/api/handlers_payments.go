@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"softpos/pkg/fiscal"
+	"softpos/pkg/payments"
 )
 
 type SettlePaymentRequest struct {
@@ -56,27 +58,63 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Calculate RESICO Tax Split
-	taxSplit, err := fiscal.CalculateResicoTaxSplit(req.GrossAmountCents, 0, req.IsPersonaMoral)
+	// If payment was previously authorized in EMV PaymentEngine, verify it can transition to SETTLED
+	if existingPayment, err := s.paymentEngine.GetPayment(req.PaymentID); err == nil && existingPayment != nil {
+		if existingPayment.Status != payments.PaymentAuthorized {
+			http.Error(w, `{"error":"INVALID_PAYMENT_STATE"}`, http.StatusConflict)
+			return
+		}
+	}
+
+	// 1. Query merchant's accumulated monthly base sales and calculate RESICO Tax Split
+	accumulatedMonthlySalesCents := s.GetMerchantMonthlySalesCents(req.MerchantID)
+	taxSplit, err := fiscal.CalculateResicoTaxSplit(req.GrossAmountCents, accumulatedMonthlySalesCents, req.IsPersonaMoral)
 	if err != nil {
 		http.Error(w, `{"error":"TAX_CALCULATION_ERROR"}`, http.StatusBadRequest)
 		return
 	}
 
-	// 2. Post atomic Double-Entry Ledger Split
+	// 2. Determine RBF Sweep Cents (automatic holdback from active RBF loan if not explicitly set, or capped by active loan)
+	rbfSweepCents := req.RBFSweepCents
+	maxDeductible := req.GrossAmountCents - req.PlatformFeeCents - taxSplit.TotalTaxEscrowCents
+	hasActiveLoan := false
+	if loan, err := s.rbfEngine.GetMerchantLoan(req.MerchantID); err == nil && loan != nil && loan.RemainingCents() > 0 {
+		hasActiveLoan = true
+		if rbfSweepCents == 0 {
+			rbfSweepCents = s.rbfEngine.CalculateSweep(req.MerchantID, req.GrossAmountCents, maxDeductible)
+		} else if rbfSweepCents > loan.RemainingCents() {
+			rbfSweepCents = loan.RemainingCents()
+		}
+	}
+
+	// 3. Post atomic Double-Entry Ledger Split
 	_, err = s.ledger.RecordSplitPayment(
 		req.GrossAmountCents,
 		req.MerchantID,
 		req.PlatformFeeCents,
 		taxSplit.TotalTaxEscrowCents,
-		req.RBFSweepCents,
+		rbfSweepCents,
 	)
 	if err != nil {
 		http.Error(w, `{"error":"LEDGER_SPLIT_FAILED"}`, http.StatusInternalServerError)
 		return
 	}
 
-	netAvailable := req.GrossAmountCents - (req.PlatformFeeCents + taxSplit.TotalTaxEscrowCents + req.RBFSweepCents)
+	// 4. Transition EMV payment state if tracked and apply RBF loan repayment
+	_, err = s.paymentEngine.Settle(req.PaymentID)
+	if err != nil && !errors.Is(err, payments.ErrPaymentNotFound) {
+		http.Error(w, `{"error":"PAYMENT_STATE_TRANSITION_FAILED"}`, http.StatusConflict)
+		return
+	}
+
+	if hasActiveLoan && rbfSweepCents > 0 {
+		_, _ = s.rbfEngine.ApplyRepayment(req.MerchantID, rbfSweepCents)
+	}
+
+	// 5. Atomically record the base amount into the merchant's monthly accumulated sales
+	s.AddMerchantMonthlySalesCents(req.MerchantID, taxSplit.BaseAmountCents)
+
+	netAvailable := req.GrossAmountCents - (req.PlatformFeeCents + taxSplit.TotalTaxEscrowCents + rbfSweepCents)
 
 	resp := SettlePaymentResponse{
 		PaymentID:                 req.PaymentID,
@@ -87,7 +125,7 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		ISREscrowCents:            taxSplit.ISREscrowCents,
 		TaxEscrowCents:            taxSplit.TotalTaxEscrowCents,
 		PlatformFeeCents:          req.PlatformFeeCents,
-		RBFSweepCents:             req.RBFSweepCents,
+		RBFSweepCents:             rbfSweepCents,
 		NetAvailableCents:         netAvailable,
 		IsPersonaMoralWithholding: taxSplit.IsPersonaMoralWithholding,
 	}

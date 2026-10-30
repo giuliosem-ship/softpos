@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- MANDATORY: Declare support for both light and dark themes to prevent FOUC -->
+  <meta name="color-scheme" content="light dark">
+  <title>SoftPOS México — Roadmap Técnico de Implementación y Cierre de Gaps</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+
+      --bg-light: #f8fafc;
+      --bg-dark: #0b0f19;
+      --surface-light: #ffffff;
+      --surface-dark: #121826;
+      --surface-card-light: #f1f5f9;
+      --surface-card-dark: #1a2234;
+      --border-light: #cbd5e1;
+      --border-dark: #232f45;
+      --text-light: #0f172a;
+      --text-dark: #f1f5f9;
+      --text-muted-light: #475569;
+      --text-muted-dark: #94a3b8;
+
+      --blue-light: #0284c7;
+      --blue-dark: #38bdf8;
+      --green-light: #059669;
+      --green-dark: #34d399;
+      --purple-light: #7c3aed;
+      --purple-dark: #a78bfa;
+      --amber-light: #d97706;
+      --amber-dark: #fbbf24;
+      --rose-light: #e11d48;
+      --rose-dark: #fb7185;
+
+      --bg: light-dark(var(--bg-light), var(--bg-dark));
+      --surface: light-dark(var(--surface-light), var(--surface-dark));
+      --surface-card: light-dark(var(--surface-card-light), var(--surface-card-dark));
+      --border: light-dark(var(--border-light), var(--border-dark));
+      --text: light-dark(var(--text-light), var(--text-dark));
+      --text-muted: light-dark(var(--text-muted-light), var(--text-muted-dark));
+
+      --accent-blue: light-dark(var(--blue-light), var(--blue-dark));
+      --accent-green: light-dark(var(--green-light), var(--green-dark));
+      --accent-purple: light-dark(var(--purple-light), var(--purple-dark));
+      --accent-amber: light-dark(var(--amber-light), var(--amber-dark));
+      --accent-rose: light-dark(var(--rose-light), var(--rose-dark));
+
+      --scrollbar-track: light-dark(#e2e8f0, #121826);
+      --scrollbar-thumb: light-dark(#64748b, #475569);
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-width: thin;
+
+      --radius: 12px;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    html {
+      accent-color: var(--accent-blue);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    /* Navigation Bar */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      font-weight: 800;
+      font-size: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--accent-blue);
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.5rem 0.95rem;
+      border-radius: 8px;
+      background: var(--surface-card);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+
+    .nav-btn:hover {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    /* Hero */
+    .hero {
+      margin-bottom: 2.5rem;
+    }
+
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.9rem;
+      background: rgba(167, 139, 250, 0.16);
+      color: var(--accent-purple);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+    }
+
+    h1 {
+      font-size: clamp(1.85rem, 3.5vw, 2.55rem);
+      font-weight: 800;
+      line-height: 1.18;
+      margin-bottom: 0.9rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-lead {
+      font-size: 1.08rem;
+      color: var(--text-muted);
+      max-width: 920px;
+    }
+
+    /* Readiness Score Bar */
+    .readiness-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 2.5rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.25rem;
+      align-items: center;
+    }
+
+    .readiness-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .readiness-label {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .readiness-value {
+      font-family: var(--font-mono);
+      font-size: 1.65rem;
+      font-weight: 800;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: var(--surface-card);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      margin-top: 0.35rem;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+      width: 62%;
+      transition: width 0.25s ease;
+    }
+
+    /* Section Headers */
+    .section-header {
+      margin: 3rem 0 1.4rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .section-title {
+      font-size: 1.6rem;
+      font-weight: 750;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .section-subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-top: 0.25rem;
+    }
+
+    /* Filter Pills */
+    .filter-bar {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      padding: 0.45rem 0.9rem;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--surface-card);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .filter-btn.active {
+      background: rgba(56, 189, 248, 0.18);
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    /* Gap Cards Grid */
+    .gaps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .gap-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.45rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      position: relative;
+    }
+
+    .gap-card[data-pillar="backend"] { border-top: 4px solid var(--accent-blue); }
+    .gap-card[data-pillar="security"] { border-top: 4px solid var(--accent-rose); }
+    .gap-card[data-pillar="apps"] { border-top: 4px solid var(--accent-green); }
+
+    .gap-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .pillar-badge {
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 0.2rem 0.55rem;
+      border-radius: 6px;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-backend { background: rgba(56, 189, 248, 0.15); color: var(--accent-blue); }
+    .badge-security { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); }
+    .badge-apps { background: rgba(52, 211, 153, 0.15); color: var(--accent-green); }
+
+    .priority-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+    }
+
+    .gap-title {
+      font-size: 1.12rem;
+      font-weight: 750;
+      line-height: 1.3;
+    }
+
+    .code-ref {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--accent-blue);
+      background: var(--surface-card);
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      word-break: break-all;
+    }
+
+    .gap-box {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      background: var(--surface-card);
+      padding: 0.75rem 0.9rem;
+      border-radius: 8px;
+      border-left: 3px solid var(--border);
+    }
+
+    .gap-box strong {
+      color: var(--text);
+      display: block;
+      margin-bottom: 0.2rem;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .gap-check-label {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-top: auto;
+      padding-top: 0.7rem;
+      border-top: 1px dashed var(--border);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Responsive Table (modern-web-guidance: responsive-table) */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(560px, 80vh);
+      container-type: inline-size;
+      scrollbar-gutter: stable;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      margin: 1.5rem 0;
+    }
+
+    table.sprint-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.9rem;
+      --label-2: "Pilar";
+      --label-3: "Archivos del Repositorio a Modificar / Crear";
+      --label-4: "Agente IA Responsable (tools/loop)";
+      --label-5: "Criterio de Aceptación (Definition of Done)";
+    }
+
+    table.sprint-table caption {
+      text-align: left;
+      padding: 1rem 1.25rem;
+      font-weight: 700;
+      font-size: 1rem;
+      background: var(--surface-card);
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.sprint-table th,
+    table.sprint-table td {
+      padding: 0.85rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    table.sprint-table thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--surface-card);
+    }
+
+    table.sprint-table thead th {
+      background: var(--surface-card);
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    table.sprint-table tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--surface);
+      font-weight: 700;
+      border-right: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    @container (width < 720px) {
+      table.sprint-table,
+      table.sprint-table thead,
+      table.sprint-table tbody,
+      table.sprint-table tr,
+      table.sprint-table th,
+      table.sprint-table td {
+        display: block;
+      }
+
+      table.sprint-table thead {
+        /* MANDATORY: Hide column header from layout and screen readers */
+        display: none;
+      }
+
+      table.sprint-table tr {
+        margin-block-end: 1rem;
+        border-bottom: 2px solid var(--border);
+      }
+
+      table.sprint-table tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--surface-card);
+        border-right: none;
+      }
+
+      table.sprint-table td:nth-child(2)::before {
+        content: var(--label-2) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.sprint-table td:nth-child(3)::before {
+        content: var(--label-3) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.sprint-table td:nth-child(4)::before {
+        content: var(--label-4) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      table.sprint-table td:nth-child(5)::before {
+        content: var(--label-5) ": ";
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.82em;
+      padding: 0.15em 0.35em;
+      background: var(--surface-card);
+      border-radius: 4px;
+      color: var(--accent-blue);
+    }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Top Navigation -->
+    <header class="top-nav">
+      <a href="/pos/overview.html" class="nav-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="16 18 22 12 16 6"></polyline>
+          <polyline points="8 6 2 12 8 18"></polyline>
+        </svg>
+        <span>SoftPOS México • Roadmap Técnico & Gaps</span>
+      </a>
+      <div class="nav-links">
+        <a href="/pos/overview.html" class="nav-btn">📘 Arquitectura & Modelo</a>
+        <a href="/pos/economics.html" class="nav-btn">📊 Unit Economics & Comisiones</a>
+        <a href="/pos/" class="nav-btn">📱 Ir a la Terminal POS</a>
+      </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="badge-pill">Auditoría de Código Real vs. Producción Bancaria</div>
+      <h1>Roadmap de Ingeniería: Cierre de Gaps (Backend, Seguridad y Apps)</h1>
+      <p class="hero-lead">
+        Diagnóstico exacto de lo que ya está construido en tu repositorio Go/JS frente a los componentes que faltan para salir a producción con dinero real, timbrado SAT y lectura NFC certificada.
+      </p>
+    </section>
+
+    <!-- Readiness Scoreboard -->
+    <section class="readiness-banner">
+      <div class="readiness-stat">
+        <span class="readiness-label">Avance Global hacia Producción</span>
+        <span class="readiness-value" style="color: var(--accent-blue);" id="readinessPct">62%</span>
+        <div class="progress-track">
+          <div class="progress-fill" id="readinessBar"></div>
+        </div>
+      </div>
+      <div class="readiness-stat">
+        <span class="readiness-label">Módulos Core Ya Listos</span>
+        <span class="readiness-value" style="color: var(--accent-green);">8 / 8</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Ledger int64, RESICO, CFDI 4.0, CLABE, CSD AES-GCM</span>
+      </div>
+      <div class="readiness-stat">
+        <span class="readiness-label">Gaps Técnicos por Cerrar</span>
+        <span class="readiness-value" style="color: var(--accent-amber);" id="gapsRemainingCount">9 Gaps</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Marca las casillas conforme avances</span>
+      </div>
+      <div class="readiness-stat">
+        <span class="readiness-label">Tiempo Estimado (Equipo + IA)</span>
+        <span class="readiness-value" style="color: var(--accent-purple);">6 Semanas</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">3 Sprints de 2 semanas con <code>tools/loop/</code></span>
+      </div>
+    </section>
+
+    <!-- SECTION 1: INTERACTIVE GAP CATALOG -->
+    <section>
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">🔍 1. Auditoría de los 9 Gaps Técnicos en el Repositorio</h2>
+          <p class="section-subtitle">Filtra por área técnica y marca cada bloque conforme tu loop autónomo o equipo lo complete.</p>
+        </div>
+        <div class="filter-bar" id="pillarFilter">
+          <button type="button" class="filter-btn active" data-filter="all">Todos (9)</button>
+          <button type="button" class="filter-btn" data-filter="backend">⚙️ Backend & SQL (3)</button>
+          <button type="button" class="filter-btn" data-filter="security">🛡️ Seguridad & Compliance (3)</button>
+          <button type="button" class="filter-btn" data-filter="apps">📱 Apps, NFC & UI (3)</button>
+        </div>
+      </div>
+
+      <div class="gaps-grid" id="gapsGrid">
+        <!-- GAP B1 -->
+        <article class="gap-card" data-pillar="backend">
+          <div class="gap-top">
+            <span class="pillar-badge badge-backend">Backend & Persistencia</span>
+            <span class="priority-tag">P0 • Bloqueante</span>
+          </div>
+          <h3 class="gap-title">B1. Persistencia SQL para Créditos RBF y Pagos EMV</h3>
+          <div class="code-ref">pkg/rbf/engine.go • pkg/payments/emv.go • migrations/</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            <code>SQLLedgerRepository</code> sí guarda cuentas y pólizas en PostgreSQL, pero <code>rbf.Engine</code> y <code>payments.PaymentEngine</code> guardan los préstamos activos y cobros EMV únicamente en mapas en memoria RAM (<code>map[string]*RBFLoan</code>). Si el servidor se reinicia, se pierde el saldo amortizado del préstamo.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Crear <code>migrations/002_rbf_and_payments.up.sql</code> con las tablas <code>rbf_loans</code> y <code>emv_payments</code>, e inyectar un <code>SQLRBFRepository</code> con bloqueo pesimista <code>SELECT ... FOR UPDATE</code> durante el cálculo del <em>Loan Sweep</em>.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap B1 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP B2 -->
+        <article class="gap-card" data-pillar="backend">
+          <div class="gap-top">
+            <span class="pillar-badge badge-backend">Backend & Conectores</span>
+            <span class="priority-tag">P0 • Bloqueante</span>
+          </div>
+          <h3 class="gap-title">B2. Clientes HTTP Productivos para PACs y STP en <code>main.go</code></h3>
+          <div class="code-ref">pkg/pac/client.go • pkg/api/server.go:61-69 • cmd/server/main.go</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            <code>pkg/stp/client.go</code> ya tiene escrito <code>HTTPSTPClient</code>, pero <code>NewServer()</code> inicializa <code>NewMockSTPClient</code> por defecto. Asimismo, <code>pkg/pac/client.go</code> solo tiene <code>MockPACClient</code> sin el cliente REST real hacia Finkok/Facturama/SW.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Implementar <code>HTTPPACClient</code> (timbrado y cancelación CFDI 4.0) y conectar en <code>BuildServer()</code> de <code>cmd/server/main.go</code> la carga de llave privada RSA <code>.pem</code> de STP y credenciales de los 2 PACs desde variables seguras.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap B2 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP B3 -->
+        <article class="gap-card" data-pillar="backend">
+          <div class="gap-top">
+            <span class="pillar-badge badge-backend">Backend & Resiliencia</span>
+            <span class="priority-tag">P1 • Alta Prioridad</span>
+          </div>
+          <h3 class="gap-title">B3. Transactional Outbox & Worker de Conciliación Nocturna</h3>
+          <div class="code-ref">pkg/api/handlers_payments.go • pkg/stp/cep.go</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            El cobro, el split contable y el timbrado ocurren de forma síncrona. Si un comercio vende cuando el SAT/PAC presenta intermitencia total, o si un webhook SPEI de STP llega con retraso, no hay cola de reintentos ni cuadre automático de saldos al cierre del día.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Tabla <code>outbox_events</code> en PostgreSQL con worker asíncrono (backoff exponencial) para timbrado diferido y descargas de CEP Banxico, más un job nocturno que compare saldos de <code>pkg/ledger</code> vs. STP/Adquirente.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap B3 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP S1 -->
+        <article class="gap-card" data-pillar="security">
+          <div class="gap-top">
+            <span class="pillar-badge badge-security">Seguridad & Criptografía</span>
+            <span class="priority-tag">P0 • Bloqueante</span>
+          </div>
+          <h3 class="gap-title">S1. Integración Cloud KMS y Bloqueo de Llaves de Desarrollo</h3>
+          <div class="code-ref">pkg/api/server.go:22 • pkg/identity/csd_vault.go</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            <code>server.go</code> contiene la constante <code>defaultVaultMasterKeyHex = "010203..."</code> y <code>main.go</code> tiene un fallback <code>softpos_dev_secret_key_12345678</code> para HMAC. Si se despliega así por error, los CSDs del SAT quedarían cifrados con una llave conocida.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Integrar proveedor <code>KMSKeyWrapper</code> (GCP KMS / AWS KMS) en <code>csd_vault.go</code> para cifrar la DEK, y agregar validación <em>Fail-Fast</em> en <code>main.go</code> cuando <code>ENV=production</code> si faltan secretos reales.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap S1 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP S2 -->
+        <article class="gap-card" data-pillar="security">
+          <div class="gap-top">
+            <span class="pillar-badge badge-security">Seguridad & API</span>
+            <span class="priority-tag">P0 • Bloqueante</span>
+          </div>
+          <h3 class="gap-title">S2. Autenticación JWT/Passkeys, Control Tenant y mTLS en Webhooks</h3>
+          <div class="code-ref">pkg/api/middleware.go • pkg/api/handlers_stp.go</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            <code>middleware.go</code> solo incluye <code>RecoveryMiddleware</code> y <code>LoggingMiddleware</code>. Cualquier cliente puede invocar <code>/api/v1/disbursements</code> o consultar saldos de otro <code>merchant_id</code> sin token de sesión ni rate-limiting.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Añadir <code>AuthMiddleware</code> (JWT firmado + aislamiento estricto por <code>merchant_id</code>), <code>RateLimitMiddleware</code> sobre Redis y validación de firma + IP allowlist / mTLS en los webhooks entrantes de STP y CoDi.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap S2 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP S3 -->
+        <article class="gap-card" data-pillar="security">
+          <div class="gap-top">
+            <span class="pillar-badge badge-security">Seguridad Móvil (PCI MPoC)</span>
+            <span class="priority-tag">P1 • Alta Prioridad</span>
+          </div>
+          <h3 class="gap-title">S3. Atestación de Integridad del Teléfono (Play Integrity / App Attest)</h3>
+          <div class="code-ref">pkg/api/handlers_emv_codi.go • web/pos/softpos_sdk.js</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            El endpoint <code>/api/v1/payments/emv/authorize</code> acepta tramas TLV sin verificar si el dispositivo móvil que originó la lectura NFC está comprometido (root, jailbreak, depurador activo o emulador).
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Verificador en el backend del token criptográfico de <strong>Google Play Integrity API</strong> (Android) y <strong>Apple DeviceCheck / App Attest</strong> antes de autorizar cualquier transacción EMV.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap S3 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP A1 -->
+        <article class="gap-card" data-pillar="apps">
+          <div class="gap-top">
+            <span class="pillar-badge badge-apps">Apps & Pos SDK</span>
+            <span class="priority-tag">P0 • Bloqueante</span>
+          </div>
+          <h3 class="gap-title">A1. Codificador QR ISO-18004 Real para CoDi/SPEI en <code>softpos_sdk.js</code></h3>
+          <div class="code-ref">web/pos/softpos_sdk.js:249-309</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            La función <code>generateQRCodeSVG()</code> dibuja una matriz visual 25x25 usando un hash determinista FNV-1a para demostración UI, pero no contiene corrección de errores Reed-Solomon ISO/IEC 18004, por lo que la cámara de BBVA o Banorte no puede decodificarla.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Reemplazar el generador pseudo-aleatorio en <code>softpos_sdk.js</code> por un codificador matricial QR real (Versión 4–6 con Reed-Solomon nivel M) cero-dependencias para que cualquier app bancaria real lea el payload CoDi.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap A1 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP A2 -->
+        <article class="gap-card" data-pillar="apps">
+          <div class="gap-top">
+            <span class="pillar-badge badge-apps">Apps Nativas (Android / iOS)</span>
+            <span class="priority-tag">P1 • Alta Prioridad</span>
+          </div>
+          <h3 class="gap-title">A2. Wrapper App Móvil + Puente Nativo a SDK Tap-to-Pay Certificado</h3>
+          <div class="code-ref">web/pos/ • Android Kotlin Bridge / iOS Swift Bridge</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            <code>TapToPhoneService</code> usa <code>window.NDEFReader</code> (Web NFC), que sirve para leer tags NDEF en Chrome Android pero no tiene acceso de bajo nivel a ISO-DEP (<code>IsoDep</code> APDU) requerido por Apple Pay, Google Pay y tarjetas EMV reales en iOS/Android.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Empaquetar la interfaz de <code>web/pos/</code> en un shell nativo (Capacitor / Kotlin) que invoque el SDK nativo certificado (Stripe Terminal Tap-to-Pay en Fase 1 y Kushki/MineSec en Fase 2) manteniendo la misma UI y backend Go.
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap A2 como resuelto
+          </label>
+        </article>
+
+        <!-- GAP A3 -->
+        <article class="gap-card" data-pillar="apps">
+          <div class="gap-top">
+            <span class="pillar-badge badge-apps">Apps & Portal Web</span>
+            <span class="priority-tag">P1 • Alta Prioridad</span>
+          </div>
+          <h3 class="gap-title">A3. Flujo UI de Onboarding KYB (Carga CSF + CSD) y Portal del Contador</h3>
+          <div class="code-ref">web/pos/index.html • pkg/identity/csf.go • pkg/api/handlers_merchants.go</div>
+          <div class="gap-box">
+            <strong>Estado Actual (Gap Detectado)</strong>
+            El backend ya sabe parsear datos de la Constancia de Situación Fiscal (<code>csf.go</code>) y cifrar CSDs (<code>csd_vault.go</code>), pero en la UI de <code>web/pos/index.html</code> no existe la pantalla para que un nuevo comercio se dé de alta solo ni para exportar el reporte al contador.
+          </div>
+          <div class="gap-box">
+            <strong>Solución a Implementar</strong>
+            Agregar en <code>web/pos/</code> el asistente de Onboarding en 3 pasos (Subir CSF -> Subir <code>.cer</code>/<code>.key</code> -> Obtener CLABE STP) y el botón de descarga de pre-declaración mensual RESICO (CSV/PDF + ZIP de XMLs).
+          </div>
+          <label class="gap-check-label">
+            <input type="checkbox" class="gap-checkbox"> Marcar Gap A3 como resuelto
+          </label>
+        </article>
+      </div>
+    </section>
+
+    <!-- SECTION 2: SPRINT EXECUTION PLAN WITH AI ORCHESTRATOR -->
+    <section>
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">🚀 2. Plan de Ejecución en 3 Sprints (6 Semanas con Gemini + Modelos Locales)</h2>
+          <p class="section-subtitle">Cómo asignar cada tarea entre tu equipo humano y el loop autónomo en <code>tools/loop/</code>.</p>
+        </div>
+      </div>
+
+      <div tabindex="0" role="region" aria-labelledby="sprint-table-caption" class="table-wrapper">
+        <table class="sprint-table">
+          <caption id="sprint-table-caption">Cronograma de Implementación Técnica por Sprint (2 Semanas por Sprint)</caption>
+          <thead>
+            <tr>
+              <th>Sprint / Semana</th>
+              <th>Pilar</th>
+              <th>Archivos del Repositorio a Modificar / Crear</th>
+              <th>Agente IA Responsable (<code>tools/loop</code>)</th>
+              <th>Criterio de Aceptación (Definition of Done)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Sprint 1<br><small>Semanas 1–2</small></th>
+              <td><strong>Seguridad Zero-Trust & Persistencia SQL Completa</strong><br>(Gaps B1, S1, S2)</td>
+              <td>
+                • <code>migrations/002_rbf_and_payments.up.sql</code><br>
+                • <code>pkg/store/postgres.go</code><br>
+                • <code>pkg/api/middleware.go</code><br>
+                • <code>cmd/server/main.go</code>
+              </td>
+              <td>
+                • <strong>Gemini:</strong> Diseña esquema SQL, contratos JWT y tests de concurrencia.<br>
+                • <strong>Qwen 2.5 Coder:</strong> Implementa repositorios SQL.<br>
+                • <strong>Gemma 4:</strong> Audita inyecciones SQL y bloqueos <code>FOR UPDATE</code>.
+              </td>
+              <td>
+                Reiniciar el contenedor Go con transacciones activas conserva el 100% de los préstamos RBF y pagos EMV en PostgreSQL; endpoints protegidos con JWT y tests de penetración IDOR en verde.
+              </td>
+            </tr>
+            <tr>
+              <th>Sprint 2<br><small>Semanas 3–4</small></th>
+              <td><strong>Conectores Reales (STP + Multi-PAC) & QR ISO-18004</strong><br>(Gaps B2, A1, A3)</td>
+              <td>
+                • <code>pkg/pac/http_client.go</code><br>
+                • <code>pkg/stp/signer.go</code><br>
+                • <code>web/pos/softpos_sdk.js</code><br>
+                • <code>web/pos/index.html</code>
+              </td>
+              <td>
+                • <strong>Gemini:</strong> Genera adaptadores de API de PAC (Finkok/SW) y codificador Reed-Solomon QR.<br>
+                • <strong>Qwen 2.5 Coder:</strong> Escribe UI de Onboarding KYB.<br>
+                • <strong>Modelo Local OCR:</strong> Extrae datos de PDF de CSF del SAT.
+              </td>
+              <td>
+                Cobro real en Sandbox de STP acreditado vía webhook firmado, factura CFDI 4.0 timbrada en PAC de pruebas y código QR escaneable desde cualquier cámara móvil real.
+              </td>
+            </tr>
+            <tr>
+              <th>Sprint 3<br><small>Semanas 5–6</small></th>
+              <td><strong>Shell Móvil Tap-to-Pay, Atestación & Reconciliación</strong><br>(Gaps B3, S3, A2)</td>
+              <td>
+                • <code>pkg/reconciliation/worker.go</code><br>
+                • <code>pkg/security/attestation.go</code><br>
+                • <code>mobile/android/</code> (Wrapper + SDK Tap-to-Pay)
+              </td>
+              <td>
+                • <strong>Gemini:</strong> Diseña el motor de conciliación EOD (Ledger vs. STP/Adquirente).<br>
+                • <strong>Gemma 4:</strong> Audita que ningún PAN o llave privada aparezca en logs ni memoria tras cada cobro.
+              </td>
+              <td>
+                App Android firmada leyendo tarjetas sin contacto (Visa/MC/Apple Pay/Google Pay) con validación Play Integrity y reporte automático de cuadre contable diario a las 23:59 hrs.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>SoftPOS Hybrid Fiscal & Payment Platform (México) • Roadmap de Ingeniería para Producción</p>
+    </footer>
+
+  </div>
+
+  <script>
+    (function () {
+      const filterButtons = document.querySelectorAll("#pillarFilter .filter-btn");
+      const cards = document.querySelectorAll("#gapsGrid .gap-card");
+      const checkboxes = document.querySelectorAll(".gap-checkbox");
+      const readinessPct = document.getElementById("readinessPct");
+      const readinessBar = document.getElementById("readinessBar");
+      const gapsRemainingCount = document.getElementById("gapsRemainingCount");
+
+      filterButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          filterButtons.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          const filter = btn.getAttribute("data-filter");
+          cards.forEach((card) => {
+            if (filter === "all" || card.getAttribute("data-pillar") === filter) {
+              card.style.display = "flex";
+            } else {
+              card.style.display = "none";
+            }
+          });
+        });
+      });
+
+      function updateProgress() {
+        const total = checkboxes.length;
+        let checked = 0;
+        checkboxes.forEach((cb) => {
+          if (cb.checked) checked++;
+        });
+        // Base architecture is 62% complete; closing the 9 gaps brings it to 100%
+        const pct = Math.round(62 + (checked / total) * 38);
+        const remaining = total - checked;
+        readinessPct.textContent = pct + "%";
+        readinessBar.style.width = pct + "%";
+        gapsRemainingCount.textContent = remaining === 0 ? "¡Listo para Producción!" : remaining + " Gaps";
+      }
+
+      checkboxes.forEach((cb) => {
+        cb.addEventListener("change", updateProgress);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -27,9 +28,16 @@ type BlacklistEntry struct {
 	OficioSAT string
 }
 
+// BlacklistRepository persists SAT 69-B records in PostgreSQL.
+type BlacklistRepository interface {
+	AddEntry(ctx context.Context, entry BlacklistEntry) error
+	GetEntry(ctx context.Context, rfc string) (BlacklistEntry, bool, error)
+}
+
 // BlacklistService manages the blacklist entries.
 type BlacklistService struct {
-	mu     sync.RWMutex
+	mu      sync.RWMutex
+	repo    BlacklistRepository
 	entries map[string]BlacklistEntry
 }
 
@@ -40,26 +48,34 @@ func NewBlacklistService() *BlacklistService {
 	}
 }
 
+func (s *BlacklistService) SetRepository(repo BlacklistRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repo = repo
+}
+
 // AddEntry adds a new entry to the blacklist.
 func (s *BlacklistService) AddEntry(rfc string, status BlacklistStatus, oficioSAT string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	normalizedRFC := strings.ToUpper(strings.TrimSpace(rfc))
-	s.entries[normalizedRFC] = BlacklistEntry{
+	entry := BlacklistEntry{
 		RFC:       normalizedRFC,
 		Status:    status,
 		OficioSAT: oficioSAT,
 	}
+
+	if s.repo != nil {
+		_ = s.repo.AddEntry(context.Background(), entry)
+	}
+
+	s.entries[normalizedRFC] = entry
 }
 
 // GetStatus returns the blacklist status for a given RFC.
 func (s *BlacklistService) GetStatus(rfc string) BlacklistStatus {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	normalizedRFC := strings.ToUpper(strings.TrimSpace(rfc))
-	entry, exists := s.entries[normalizedRFC]
+	entry, exists := s.GetEntry(rfc)
 	if !exists {
 		return BlacklistClean
 	}
@@ -72,6 +88,12 @@ func (s *BlacklistService) GetEntry(rfc string) (BlacklistEntry, bool) {
 	defer s.mu.RUnlock()
 
 	normalizedRFC := strings.ToUpper(strings.TrimSpace(rfc))
+	if s.repo != nil {
+		if entry, exists, err := s.repo.GetEntry(context.Background(), normalizedRFC); err == nil && exists {
+			return entry, true
+		}
+	}
+
 	entry, exists := s.entries[normalizedRFC]
 	return entry, exists
 }

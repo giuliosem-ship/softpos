@@ -23,7 +23,7 @@ func (s *Server) HandleGetMerchantBalances(w http.ResponseWriter, r *http.Reques
 
 	availBal, _ := s.ledger.GetBalance(fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchantID))
 	escrowBal, _ := s.ledger.GetBalance(fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", merchantID))
-	rbfBal, _ := s.ledger.GetBalance("ASSET:RBF_LOANS_RECEIVABLE")
+	rbfBal, _ := s.ledger.GetBalance(fmt.Sprintf("ASSET:RBF_LOANS_RECEIVABLE:%s", merchantID))
 
 	resp := MerchantBalancesResponse{
 		MerchantID:     merchantID,

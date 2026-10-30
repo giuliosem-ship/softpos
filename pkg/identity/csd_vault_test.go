@@ -135,3 +135,29 @@ func TestEmptyCSDInputsRaise(t *testing.T) {
 		t.Errorf("expected error for empty password")
 	}
 }
+
+func TestUniqueNoncesPerField_NoIVReuse(t *testing.T) {
+	masterKey := randomHex(t, 32)
+	vault, _ := NewCSDVaultService(masterKey)
+
+	samePayload := "IDENTICAL_SECRET_PAYLOAD_BLOCK_12345"
+	encrypted, err := vault.StoreCSD("merch_nonce_check", []byte(samePayload), []byte(samePayload), samePayload)
+	if err != nil {
+		t.Fatalf("StoreCSD failed: %v", err)
+	}
+
+	cerNonce := encrypted.EncryptedCER[:12]
+	keyNonce := encrypted.EncryptedKey[:12]
+	pwdNonce := encrypted.EncryptedPassword[:12]
+
+	if bytes.Equal(cerNonce, keyNonce) || bytes.Equal(cerNonce, pwdNonce) || bytes.Equal(keyNonce, pwdNonce) {
+		t.Fatalf("CRITICAL: AES-GCM nonce reuse detected across fields! cer=%x key=%x pwd=%x", cerNonce, keyNonce, pwdNonce)
+	}
+	if bytes.Equal(cerNonce, encrypted.IV) || bytes.Equal(keyNonce, encrypted.IV) || bytes.Equal(pwdNonce, encrypted.IV) {
+		t.Fatalf("CRITICAL: DEK IV reused for field encryption!")
+	}
+	if bytes.Equal(encrypted.EncryptedCER, encrypted.EncryptedKey) {
+		t.Fatalf("identical plaintexts produced identical ciphertexts")
+	}
+}
+

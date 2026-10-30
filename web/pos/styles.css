@@ -1,0 +1,560 @@
+/* SoftPOS Point-of-Sale Modern Mobile UI */
+/* Compliant with modern-web-guidance: color-scheme, light-dark(), accessible loading spinners */
+
+:root {
+  --color-bg-light: #f8fafc;
+  --color-bg-dark: #090d16;
+  --color-surface-light: #ffffff;
+  --color-surface-dark: #131b2e;
+  --color-border-light: #e2e8f0;
+  --color-border-dark: #202d4a;
+  --color-text-main-light: #0f172a;
+  --color-text-main-dark: #f1f5f9;
+  --color-text-muted-light: #64748b;
+  --color-text-muted-dark: #94a3b8;
+
+  --color-primary-light: #0284c7;
+  --color-primary-dark: #38bdf8;
+  --color-accent-light: #059669;
+  --color-accent-dark: #34d399;
+  --color-warning-light: #d97706;
+  --color-warning-dark: #fbbf24;
+
+  --bg-app: var(--color-bg-light);
+  --bg-surface: var(--color-surface-light);
+  --border-color: var(--color-border-light);
+  --text-main: var(--color-text-main-light);
+  --text-muted: var(--color-text-muted-light);
+  --primary: var(--color-primary-light);
+  --accent: var(--color-accent-light);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-app: var(--color-bg-dark);
+    --bg-surface: var(--color-surface-dark);
+    --border-color: var(--color-border-dark);
+    --text-main: var(--color-text-main-dark);
+    --text-muted: var(--color-text-muted-dark);
+    --primary: var(--color-primary-dark);
+    --accent: var(--color-accent-dark);
+  }
+}
+
+@supports (color: light-dark(white, black)) {
+  :root {
+    --bg-app: light-dark(var(--color-bg-light), var(--color-bg-dark));
+    --bg-surface: light-dark(var(--color-surface-light), var(--color-surface-dark));
+    --border-color: light-dark(var(--color-border-light), var(--color-border-dark));
+    --text-main: light-dark(var(--color-text-main-light), var(--color-text-main-dark));
+    --text-muted: light-dark(var(--color-text-muted-light), var(--color-text-muted-dark));
+    --primary: light-dark(var(--color-primary-light), var(--color-primary-dark));
+    --accent: light-dark(var(--color-accent-light), var(--color-accent-dark));
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 1rem;
+}
+
+.pos-container {
+  width: 100%;
+  max-width: 440px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header & Merchant Wallet Dashboard */
+.pos-header {
+  padding: 1.25rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(180deg, rgba(2, 132, 199, 0.05) 0%, transparent 100%);
+}
+
+.merchant-badge {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.merchant-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tax-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 9999px;
+  background-color: rgba(5, 150, 105, 0.15);
+  color: var(--accent);
+}
+
+.wallet-pills {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.wallet-pill {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 0.5rem 0.6rem;
+  text-align: center;
+}
+
+.wallet-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+  display: block;
+}
+
+.wallet-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-top: 0.1rem;
+  display: block;
+}
+
+/* Keypad & Amount Entry Screen */
+.screen {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.screen.hidden {
+  display: none !important;
+}
+
+.amount-display-card {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.amount-currency {
+  font-size: 1rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.amount-number {
+  font-size: 2.75rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-main);
+  line-height: 1.1;
+}
+
+.concept-input {
+  width: 100%;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  font-size: 0.875rem;
+  margin-bottom: 0.85rem;
+  outline: none;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.9rem;
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  margin-bottom: 1rem;
+}
+
+.toggle-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.toggle-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  display: block;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border-color);
+  transition: .3s;
+  border-radius: 34px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--primary);
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/* Numeric Keypad */
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.key-btn {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-main);
+  padding: 0.85rem 0;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+
+.key-btn:active {
+  transform: scale(0.96);
+  background-color: var(--border-color);
+}
+
+.action-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.btn {
+  border: none;
+  border-radius: 14px;
+  padding: 0.95rem 1rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  transition: transform 0.1s, opacity 0.2s;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-nfc {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: white;
+}
+
+.btn-codi {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: white;
+}
+
+.btn-secondary {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+}
+
+/* Modal / Fullscreen Views: Tap-to-Phone NFC */
+.nfc-modal {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.nfc-animation-container {
+  width: 140px;
+  height: 140px;
+  margin: 1.5rem auto;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(2, 132, 199, 0.2) 0%, rgba(2, 132, 199, 0.02) 70%, transparent 100%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+}
+
+.nfc-pulse-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid var(--primary);
+  opacity: 0.8;
+  animation: pulse 2s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.6); opacity: 1; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+
+.nfc-icon {
+  width: 56px;
+  height: 56px;
+  color: var(--primary);
+}
+
+.nfc-instruction {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.nfc-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 1.5rem;
+}
+
+.card-selector {
+  margin-bottom: 1.25rem;
+  text-align: left;
+}
+
+.card-selector label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  display: block;
+}
+
+.card-selector select {
+  width: 100%;
+  padding: 0.65rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-app);
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+/* CoDi QR View */
+.codi-card {
+  text-align: center;
+  padding: 0.5rem 0;
+}
+
+.qr-wrapper {
+  margin: 1rem auto;
+  display: inline-block;
+  padding: 0.75rem;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.clabe-box {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.clabe-digits {
+  font-family: monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--primary);
+}
+
+.copy-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  color: var(--text-main);
+}
+
+.countdown-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-warning-dark);
+  margin-bottom: 1rem;
+}
+
+/* Receipt & RESICO Tax Split View */
+.receipt-card {
+  padding: 0.5rem 0;
+}
+
+.success-badge-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 0.75rem;
+  border-radius: 50%;
+  background-color: rgba(5, 150, 105, 0.15);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.receipt-title {
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 800;
+  margin-bottom: 0.25rem;
+}
+
+.receipt-sub {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 1.25rem;
+}
+
+.split-breakdown {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.split-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0;
+  font-size: 0.85rem;
+}
+
+.split-row.divider {
+  border-top: 1px dashed var(--border-color);
+  margin: 0.4rem 0;
+}
+
+.split-row.highlight {
+  font-weight: 800;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.cfdi-result-box {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 0.75rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.75rem;
+  word-break: break-all;
+  color: var(--text-muted);
+}
+
+/* Accessible Loading Spinner (modern-web-guidance compliant) */
+progress.loading-spinner:indeterminate {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  appearance: none;
+  background: conic-gradient(from 90deg, var(--primary) 180deg, transparent 0) var(--border-color);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - 4px), black calc(100% - 4px));
+  -webkit-mask-image: radial-gradient(farthest-side, transparent calc(100% - 4px), black calc(100% - 4px));
+  animation: progress-spin 1.2s linear infinite;
+  display: block;
+  margin: 1.5rem auto;
+}
+
+progress.loading-spinner:indeterminate::-webkit-progress-bar,
+progress.loading-spinner:indeterminate::-webkit-progress-value {
+  display: none;
+}
+
+@keyframes progress-spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress.loading-spinner:indeterminate {
+    animation-duration: 6s;
+  }
+  .nfc-pulse-ring {
+    animation-duration: 6s;
+  }
+}

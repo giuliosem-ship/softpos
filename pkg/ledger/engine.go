@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,19 +15,40 @@ var (
 	ErrDeductionsExceedGross = errors.New("total deductions exceed gross amount")
 )
 
+// Repository defines the interface for persisting double-entry accounts and transactions (e.g. PostgreSQL with pessimistic locking).
+type Repository interface {
+	CreateAccount(ctx context.Context, acc Account) error
+	GetAccount(ctx context.Context, code string) (Account, error)
+	GetBalance(ctx context.Context, accountCode string) (Money, error)
+	PostTransaction(ctx context.Context, journal *JournalEntry) error
+}
+
 type LedgerEngine struct {
-	mu             sync.RWMutex
-	accounts       map[string]Account
+	mu               sync.RWMutex
+	repo             Repository
+	accounts         map[string]Account
 	entriesByAccount map[string][]Entry
-	journals       []*JournalEntry
+	journals         []*JournalEntry
 }
 
 func NewLedgerEngine() *LedgerEngine {
 	return &LedgerEngine{
-		accounts:       make(map[string]Account),
+		accounts:         make(map[string]Account),
 		entriesByAccount: make(map[string][]Entry),
-		journals:       []*JournalEntry{},
+		journals:         []*JournalEntry{},
 	}
+}
+
+func NewLedgerEngineWithRepository(repo Repository) *LedgerEngine {
+	le := NewLedgerEngine()
+	le.repo = repo
+	return le
+}
+
+func (le *LedgerEngine) SetRepository(repo Repository) {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	le.repo = repo
 }
 
 func (le *LedgerEngine) CreateAccount(code string, accType AccountType, name string) (Account, error) {
@@ -43,6 +65,13 @@ func (le *LedgerEngine) CreateAccount(code string, accType AccountType, name str
 		Name: name,
 		Type: accType,
 	}
+
+	if le.repo != nil {
+		if err := le.repo.CreateAccount(context.Background(), account); err != nil {
+			return Account{}, err
+		}
+	}
+
 	le.accounts[code] = account
 	return account, nil
 }
@@ -50,6 +79,10 @@ func (le *LedgerEngine) CreateAccount(code string, accType AccountType, name str
 func (le *LedgerEngine) GetAccount(accountCode string) (Account, error) {
 	le.mu.RLock()
 	defer le.mu.RUnlock()
+
+	if le.repo != nil {
+		return le.repo.GetAccount(context.Background(), accountCode)
+	}
 
 	account, exists := le.accounts[accountCode]
 	if !exists {
@@ -61,6 +94,10 @@ func (le *LedgerEngine) GetAccount(accountCode string) (Account, error) {
 func (le *LedgerEngine) GetBalance(accountCode string) (Money, error) {
 	le.mu.RLock()
 	defer le.mu.RUnlock()
+
+	if le.repo != nil {
+		return le.repo.GetBalance(context.Background(), accountCode)
+	}
 
 	account, exists := le.accounts[accountCode]
 	if !exists {
@@ -93,10 +130,16 @@ func (le *LedgerEngine) PostTransaction(journal *JournalEntry) error {
 	le.mu.Lock()
 	defer le.mu.Unlock()
 
-	// Validate all accounts exist before mutating state (atomicity)
-	for _, entry := range journal.Entries {
-		if _, exists := le.accounts[entry.AccountID]; !exists {
-			return ErrAccountNotFound
+	if le.repo != nil {
+		if err := le.repo.PostTransaction(context.Background(), journal); err != nil {
+			return err
+		}
+	} else {
+		// Validate all accounts exist before mutating state (atomicity)
+		for _, entry := range journal.Entries {
+			if _, exists := le.accounts[entry.AccountID]; !exists {
+				return ErrAccountNotFound
+			}
 		}
 	}
 
@@ -121,7 +164,7 @@ func (le *LedgerEngine) RecordSplitPayment(grossMxnCents int64, merchantID strin
 		{AccountID: "ASSET:ACQUIRER_RECEIVABLE", Direction: Debit, Money: NewMoney(grossMxnCents, "MXN")},
 		{AccountID: "REVENUE:FEES", Direction: Credit, Money: NewMoney(platformFeeCents, "MXN")},
 		{AccountID: fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", merchantID), Direction: Credit, Money: NewMoney(taxEscrowCents, "MXN")},
-		{AccountID: "ASSET:RBF_LOANS_RECEIVABLE", Direction: Credit, Money: NewMoney(rbfSweepCents, "MXN")},
+		{AccountID: fmt.Sprintf("ASSET:RBF_LOANS_RECEIVABLE:%s", merchantID), Direction: Credit, Money: NewMoney(rbfSweepCents, "MXN")},
 		{AccountID: fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchantID), Direction: Credit, Money: NewMoney(netAvailableCents, "MXN")},
 	}
 

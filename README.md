@@ -49,7 +49,38 @@ PYTHONPATH=. python3 -m unittest discover -s tests -p "test_*.py"
 
 ## 📁 Estado Actual de la Base de Código
 
-1. **`internal/ledger/models.py`** ([`TASK-001`](file:///Users/giuliosemino/fin_pltfm/SoftPOS/internal/ledger/models.py)): Modelos de dominio inmutables de partida doble (`Money`, `Account`, `Entry`, `JournalEntry`, `Direction`, `AccountType`) con validación de balance débito = crédito en centavos enteros.
-2. **`internal/ledger/engine.py`** ([`TASK-002`](file:///Users/giuliosemino/fin_pltfm/SoftPOS/internal/ledger/engine.py)): Motor contable in-memory con soporte de asientos atómicos, saldos normales y splits automáticos de cobros SoftPOS (`record_split_payment`).
-3. **`internal/stp/clabe.py`** ([`TASK-003`](file:///Users/giuliosemino/fin_pltfm/SoftPOS/internal/stp/clabe.py)): Generador y validador de CLABEs interbancarias de 18 dígitos bajo banco STP (646) con algoritmo de dígito verificador módulo 10.
-4. **`internal/fiscal/resico.py`** ([`TASK-004`](file:///Users/giuliosemino/fin_pltfm/SoftPOS/internal/fiscal/resico.py)): Calculadora oficial RESICO Persona Física (Art. 113-E y 113-J LISR) con segregación de IVA, retención PM del 1.25% y tasas escalonadas (1.0% a 2.5%).
+1. **`internal/` & `pkg/`**: Motores de dominio de partida doble (`Money`, `Account`, `JournalEntry`), generador/validador de CLABEs STP, cálculo de impuestos RESICO Persona Física (Art. 113-E y 113-J LISR), bóveda de certificados CSD con cifrado envolvente AES-GCM, validador SAT 69-B y timbrado multi-PAC.
+2. **`pkg/store/` & `migrations/`**: Capa de persistencia relacional PostgreSQL con bloqueo pesimista a nivel de fila (`SELECT ... FOR UPDATE`), ejecutor transaccional de migraciones y cliente Redis RESP para caché de idempotencia.
+3. **`cmd/server/main.go`**: Punto de entrada ejecutable que carga variables de entorno, conecta bases de datos, corre migraciones, siembra cuentas del ledger y comercio demo, y expone el servidor HTTP con apagado elegante (*graceful shutdown*).
+4. **`web/pos/`**: Frontend y SDK móvil para Punto de Cobro con lectura Tap-to-Phone (NFC EMV L2 contactless), generación y confirmación de QR dinámico CoDi/SPEI, desglose fiscal RESICO en tiempo real y timbrado CFDI 4.0.
+
+---
+
+## 🚀 Ejecución del Servidor y Punto de Cobro
+
+### 1. Ejecución Local (Go)
+```bash
+# Compilar y arrancar el servidor en modo desarrollo
+go run ./cmd/server
+
+# Abrir el Punto de Cobro en el navegador
+open http://localhost:8080/pos/
+```
+
+### 2. Infraestructura con Docker Compose (PostgreSQL + Redis + Server)
+```bash
+docker compose up --build
+```
+
+### 3. Validación y Pruebas
+```bash
+# Pruebas Go completas con detector de condiciones de carrera (-race)
+go test -v -race ./...
+
+# Pruebas del SDK JavaScript del Punto de Cobro (EMV TLV, Web NFC, CoDi)
+node --test web/pos/softpos_sdk.test.js
+
+# Pruebas unitarias de Python
+PYTHONPATH=. python3 -m unittest discover -s tests -p "test_*.py"
+```
+

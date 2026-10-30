@@ -1,4 +1,32 @@
+# macOS & OS files
+.DS_Store
+
+# Python & Loop Orchestrator
 __pycache__/
 *.pyc
-.DS_Store
 .venv/
+
+# Go binaries & coverage
+/server
+/reconciler
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Android / Gradle / Kotlin
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Environment & Secrets
+.env
+.env.*
+*.pem
+*.key
+*.cer

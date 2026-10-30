@@ -2,10 +2,11 @@
   "project": "SoftPOS Hybrid Fiscal & Payment Platform (Mexico)",
   "version": "1.0.0",
   "orchestrator": {
-    "architect": "Antigravity (Gemini 3.8 Flash)",
+    "architect": "Antigravity (Gemini)",
     "coder": "qwen2.5-coder-14b-instruct-mlx",
-    "auditor": "google/gemma-4-12b-qat",
-    "test_framework": "unittest"
+    "auditor": "deepseek-r1-distill-qwen-14b",
+    "secondary_auditor": "google/gemma-4-12b-qat",
+    "test_framework": "go test / unittest"
   },
   "tasks": [
     {
@@ -399,6 +400,70 @@
       "test_results": "PASS: ok softpos/pkg/pac",
       "retries": 0,
       "completed_at": "2026-10-20T23:15:35"
+    },
+    {
+      "id": "AND-01",
+      "component": "android-money",
+      "title": "Android RESICO & IVA Pure-Integer MoneySplitCalculator in Kotlin",
+      "status": "completed",
+      "priority": 25,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/core/money/MoneySplitCalculatorTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/core/money/MoneySplitCalculator.kt"
+      },
+      "spec": "Implement pure integer (Long cents and basis points) tax and fee split calculator in Kotlin 2.0:\n1. Package: package mx.softpos.app.core.money\n2. Data class SplitPreview(\n   val grossCents: Long,\n   val baseCents: Long,\n   val ivaCents: Long,\n   val isrCents: Long,\n   val platformFeeCents: Long,\n   val rbfSweepCents: Long,\n   val netMerchantCents: Long,\n   val isPersonaMoralWithholding: Boolean = false,\n   val codiSavingsCents: Long = platformFeeCents\n)\n3. Object MoneySplitCalculator:\n   - fun getResicoMonthlyRateBps(accumulatedSalesCents: Long): Long\n     - Requires accumulatedSalesCents >= 0L (throws IllegalArgumentException if < 0L).\n     - Returns exact basis points for the 5 SAT RESICO tiers:\n       - <= 2_500_000L -> 100L\n       - <= 5_000_000L -> 110L\n       - <= 8_333_333L -> 150L\n       - <= 20_833_333L -> 200L\n       - > 20_833_333L -> 250L\n   - fun calculatePreview(grossCents: Long, platformFeeBps: Long = 290L, isrRateBps: Long = 100L, rbfHoldbackBps: Long = 1000L, isPersonaMoral: Boolean = false): SplitPreview\n     - Requires grossCents > 0L, platformFeeBps >= 0L, isrRateBps >= 0L, rbfHoldbackBps >= 0L (throws IllegalArgumentException otherwise).\n     - baseCents = (grossCents * 100L + 58L) / 116L\n     - ivaCents = grossCents - baseCents\n     - effectiveIsrBps = if (isPersonaMoral) 125L else isrRateBps (1.25% Art. 113-J LISR on baseCents when isPersonaMoral == true)\n     - isrCents = (baseCents * effectiveIsrBps + 5000L) / 10000L\n     - platformFeeCents = (grossCents * platformFeeBps + 5000L) / 10000L\n     - rbfSweepCents = (grossCents * rbfHoldbackBps + 5000L) / 10000L\n     - netMerchantCents = grossCents - ivaCents - isrCents - platformFeeCents - rbfSweepCents\n     - Returns SplitPreview with isPersonaMoralWithholding = isPersonaMoral and codiSavingsCents = platformFeeCents.",
+      "audit_notes": "Here is a concise audit report based on the provided implementation:\n\n---\n\n### **Audit Report: MoneySplitCalculator Implementation**\n\n#### **1. Numerical Precision & Overflow Safety**\n- **Findings**:\n  - All calculations use `Long`, which prevents overflow for typical financial transactions but could theoretically overflow with extremely large values.\n  - Rounding in `(x + y) / z` operations is correct, ensuring proper cent-based precision.\n\n- **Recommendations**:\n  - Add checks to handle potential overflows using `Long.MAX_VALUE` as a safeguard.\n  - Verify that rounding methods align with financial standards to prevent discrepancies.\n\n#### **2. Concurrency Safety**\n- **Findings**:\n  - Stateless and pure functions ensure thread safety without concurrency issues.\n  \n- **Recommendations**:\n  - No changes needed; the implementation is inherently concurrent-safe.\n\n#### **3. Regulatory Compliance (Mexican SAT/Banxico)**\n- **Findings**:\n  - Properly implements ISR rates, including the special 125bps for persona moral entities.\n  - Fee calculations align with expected percentages and structures.\n  \n- **Recommendations**:\n  - Ensure cryptographic compliance is addressed in related transaction systems.\n\n#### **4. Unhandled Edge Cases & Invariant Violations**\n- **Findings**:\n  - Correct handling of zero or negative inputs through exception throwing.\n  - Rounding methods may introduce minor discrepancies but are generally accurate.\n  \n- **Recommendations**:\n  - Test boundary conditions and ensure invariant checks for all financial calculations.\n\n---\n\n### **Actionable Bullet Points**\n\n1. **Add Overflow Protection**: Implement checks to prevent overflow in critical calculations, especially when dealing with very large `grossCents` values.\n\n2. **Refine Rounding Methods**: Review rounding techniques to ensure they meet precise financial standards and avoid unintended discrepancies.\n\n3. **Enhance Regulatory Compliance**: Ensure cryptographic compliance for transactions, possibly integrating additional validation steps beyond the current implementation.\n\n4. **Test Boundary Conditions**: Conduct thorough testing of edge cases, such as minimal values just above or below threshold tiers in `getResicoMonthlyRateBps`.\n\n5. **Review Rounding Techniques**: Verify that all rounding operations (e.g., adding 5000L before division) consistently produce accurate cent-based results across all scenarios.\n\n--- \n\nThis report highlights critical areas for improvement while acknowledging the implementation's strengths. Addressing these points will enhance the system's reliability, compliance, and robustness.",
+      "test_results": "PASS: > Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED\n> Task :app:processResources NO-SOURCE\n> Task :app:processTestResources NO-SOURCE\n> Task :app:compileKotlin\n> Task :app:compileJava NO-SOURCE\n> Task :app:classes UP-TO-DATE\n> Task :app:jar\n> Task :app:compileTestKotlin\n> Task :app:compileTestJava NO-SOURCE\n> Task :app:testClasses UP-TO-DATE\n\n> Task :app:test\n\nMoneySplitCalculatorTest > calculatePreview rejects non-positive grossCents() PASSED\n\nMoneySplitCalculatorTest > getResicoMont",
+      "retries": 0,
+      "completed_at": "2026-10-30T16:16:36.437121"
+    },
+    {
+      "id": "AND-02",
+      "component": "android-nfc",
+      "title": "Android EMV Contactless BER-TLV Codec, PAN Masker & Zeroizer in Kotlin",
+      "status": "failed",
+      "priority": 26,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/nfc/EmvTlvCodecTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/nfc/EmvTlvCodec.kt"
+      },
+      "spec": "Implement Contactless EMV L2 BER-TLV encoder/decoder, PCI-DSS PAN masker, and memory zeroizer in Kotlin 2.0:\n1. Package: package mx.softpos.app.nfc\n2. Object EmvTlvCodec:\n   - fun encode(tags: Map<String, String>): String\n     - Validates each tag is non-blank valid hex and each value is valid even-length hex (throws IllegalArgumentException otherwise).\n     - Encodes each tag-value entry as uppercase Tag Hex + BER-TLV Length Hex (1-byte 00..7F for byteLen <= 127, 81XX for 128..255, 82XXXX for > 255) + uppercase Value Hex.\n   - fun decode(hexPayload: String): Map<String, String>\n     - Rejects blank, odd-length, or non-hex strings with IllegalArgumentException.\n     - Parses single-byte tags (where (firstByte and 0x1F) != 0x1F, e.g., 5A, 82, 9A, 9C) and multi-byte tags (where (firstByte and 0x1F) == 0x1F, reading subsequent tag bytes while (b and 0x80) != 0, e.g., 9F02, 5F2A, 9F26, 9F27, 9F36, 5F24).\n     - Parses BER-TLV length (single-byte 0x00..0x7F or multi-byte 0x81 / 0x82). Throws IllegalArgumentException if truncated or length exceeds remaining bytes.\n     - Returns LinkedHashMap<String, String> with uppercase hex tags and uppercase hex values.\n   - fun maskPan(pan: String): String\n     - Validates pan has at least 12 digits and consists only of digits (throws IllegalArgumentException if < 12 digits or non-digit characters).\n     - Masks all middle digits with '*' leaving first 6 BIN digits and last 4 digits (e.g. \"4152313899999012\" -> \"415231******9012\").\n   - fun zeroize(sensitiveBuffer: ByteArray)\n     - Overwrites all bytes in sensitiveBuffer with 0.",
+      "audit_notes": "",
+      "test_results": "",
+      "retries": 3,
+      "completed_at": null
+    },
+    {
+      "id": "AND-03",
+      "component": "android-codi",
+      "title": "Android Banxico CoDi ISO/IEC 18004 QR Matrix Generator in Kotlin",
+      "status": "failed",
+      "priority": 27,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/ui/codi/CodiQrGeneratorTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/ui/codi/CodiQrGenerator.kt"
+      },
+      "spec": "Implement Banxico CoDi ISO/IEC 18004 QR Code Matrix generator using ZXing in Kotlin 2.0:\n1. Package: package mx.softpos.app.ui.codi\n2. Data class CodiQrMatrix(\n   val width: Int,\n   val height: Int,\n   val pixels: BooleanArray,\n   val payloadJson: String,\n   val expiresAtEpochSec: Long\n) {\n   fun isExpired(nowEpochSec: Long): Boolean = nowEpochSec >= expiresAtEpochSec\n   fun getModule(x: Int, y: Int): Boolean {\n       require(x in 0 until width && y in 0 until height) { \"Coordinates out of bounds\" }\n       return pixels[y * width + x]\n   }\n}\n3. Object CodiQrGenerator:\n   - fun generateQr(payloadJson: String, sizePx: Int = 256, expiresAtEpochSec: Long): CodiQrMatrix\n     - Requires payloadJson.isNotBlank() and sizePx >= 64 (throws IllegalArgumentException otherwise).\n     - Uses com.google.zxing.qrcode.QRCodeWriter, com.google.zxing.BarcodeFormat.QR_CODE, and com.google.zxing.EncodeHintType.ERROR_CORRECTION set to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M.\n     - Converts BitMatrix into BooleanArray of size width * height where pixels[y * width + x] = bitMatrix.get(x, y).\n     - Returns CodiQrMatrix.",
+      "audit_notes": "",
+      "test_results": "",
+      "retries": 3,
+      "completed_at": null
+    },
+    {
+      "id": "AND-04",
+      "component": "android-network",
+      "title": "Android SoftPosApiClient with Idempotency & Play Integrity Headers in Kotlin",
+      "status": "failed",
+      "priority": 28,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/core/network/SoftPosApiClientTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/core/network/SoftPosApiClient.kt"
+      },
+      "spec": "Implement SoftPosApiClient using OkHttp 4 and kotlinx.serialization.json in Kotlin 2.0:\n1. Package: package mx.softpos.app.core.network\n2. Sealed interface ApiResult<out T> {\n   data class Success<T>(val data: T, val statusCode: Int) : ApiResult<T>\n   data class Error(val statusCode: Int, val errorCode: String, val message: String) : ApiResult<Nothing>\n}\n3. Class SoftPosApiClient(\n   private val baseUrl: String,\n   private val integrityTokenProvider: () -> String,\n   private val httpClient: OkHttpClient = OkHttpClient()\n):\n   - Automatically injects headers `Idempotency-Key` (caller-provided idempotencyKey, or UUID.randomUUID().toString() if blank) and `X-Play-Integrity-Token` (from integrityTokenProvider()) on every POST request.\n   - fun authorizeEmv(idempotencyKey: String, merchantId: String, amountCents: Long, tlvHex: String): ApiResult<String>\n     - POST to `${baseUrl.trimEnd('/')}/api/v1/payments/emv/authorize` with JSON payload containing `merchant_id`, `amount_cents`, and `tlv_hex`.\n   - fun generateCodiQr(idempotencyKey: String, merchantId: String, amountCents: Long, concept: String): ApiResult<String>\n     - POST to `${baseUrl.trimEnd('/')}/api/v1/payments/codi/qr` with JSON payload containing `merchant_id`, `amount_cents`, and `concept`.\n   - fun stampCfdi(idempotencyKey: String, paymentId: String, receptorRfc: String, receptorCp: String, regimenFiscal: String): ApiResult<String>\n     - POST to `${baseUrl.trimEnd('/')}/api/v1/invoices/cfdi` with JSON payload containing `payment_id`, `receptor_rfc`, `receptor_cp`, and `regimen_fiscal`.\n   - Response mapping:\n     - HTTP 200..299 -> ApiResult.Success(data = responseBody, statusCode = response.code)\n     - HTTP 409 -> ApiResult.Error(statusCode = 409, errorCode = \"IDEMPOTENCY_CONFLICT\", message = responseBody)\n     - HTTP 422 -> ApiResult.Error(statusCode = 422, errorCode = \"SAT_COMPLIANCE_REJECTED\", message = responseBody)\n     - Other HTTP error codes -> ApiResult.Error(statusCode = response.code, errorCode = \"HTTP_ERROR\", message = responseBody)",
+      "audit_notes": "",
+      "test_results": "",
+      "retries": 3,
+      "completed_at": null
     }
   ]
 }

@@ -702,37 +702,46 @@
       "id": "TASK-GO-019",
       "component": "api-auth",
       "title": "JWT Authentication & Tenant Scoping Middleware in Go",
-      "status": "pending",
+      "status": "completed",
       "priority": 44,
       "files": {
         "tests": "pkg/api/middleware_auth_test.go",
         "implementation": "pkg/api/middleware_auth.go"
       },
-      "spec": "Implement AuthMiddleware in Go 1.22+ validating Bearer JWT tokens, extracting merchant_id from claims, enforcing tenant isolation, and blocking IDOR access to merchant routes."
+      "spec": "Implement AuthMiddleware in Go 1.22+ validating Bearer JWT tokens, extracting merchant_id from claims, enforcing tenant isolation, and blocking IDOR access to merchant routes.",
+      "completed_at": "2026-10-30T22:11:00.000000",
+      "test_results": "PASS: TestAuthMiddleware_MissingOrMalformedHeader, TestAuthMiddleware_ValidTokenAndContextInjection, TestAuthMiddleware_AntiIDORTenantIsolation, TestAuthMiddleware_ExpiredTokenFails",
+      "audit_notes": "Audit: JWT verification with HMAC-SHA256, expiration checking, context injection, and anti-IDOR cross-tenant blocking verified."
     },
     {
       "id": "TASK-GO-020",
       "component": "identity-attestation",
       "title": "Google Play Integrity Cryptographic Attestation Verifier in Go",
-      "status": "pending",
+      "status": "completed",
       "priority": 45,
       "files": {
         "tests": "pkg/identity/play_integrity_test.go",
         "implementation": "pkg/identity/play_integrity.go"
       },
-      "spec": "Implement PlayIntegrityVerifier validating Google Play Integrity JWT tokens, verifying MEETS_DEVICE_INTEGRITY verdict, package name, and rejection of rooted/hooked environments before approving EMV transactions."
+      "spec": "Implement PlayIntegrityVerifier validating Google Play Integrity JWT tokens, verifying MEETS_DEVICE_INTEGRITY verdict, package name, and rejection of rooted/hooked environments before approving EMV transactions.",
+      "completed_at": "2026-10-30T22:11:00.000000",
+      "test_results": "PASS: TestPlayIntegrityVerifier_ValidTokenPasses, TestPlayIntegrityVerifier_TamperedSignatureFails, TestPlayIntegrityVerifier_RootedOrHookedDeviceRejected, TestPlayIntegrityVerifier_PackageMismatchOrNonceMismatch",
+      "audit_notes": "Audit: Play Integrity cryptographic verifier validates package name, freshness window, nonce matching, and hardware-backed device integrity."
     },
     {
       "id": "TASK-GO-021",
       "component": "cmd-guard",
       "title": "Production Security Guard & Fail-Fast Validator in Go",
-      "status": "pending",
+      "status": "completed",
       "priority": 46,
       "files": {
         "tests": "cmd/server/config_guard_test.go",
         "implementation": "cmd/server/config_guard.go"
       },
-      "spec": "Implement ValidateProductionConfig in Go that enforces production secrets, rejecting defaultVaultMasterKeyHex, dev HMAC secrets, or insecure DB URLs when ENV=production."
+      "spec": "Implement ValidateProductionConfig in Go that enforces production secrets, rejecting defaultVaultMasterKeyHex, dev HMAC secrets, or insecure DB URLs when ENV=production.",
+      "completed_at": "2026-10-30T22:11:00.000000",
+      "test_results": "PASS: TestValidateProductionConfig_DevelopmentPassesWithDefaults, TestValidateProductionConfig_RejectsInsecureSettingsInProduction",
+      "audit_notes": "Audit: Production fail-fast guard rejects default dev secrets, plain-text DB connections (sslmode=disable), and synthetic demo seeding."
     },
     {
       "id": "AND-17",

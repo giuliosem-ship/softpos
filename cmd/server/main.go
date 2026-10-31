@@ -214,6 +214,18 @@ func generateSelfSignedCSD() ([]byte, []byte, error) {
 func main() {
 	cfg := LoadConfigFromEnv()
 
+	env := os.Getenv("APP_ENV")
+	if env == "" {
+		env = os.Getenv("ENV")
+	}
+	if env == "" {
+		env = "development"
+	}
+	if err := ValidateProductionConfig(cfg, env); err != nil {
+		slog.Error("production configuration security violation", "error", err)
+		os.Exit(1)
+	}
+
 	slog.Info("starting SoftPOS Hybrid Fiscal & Payment Platform server",
 		"port", cfg.Port,
 		"has_db", cfg.DatabaseURL != "",

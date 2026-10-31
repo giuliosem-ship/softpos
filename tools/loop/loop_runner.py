@@ -486,7 +486,73 @@ def execute_batch_two_phase(tasks_batch: list, max_retries: int = 3, auditor_mod
         git_commit_task(task, auditor_model=auditor_model)
 
     write_handoff_summary(green_tasks)
+    if len(green_tasks) == len(tasks_batch):
+        run_full_validation_and_push()
     return len(green_tasks) == len(tasks_batch)
+
+def run_full_validation_and_push() -> bool:
+    """
+    Mandatory Engineering Loop Rule:
+    After completing and committing all tasks of a loop/batch:
+    1. Run full test suite across the repository (Go tests & Web POS SDK tests).
+    2. If all pass cleanly (0 issues), push to origin main.
+    3. If any test fails, abort push and report errors.
+    """
+    print("\n" + "=" * 70)
+    print("🛡️  MANDATORY FULL REPOSITORY VALIDATION (PRE-PUSH RULE)")
+    print("=" * 70)
+
+    # 1. Go test suite
+    print("🧪 [Validation] Running Go test suite (`go test ./...`)...")
+    go_bin = "/opt/homebrew/bin/go" if Path("/opt/homebrew/bin/go").exists() else "go"
+    go_test = subprocess.run(
+        [go_bin, "test", "./..."],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    if go_test.returncode != 0:
+        print("❌ [Validation] Go test suite FAILED!")
+        print((go_test.stdout or go_test.stderr)[:600])
+        print("⚠️ [Release Rule] Push aborted due to failing tests.")
+        return False
+    print("✅ [Validation] Go test suite PASSED cleanly.")
+
+    # 2. Web POS SDK tests
+    sdk_test = REPO_ROOT / "web" / "pos" / "softpos_sdk.test.js"
+    if sdk_test.exists():
+        print("🧪 [Validation] Running Web POS SDK tests (`node --test web/pos/softpos_sdk.test.js`)...")
+        node_test = subprocess.run(
+            ["node", "--test", "web/pos/softpos_sdk.test.js"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if node_test.returncode != 0:
+            print("❌ [Validation] Web POS SDK tests FAILED!")
+            print((node_test.stdout or node_test.stderr)[:600])
+            print("⚠️ [Release Rule] Push aborted due to failing tests.")
+            return False
+        print("✅ [Validation] Web POS SDK tests PASSED cleanly.")
+
+    # 3. Push to origin main
+    print("\n🚀 [Release Rule] All validations passed without issues. Pushing to origin main...")
+    push_proc = subprocess.run(
+        ["git", "push", "origin", "main"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    if push_proc.returncode == 0:
+        print("🎉 [Git] Successfully pushed to origin main!")
+        return True
+    else:
+        print("⚠️ [Git] Push failed:")
+        print((push_proc.stderr or push_proc.stdout)[:600])
+        return False
 
 def load_tasks_and_update(updated_task: Dict[str, Any]) -> Dict[str, Any]:
     data = load_tasks()
@@ -568,6 +634,10 @@ def main():
         if not ok and not args.all:
             break
     write_handoff_summary(tasks_to_run)
+    updated_data = load_tasks()
+    all_ok = all(any(t["id"] == target["id"] and t["status"] == "completed" for t in updated_data["tasks"]) for target in tasks_to_run)
+    if all_ok and tasks_to_run:
+        run_full_validation_and_push()
 
 if __name__ == "__main__":
     main()

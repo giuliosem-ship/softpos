@@ -83,7 +83,7 @@ El desarrollo se organiza en lotes de 3 tareas con contratos TDD estrictos (**Fa
 
 ---
 
-## 4. Instrucciones Operativas para los Agentes y Desarrolladores
+## 4. Instrucciones Operativas y Regla Obligatoria de Validación y Push
 
 Para ejecutar el siguiente lote de tareas mediante el orquestador:
 ```zsh
@@ -92,7 +92,14 @@ python3 tools/loop/loop_runner.py --status
 
 # 2. Ejecutar las 3 tareas del siguiente batch
 python3 tools/loop/loop_runner.py --batch 3
-
-# 3. Correr todas las pruebas con detector de carreras
-go test -v -race ./...
 ```
+
+### Regla de Cierre de Loop (Mandatoria para Agentes y Desarrolladores):
+1. **Commits Atómicos:** Cada tarea completada debe tener su commit individual en Git.
+2. **Validación Completa (Zero Issues):** Al finalizar todas las tareas del loop o batch, se ejecuta automáticamente la validación integral:
+   - Backend Go: `go test -v ./...`
+   - Web POS SDK: `node --test web/pos/softpos_sdk.test.js`
+3. **Push Automático a `origin main`:**
+   - Si y solo si todas las pruebas pasan limpiamente (cero fallos), se realiza `git push origin main`.
+   - Si alguna prueba falla, el push queda estrictamente bloqueado.
+4. **Handoff:** Actualizar `tools/loop/HANDOFF.md` con el estado final y el commit pushado.

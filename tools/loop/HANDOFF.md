@@ -1,24 +1,24 @@
 # Engineering Loop Handoff Checkpoint
-**Updated at:** 2026-10-30T17:07:14.202595
-**Progress:** 36/36 tasks completed | 0 pending
+**Updated at:** 2026-10-30T18:42:15.887559
+**Progress:** 40/40 tasks completed | 0 pending
 
 ## Recent Git Commits
 ```text
-a15fc82 feat(android-navigation): Android SoftPosAppController End-to-End Checkout & Navigation Coordinator in Kotlin [AND-12]
-548366a feat(android-rbf): Android RbfDashboardPresenter Merchant Cash Advance UI & Sweep Calculator in Kotlin [AND-11]
-b5b88f1 feat(android-vault): Android TaxVaultPresenter RESICO Escrow & Accountant CSV Exporter in Kotlin [AND-10]
-5034dfc feat(android-nfc): Android NFC IsoDepEmvReader APDU Transceiver & Zeroizer in Kotlin [AND-09]
+9177538 feat(android-ui): Android SoftPosComposeDescriptor Top-Level Screen & Bottom Navigation Model in Kotlin [AND-16]
+8065768 feat(android-pos): Android PosScreenDescriptor Currency Formatter, CoDi Badge & Voice Confirmation in Kotlin [AND-15]
+1b29927 feat(android-nfc): Android WhiteLabelTapProvider Multi-Rail Adapter (Stripe / PayFac / CDCVM / Carnet) in Kotlin [AND-14]
+42411b2 feat(android-onboarding): Android KybOnboardingPresenter Self-Service CSD (.cer/.key) Upload Validator in Kotlin [AND-13]
 ```
 
 ## Last Completed Batch Summary
-- **[AND-09] Android NFC IsoDepEmvReader APDU Transceiver & Zeroizer in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/nfc/IsoDepEmvReader.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report for IsoDepEmvReader Implementation** **1. Numerical Precision & Overflow Safety** - **Findings**: The `amountCents` is correctly typed as `Long`, preventing overflow for typical values. However, when converting to a String (e...
-- **[AND-10] Android TaxVaultPresenter RESICO Escrow & Accountant CSV Exporter in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/vault/TaxVaultPresenter.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report: TaxVaultPresenter & Accountant CSV Exporter** --- ### **1. Numerical Precision & Overflow Safety** - **Findings:** - The implementation uses `Long` for monetary values in cents, which avoids floating-point inaccuracies (e.g....
-- **[AND-11] Android RbfDashboardPresenter Merchant Cash Advance UI & Sweep Calculator in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/rbf/RbfDashboardPresenter.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report: RbfDashboardPresenter Implementation** --- ### **Key Findings and Recommendations** 1. **Integer Overflow Risk in Arithmetic Operations** - **Issue**: The `buildLoanUiModel` function computes `repaymentCapCents` as the sum o...
-- **[AND-12] Android SoftPosAppController End-to-End Checkout & Navigation Coordinator in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/SoftPosAppController.kt`) — Status: `COMPLETED`
-  - *Audit preview:* ```plaintext Audit Report: SoftPosAppController Implementation 1. Numerical Precision & Overflow Safety: - `amountCents` uses `Int64`, reducing overflow risk but lacks checks for over/underflow in arithmetic operations. 2. Concurrency Safet...
+- **[AND-13] Android KybOnboardingPresenter Self-Service CSD (.cer/.key) Upload Validator in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/onboarding/KybOnboardingPresenter.kt`) — Status: `COMPLETED`
+  - *Audit preview:* **Audit Report: KybOnboardingPresenter CSD Upload Validator** **1. Numerical Precision & Overflow Safety** - **Status**: Safe - Uses `Int` for byte array sizes, which is 64-bit on Android, preventing overflow. **2. Concurrency Safety** - **...
+- **[AND-14] Android WhiteLabelTapProvider Multi-Rail Adapter (Stripe / PayFac / CDCVM / Carnet) in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/nfc/WhiteLabelTapProvider.kt`) — Status: `COMPLETED`
+  - *Audit preview:* **Audit Report: WhiteLabelTapProvider Implementation** **1. Numerical Precision & Overflow Safety** - **Findings**: - The `amountCents` parameter is correctly validated for positivity, but the code doesn't handle cases where `amountCents` e...
+- **[AND-15] Android PosScreenDescriptor Currency Formatter, CoDi Badge & Voice Confirmation in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/pos/PosScreenDescriptor.kt`) — Status: `COMPLETED`
+  - *Audit preview:* The audit reveals several critical issues and areas for improvement: 1. **Numerical Precision Issue with Large Values in `formatMxnCents`**: - The function uses `%d` to format the whole pesos part, which can cause incorrect results when the...
+- **[AND-16] Android SoftPosComposeDescriptor Top-Level Screen & Bottom Navigation Model in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/SoftPosComposeDescriptor.kt`) — Status: `COMPLETED`
+  - *Audit preview:* **Audit Report: SoftPosComposeDescriptor Implementation** ### 1. Numerical Precision & Overflow Safety - **Findings**: - `amountCents` is stored as a `Long`, which prevents integer overflow for typical financial transactions (up to ~9e18 ce...
 
 ## Next Pending Batch (Up to 4 Tasks)
 - All registered tasks are completed!

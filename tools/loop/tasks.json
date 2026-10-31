@@ -747,37 +747,46 @@
       "id": "AND-17",
       "component": "android-cvm",
       "title": "Android CVM Rules Evaluator ($1,000 MXN vs CDCVM Biometrics) in Kotlin",
-      "status": "pending",
+      "status": "completed",
       "priority": 47,
       "files": {
         "tests": "mobile/android/app/src/test/java/mx/softpos/app/nfc/CvmRulesEvaluatorTest.kt",
         "implementation": "mobile/android/app/src/main/java/mx/softpos/app/nfc/CvmRulesEvaluator.kt"
       },
-      "spec": "Implement CvmRulesEvaluator in Kotlin 2.0 evaluating transaction amount: <= 100,000L ($1,000 MXN) -> NoCvmRequired; > 100,000L with CDCVM (Apple/Google Pay) -> CdcvmVerified; > 100,000L with physical card -> PinRequired."
+      "spec": "Implement CvmRulesEvaluator in Kotlin 2.0 evaluating transaction amount: <= 100,000L ($1,000 MXN) -> NoCvmRequired; > 100,000L with CDCVM (Apple/Google Pay) -> CdcvmVerified; > 100,000L with physical card -> PinRequired.",
+      "completed_at": "2026-10-30T22:13:00.000000",
+      "test_results": "PASS: CvmRulesEvaluatorTest (amounts up to 1000 MXN no CVM, >1000 MXN digital wallet CDCVM, >1000 MXN card PIN required)",
+      "audit_notes": "Audit: Mexican contactless rules strictly verified: <= 1,000 MXN exempt, digital wallet CDCVM verified without cap, physical card requires PIN-on-Glass."
     },
     {
       "id": "AND-18",
       "component": "android-pin-scramble",
       "title": "Android PCI MPoC Scrambled Keypad PIN-on-Glass Descriptor in Kotlin",
-      "status": "pending",
+      "status": "completed",
       "priority": 48,
       "files": {
         "tests": "mobile/android/app/src/test/java/mx/softpos/app/ui/tap/ScrambledKeypadModelTest.kt",
         "implementation": "mobile/android/app/src/main/java/mx/softpos/app/ui/tap/ScrambledKeypadModel.kt"
       },
-      "spec": "Implement ScrambledKeypadModel in Kotlin 2.0 generating randomized 3x4 grid permutations of digits 0-9 on each PIN prompt to prevent screen-logger and grease-mark attacks per PCI MPoC SCRP."
+      "spec": "Implement ScrambledKeypadModel in Kotlin 2.0 generating randomized 3x4 grid permutations of digits 0-9 on each PIN prompt to prevent screen-logger and grease-mark attacks per PCI MPoC SCRP.",
+      "completed_at": "2026-10-30T22:13:00.000000",
+      "test_results": "PASS: ScrambledKeypadModelTest (12-key 3x4 grid, complete 0-9 permutations, dynamic scramble, SecureRandom)",
+      "audit_notes": "Audit: PCI MPoC SCRP compliant randomized keypad ensures unique digit arrangement per PIN prompt to thwart grease/recording attacks."
     },
     {
       "id": "AND-19",
       "component": "android-dukpt",
       "title": "Android ISO 9564 PIN Block Formatter & Memory Zeroizer in Kotlin",
-      "status": "pending",
+      "status": "completed",
       "priority": 49,
       "files": {
         "tests": "mobile/android/app/src/test/java/mx/softpos/app/core/security/PinBlockFormatterTest.kt",
         "implementation": "mobile/android/app/src/main/java/mx/softpos/app/core/security/PinBlockFormatter.kt"
       },
-      "spec": "Implement PinBlockFormatter in Kotlin 2.0 encoding PIN into ISO 9564 Format 0 block with PAN XOR, validating 4-12 digit PINs and zeroizing sensitive byte arrays in try/finally."
+      "spec": "Implement PinBlockFormatter in Kotlin 2.0 encoding PIN into ISO 9564 Format 0 block with PAN XOR, validating 4-12 digit PINs and zeroizing sensitive byte arrays in try/finally.",
+      "completed_at": "2026-10-30T22:13:00.000000",
+      "test_results": "PASS: PinBlockFormatterTest (ISO 9564 Format 0 XOR encoding, 4-12 digit validation, PAN validation, memory zeroization)",
+      "audit_notes": "Audit: ISO 9564 Format 0 PIN block with PAN XOR masking implemented and sensitive byte arrays explicitly cleared with fill(0) in finally blocks."
     }
   ]
 }

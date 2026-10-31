@@ -140,6 +140,15 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		sqlMerchantRepo := store.NewSQLMerchantRepository(db)
 		server.SetMerchantRepository(sqlMerchantRepo)
 
+		sqlRBFRepo := store.NewSQLRBFRepository(db)
+		server.SetRBFRepository(sqlRBFRepo)
+
+		sqlEMVRepo := store.NewSQLEMVPaymentRepository(db)
+		server.SetEMVPaymentRepository(sqlEMVRepo)
+
+		sqlOutboxRepo := store.NewSQLOutboxRepository(db)
+		server.SetOutboxRepository(sqlOutboxRepo)
+
 		sqlIdemp := store.NewSQLIdempotencyRepository(db)
 		server.IdempotencyStore().SetBackend(sqlIdemp)
 	}

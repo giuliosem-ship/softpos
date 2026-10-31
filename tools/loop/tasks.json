@@ -652,6 +652,123 @@
       "test_results": "PASS: > Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED\n> Task :app:processResources NO-SOURCE\n> Task :app:processTestResources NO-SOURCE\n> Task :app:compileKotlin\n> Task :app:compileJava NO-SOURCE\n> Task :app:classes UP-TO-DATE\n> Task :app:jar\n> Task :app:compileTestKotlin\n> Task :app:compileTestJava NO-SOURCE\n> Task :app:testClasses UP-TO-DATE\n\n> Task :app:test\n\nSoftPosComposeDescriptorTest > describe builds initial POS_TERMINAL render model with 4 bottom navigation tabs() PASSED\n\nSoftP",
       "audit_notes": "**Audit Report: SoftPosComposeDescriptor Implementation**\n\n### 1. Numerical Precision & Overflow Safety\n- **Findings**: \n  - `amountCents` is stored as a `Long`, which prevents integer overflow for typical financial transactions (up to ~9e18 cents).\n  - Rounding occurs in `formatMxnCents`, but no formal proof of rounding invariants exists.\n  \n**Actionable Items:**\n- **Add**: Formal proof of rounding correctness in `PosScreenDescriptor.formatMxnCents`.\n- **Verify**: No overflow operations elsewhere.\n\n### 2. Concurrency Safety\n- **Findings**: \n  - Controller and ViewModel state accesses lack synchronization, risking race conditions if used concurrently.\n  \n**Actionable Items:**\n- **Implement**: Synchronization mechanisms (Mutex/Lock) for shared state access.\n\n### 3. Regulatory Compliance (Mexican SAT/Banxico)\n- **Findings**: \n  - CoDi/SPEI and CFDI 4.0 cryptographic compliance not evident in code.\n  \n**Actionable Items:**\n- **Enhance**: Cryptographic validation and digital signatures for sensitive operations.\n- **Review**: Ensure all regulatory fields are correctly formatted.\n\n### 4. Edge Cases & Invariants\n- **Findings**: \n  - No handling of negative `amountCents`.\n  - All `AppScreen` cases in title mapping need verification.\n  \n**Actionable Items:**\n- **Add**: Validation for negative amounts and missing screen handling.\n\n---\n\n### Summary\nThe implementation is mostly robust but requires attention to concurrency, cryptographic compliance, and edge case validation.",
       "completed_at": "2026-10-30T18:42:15.796868"
+    },
+    {
+      "id": "TASK-GO-016",
+      "component": "rbf-store",
+      "title": "PostgreSQL RBF Loans Repository with Pessimistic Locking in Go",
+      "status": "completed",
+      "priority": 41,
+      "files": {
+        "tests": "pkg/store/rbf_store_test.go",
+        "implementation": "pkg/store/rbf_store.go"
+      },
+      "spec": "Implement production SQL repository for Revenue-Based Financing (RBF) loans with row-level pessimistic locking in Go 1.22+:\n1. Package name: store\n2. Import softpos/pkg/rbf\n3. Sentinel errors:\n   - ErrLoanNotFound = rbf.ErrLoanNotFound\n   - ErrActiveLoanExists = rbf.ErrActiveLoanExists\n   - ErrInvalidRepayment = rbf.ErrInvalidRepayment\n4. Struct SQLRBFRepository:\n   - db *sql.DB\n   - NewSQLRBFRepository(db *sql.DB) *SQLRBFRepository\n   - SaveLoan(ctx context.Context, loan *rbf.RBFLoan) error: Inserts or updates a loan in rbf_loans table with ON CONFLICT (merchant_id) DO UPDATE.\n   - GetLoan(ctx context.Context, merchantID string) (*rbf.RBFLoan, bool, error): Returns (*rbf.RBFLoan, true, nil) if found, (nil, false, nil) if sql.ErrNoRows, or (nil, false, err) on error.\n   - ApplyRepaymentWithLock(ctx context.Context, merchantID string, repaymentCents int64) (*rbf.RBFLoan, error):\n     - Validates repaymentCents > 0 (returns ErrInvalidRepayment if <= 0).\n     - Starts SQL transaction (db.BeginTx).\n     - Executes SELECT principal_cents, fee_cents, repayment_cap_cents, holdback_bps, repaid_cents, remaining_cents, status, created_at, updated_at FROM rbf_loans WHERE merchant_id = $1 FOR UPDATE.\n     - If not found, rolls back and returns ErrLoanNotFound.\n     - Validates status == \"ACTIVE\" and remaining_cents >= repaymentCents (returns ErrInvalidRepayment if invalid).\n     - Calculates newRepaid = repaid_cents + repaymentCents, newRemaining = remaining_cents - repaymentCents.\n     - If newRemaining == 0, newStatus = \"PAID_OFF\", else newStatus = \"ACTIVE\".\n     - Executes UPDATE rbf_loans SET repaid_cents = $1, remaining_cents = $2, status = $3, updated_at = $4 WHERE merchant_id = $5.\n     - Commits transaction and returns the updated *rbf.RBFLoan.",
+      "completed_at": "2026-10-30T19:42:25.947024",
+      "test_results": "PASS: TestSQLRBFRepository_SaveAndGetLoan, TestSQLRBFRepository_ApplyRepaymentWithLock, TestSQLRBFRepository_LoanNotFoundAndInvalidRepayments",
+      "audit_notes": "Audit: SQLRBFRepository with row-level pessimistic locking (SELECT ... FOR UPDATE) inside atomic transaction. Zero floating point math, 100% integer cent precision."
+    },
+    {
+      "id": "TASK-GO-017",
+      "component": "payments-store",
+      "title": "PostgreSQL EMV Payments Repository & State Transitions in Go",
+      "status": "completed",
+      "priority": 42,
+      "files": {
+        "tests": "pkg/store/payments_store_test.go",
+        "implementation": "pkg/store/payments_store.go"
+      },
+      "spec": "Implement production SQL repository for EMV Contactless Payments and state transitions in Go 1.22+:\n1. Package name: store\n2. Import softpos/pkg/payments\n3. Sentinel errors:\n   - ErrPaymentNotFound = payments.ErrPaymentNotFound\n   - ErrInvalidStateTransition = payments.ErrInvalidStateTransition\n4. Struct EMVPaymentRecord:\n   - PaymentID string\n   - MerchantID string\n   - AmountCents int64\n   - Currency string\n   - Status payments.PaymentStatus\n   - MaskedPAN string\n   - CryptogramType payments.CryptogramType\n   - CryptogramHex string\n   - ATC int\n   - TLVPayloadHex string\n   - CreatedAt time.Time\n   - UpdatedAt time.Time\n5. Struct SQLEMVPaymentRepository:\n   - db *sql.DB\n   - NewSQLEMVPaymentRepository(db *sql.DB) *SQLEMVPaymentRepository\n   - SavePayment(ctx context.Context, record EMVPaymentRecord) error: Inserts into emv_payments table.\n   - GetPayment(ctx context.Context, paymentID string) (*EMVPaymentRecord, bool, error): Returns (*EMVPaymentRecord, true, nil) if found, (nil, false, nil) if not found, or (nil, false, err).\n   - TransitionStatus(ctx context.Context, paymentID string, from payments.PaymentStatus, to payments.PaymentStatus) error:\n     - Starts SQL transaction.\n     - Selects status FROM emv_payments WHERE id = $1 FOR UPDATE.\n     - Verifies current status == from, returns ErrInvalidStateTransition if mismatch.\n     - Updates status = $1, updated_at = $2 WHERE id = $3.\n     - Commits and returns nil.",
+      "completed_at": "2026-10-30T19:42:25.947024",
+      "test_results": "PASS: TestSQLEMVPaymentRepository_SaveAndGetPayment, TestSQLEMVPaymentRepository_StateTransitions, TestSQLEMVPaymentRepository_NotFound",
+      "audit_notes": "Audit: SQLEMVPaymentRepository validates strict state transitions (AUTHORIZED -> SETTLED / VOIDED, SETTLED -> REFUNDED) under pessimistic row lock."
+    },
+    {
+      "id": "TASK-GO-018",
+      "component": "outbox-store",
+      "title": "PostgreSQL Transactional Outbox Event Repository & Worker Dispatcher in Go",
+      "status": "completed",
+      "priority": 43,
+      "files": {
+        "tests": "pkg/store/outbox_test.go",
+        "implementation": "pkg/store/outbox.go"
+      },
+      "spec": "Implement the Transactional Outbox pattern repository and dispatcher in Go 1.22+:\n1. Package name: store\n2. Struct OutboxEvent:\n   - ID int64\n   - EventType string\n   - AggregateID string\n   - PayloadJSON []byte\n   - Status string (\"PENDING\", \"PROCESSING\", \"PUBLISHED\", \"FAILED\")\n   - RetryCount int\n   - MaxRetries int\n   - LastError string\n   - CreatedAt time.Time\n   - UpdatedAt time.Time\n3. Struct SQLOutboxRepository:\n   - db *sql.DB\n   - NewSQLOutboxRepository(db *sql.DB) *SQLOutboxRepository\n   - SaveEventTx(ctx context.Context, tx *sql.Tx, eventType string, aggregateID string, payload any) error:\n     - Marshals payload to JSON.\n     - Executes INSERT INTO outbox_events (event_type, aggregate_id, payload_json, status, retry_count, max_retries, created_at, updated_at) VALUES ($1, $2, $3, \"PENDING\", 0, 5, $4, $4).\n   - FetchPendingEventsWithLock(ctx context.Context, limit int) ([]OutboxEvent, error):\n     - Selects id, event_type, aggregate_id, payload_json, status, retry_count, max_retries, last_error, created_at, updated_at FROM outbox_events WHERE status = \"PENDING\" AND retry_count < max_retries ORDER BY id ASC LIMIT $1.\n   - MarkPublished(ctx context.Context, eventID int64) error: Sets status = \"PUBLISHED\", updated_at = NOW().\n   - MarkFailed(ctx context.Context, eventID int64, errMsg string) error:\n     - Increments retry_count, sets last_error = errMsg.\n     - If new retry_count >= max_retries, status = \"FAILED\", else status = \"PENDING\".",
+      "completed_at": "2026-10-30T19:42:25.947024",
+      "test_results": "PASS: TestSQLOutboxRepository_SaveAndFetchPending, TestSQLOutboxRepository_MarkPublishedAndFailed",
+      "audit_notes": "Audit: Transactional Outbox pattern implemented with SaveEventTx inside business tx, retry count tracking, and automatic status transition to FAILED upon reaching max retries."
+    },
+    {
+      "id": "TASK-GO-019",
+      "component": "api-auth",
+      "title": "JWT Authentication & Tenant Scoping Middleware in Go",
+      "status": "pending",
+      "priority": 44,
+      "files": {
+        "tests": "pkg/api/middleware_auth_test.go",
+        "implementation": "pkg/api/middleware_auth.go"
+      },
+      "spec": "Implement AuthMiddleware in Go 1.22+ validating Bearer JWT tokens, extracting merchant_id from claims, enforcing tenant isolation, and blocking IDOR access to merchant routes."
+    },
+    {
+      "id": "TASK-GO-020",
+      "component": "identity-attestation",
+      "title": "Google Play Integrity Cryptographic Attestation Verifier in Go",
+      "status": "pending",
+      "priority": 45,
+      "files": {
+        "tests": "pkg/identity/play_integrity_test.go",
+        "implementation": "pkg/identity/play_integrity.go"
+      },
+      "spec": "Implement PlayIntegrityVerifier validating Google Play Integrity JWT tokens, verifying MEETS_DEVICE_INTEGRITY verdict, package name, and rejection of rooted/hooked environments before approving EMV transactions."
+    },
+    {
+      "id": "TASK-GO-021",
+      "component": "cmd-guard",
+      "title": "Production Security Guard & Fail-Fast Validator in Go",
+      "status": "pending",
+      "priority": 46,
+      "files": {
+        "tests": "cmd/server/config_guard_test.go",
+        "implementation": "cmd/server/config_guard.go"
+      },
+      "spec": "Implement ValidateProductionConfig in Go that enforces production secrets, rejecting defaultVaultMasterKeyHex, dev HMAC secrets, or insecure DB URLs when ENV=production."
+    },
+    {
+      "id": "AND-17",
+      "component": "android-cvm",
+      "title": "Android CVM Rules Evaluator ($1,000 MXN vs CDCVM Biometrics) in Kotlin",
+      "status": "pending",
+      "priority": 47,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/nfc/CvmRulesEvaluatorTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/nfc/CvmRulesEvaluator.kt"
+      },
+      "spec": "Implement CvmRulesEvaluator in Kotlin 2.0 evaluating transaction amount: <= 100,000L ($1,000 MXN) -> NoCvmRequired; > 100,000L with CDCVM (Apple/Google Pay) -> CdcvmVerified; > 100,000L with physical card -> PinRequired."
+    },
+    {
+      "id": "AND-18",
+      "component": "android-pin-scramble",
+      "title": "Android PCI MPoC Scrambled Keypad PIN-on-Glass Descriptor in Kotlin",
+      "status": "pending",
+      "priority": 48,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/ui/tap/ScrambledKeypadModelTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/ui/tap/ScrambledKeypadModel.kt"
+      },
+      "spec": "Implement ScrambledKeypadModel in Kotlin 2.0 generating randomized 3x4 grid permutations of digits 0-9 on each PIN prompt to prevent screen-logger and grease-mark attacks per PCI MPoC SCRP."
+    },
+    {
+      "id": "AND-19",
+      "component": "android-dukpt",
+      "title": "Android ISO 9564 PIN Block Formatter & Memory Zeroizer in Kotlin",
+      "status": "pending",
+      "priority": 49,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/core/security/PinBlockFormatterTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/core/security/PinBlockFormatter.kt"
+      },
+      "spec": "Implement PinBlockFormatter in Kotlin 2.0 encoding PIN into ISO 9564 Format 0 block with PAN XOR, validating 4-12 digit PINs and zeroizing sensitive byte arrays in try/finally."
     }
   ]
 }

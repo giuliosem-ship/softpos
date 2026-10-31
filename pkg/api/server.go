@@ -42,6 +42,9 @@ type Server struct {
 	csdVault          *identity.CSDVaultService
 	idempotency       *IdempotencyStore
 	merchantRepo      *store.SQLMerchantRepository
+	rbfRepo           *store.SQLRBFRepository
+	emvPaymentRepo    *store.SQLEMVPaymentRepository
+	outboxRepo        *store.SQLOutboxRepository
 	staticDir         string
 	mu                sync.RWMutex
 	merchants         map[string]Merchant
@@ -105,6 +108,24 @@ func (s *Server) SetMerchantRepository(repo *store.SQLMerchantRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.merchantRepo = repo
+}
+
+func (s *Server) SetRBFRepository(repo *store.SQLRBFRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rbfRepo = repo
+}
+
+func (s *Server) SetEMVPaymentRepository(repo *store.SQLEMVPaymentRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emvPaymentRepo = repo
+}
+
+func (s *Server) SetOutboxRepository(repo *store.SQLOutboxRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outboxRepo = repo
 }
 
 func (s *Server) SetIdempotencyStore(idemp *IdempotencyStore) {

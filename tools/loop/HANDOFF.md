@@ -1,30 +1,33 @@
 # Engineering Loop Handoff Checkpoint
-**Updated at:** 2026-10-30T18:42:15.887559
-**Progress:** 40/40 tasks completed | 0 pending
+**Updated at:** 2026-10-30T19:42:30.000000
+**Progress:** 43/49 tasks completed | 6 pending
 
-## Recent Git Commits
-```text
-9177538 feat(android-ui): Android SoftPosComposeDescriptor Top-Level Screen & Bottom Navigation Model in Kotlin [AND-16]
-8065768 feat(android-pos): Android PosScreenDescriptor Currency Formatter, CoDi Badge & Voice Confirmation in Kotlin [AND-15]
-1b29927 feat(android-nfc): Android WhiteLabelTapProvider Multi-Rail Adapter (Stripe / PayFac / CDCVM / Carnet) in Kotlin [AND-14]
-42411b2 feat(android-onboarding): Android KybOnboardingPresenter Self-Service CSD (.cer/.key) Upload Validator in Kotlin [AND-13]
-```
+## Recent Completed Tasks
+- **[TASK-GO-016] PostgreSQL RBF Loans Repository with Pessimistic Locking in Go** (`pkg/store/rbf_store.go`) — Status: `COMPLETED`
+  - *Audit preview:* Implemented `SQLRBFRepository` with atomic row-level lock (`SELECT ... FOR UPDATE`) in `ApplyRepaymentWithLock`. Cero flotantes, aritmética de centavos estricta.
+- **[TASK-GO-017] PostgreSQL EMV Payments Repository & State Transitions in Go** (`pkg/store/payments_store.go`) — Status: `COMPLETED`
+  - *Audit preview:* Implemented `SQLEMVPaymentRepository` con validación de transiciones de estado de pago bajo bloqueo pesimista (`AUTHORIZED -> SETTLED / VOIDED`, `SETTLED -> REFUNDED`).
+- **[TASK-GO-018] PostgreSQL Transactional Outbox Event Repository & Worker Dispatcher in Go** (`pkg/store/outbox.go`) — Status: `COMPLETED`
+  - *Audit preview:* Implemented Transactional Outbox pattern con inserción atómica `SaveEventTx` en la transacción de cobro, reintentos exponenciales y transición a `FAILED` al alcanzar el límite de reintentos.
 
-## Last Completed Batch Summary
-- **[AND-13] Android KybOnboardingPresenter Self-Service CSD (.cer/.key) Upload Validator in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/onboarding/KybOnboardingPresenter.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report: KybOnboardingPresenter CSD Upload Validator** **1. Numerical Precision & Overflow Safety** - **Status**: Safe - Uses `Int` for byte array sizes, which is 64-bit on Android, preventing overflow. **2. Concurrency Safety** - **...
-- **[AND-14] Android WhiteLabelTapProvider Multi-Rail Adapter (Stripe / PayFac / CDCVM / Carnet) in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/nfc/WhiteLabelTapProvider.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report: WhiteLabelTapProvider Implementation** **1. Numerical Precision & Overflow Safety** - **Findings**: - The `amountCents` parameter is correctly validated for positivity, but the code doesn't handle cases where `amountCents` e...
-- **[AND-15] Android PosScreenDescriptor Currency Formatter, CoDi Badge & Voice Confirmation in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/pos/PosScreenDescriptor.kt`) — Status: `COMPLETED`
-  - *Audit preview:* The audit reveals several critical issues and areas for improvement: 1. **Numerical Precision Issue with Large Values in `formatMxnCents`**: - The function uses `%d` to format the whole pesos part, which can cause incorrect results when the...
-- **[AND-16] Android SoftPosComposeDescriptor Top-Level Screen & Bottom Navigation Model in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/SoftPosComposeDescriptor.kt`) — Status: `COMPLETED`
-  - *Audit preview:* **Audit Report: SoftPosComposeDescriptor Implementation** ### 1. Numerical Precision & Overflow Safety - **Findings**: - `amountCents` is stored as a `Long`, which prevents integer overflow for typical financial transactions (up to ~9e18 ce...
+## Next Pending Batches (Ready for Autonomous Agents)
 
-## Next Pending Batch (Up to 4 Tasks)
-- All registered tasks are completed!
+### Batch 1: Backend Zero-Trust Security & Attestation (3 Tasks)
+1. **[TASK-GO-019] JWT Authentication & Tenant Scoping Middleware in Go** (`pkg/api/middleware_auth.go`)
+2. **[TASK-GO-020] Google Play Integrity Cryptographic Attestation Verifier in Go** (`pkg/identity/play_integrity.go`)
+3. **[TASK-GO-021] Production Security Guard & Fail-Fast Validator in Go** (`cmd/server/config_guard.go`)
 
-## How to Resume in a New Chat / Subagent
-Run the next batch with Two-Phase Swap (1 load of Qwen Coder -> 1 load of DeepSeek R1 Auditor):
+### Batch 2: Android SoftPOS CVM Rules & PCI MPoC PIN-on-Glass (3 Tasks)
+1. **[AND-17] Android CVM Rules Evaluator ($1,000 MXN vs CDCVM Biometrics) in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/nfc/CvmRulesEvaluator.kt`)
+2. **[AND-18] Android PCI MPoC Scrambled Keypad PIN-on-Glass Descriptor in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/ui/tap/ScrambledKeypadModel.kt`)
+3. **[AND-19] Android ISO 9564 PIN Block Formatter & Memory Zeroizer in Kotlin** (`mobile/android/app/src/main/java/mx/softpos/app/core/security/PinBlockFormatter.kt`)
+
+## How to Resume Execution with AI Loop
+Run the next batch of 3 tasks with:
 ```zsh
-python3 tools/loop/loop_runner.py --batch 4
+python3 tools/loop/loop_runner.py --batch 3
+```
+Or step through individual tasks:
+```zsh
+python3 tools/loop/loop_runner.py --task TASK-GO-019
 ```

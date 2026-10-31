@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,8 +33,53 @@ type mockDB struct {
 	monthlySales  map[string]int64 // key: merchantID:yearMonth
 	idempotency   map[string]*mockIdemp
 	migrations    map[string]time.Time
+	rbfLoans      map[string]*mockRBFLoan
+	emvPayments   map[string]*mockEMVPayment
+	outboxEvents  map[int64]*mockOutboxEvent
+	outboxSeq     int64
 	rowLocks      map[string]*sync.Mutex
 	locksMu       sync.Mutex
+}
+
+type mockRBFLoan struct {
+	merchantID        string
+	principalCents    int64
+	feeCents          int64
+	repaymentCapCents int64
+	holdbackBps       int64
+	repaidCents       int64
+	remainingCents    int64
+	status            string
+	createdAt         time.Time
+	updatedAt         time.Time
+}
+
+type mockEMVPayment struct {
+	id             string
+	merchantID     string
+	amountCents    int64
+	currency       string
+	status         string
+	maskedPAN      string
+	cryptogramType string
+	cryptogramHex  string
+	atc            int
+	tlvPayloadHex  string
+	createdAt      time.Time
+	updatedAt      time.Time
+}
+
+type mockOutboxEvent struct {
+	id          int64
+	eventType   string
+	aggregateID string
+	payloadJSON []byte
+	status      string
+	retryCount  int
+	maxRetries  int
+	lastError   string
+	createdAt   time.Time
+	updatedAt   time.Time
 }
 
 type mockAccount struct {
@@ -104,6 +150,9 @@ func getSharedDB(name string) *mockDB {
 		monthlySales: make(map[string]int64),
 		idempotency:  make(map[string]*mockIdemp),
 		migrations:   make(map[string]time.Time),
+		rbfLoans:     make(map[string]*mockRBFLoan),
+		emvPayments:  make(map[string]*mockEMVPayment),
+		outboxEvents: make(map[int64]*mockOutboxEvent),
 		rowLocks:     make(map[string]*sync.Mutex),
 	}
 	sharedDBs[name] = db
@@ -329,6 +378,150 @@ func (s *mockStmt) Exec(args []driver.Value) (driver.Result, error) {
 		}
 		db.mu.Unlock()
 		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "INSERT INTO RBF_LOANS"):
+		merchantID := fmt.Sprint(args[0])
+		principal := args[1].(int64)
+		fee := args[2].(int64)
+		repaymentCap := args[3].(int64)
+		holdbackBps := args[4].(int64)
+		repaid := args[5].(int64)
+		remaining := args[6].(int64)
+		status := fmt.Sprint(args[7])
+		createdAt := args[8].(time.Time)
+		updatedAt := args[9].(time.Time)
+		db.mu.Lock()
+		db.rbfLoans[merchantID] = &mockRBFLoan{
+			merchantID:        merchantID,
+			principalCents:    principal,
+			feeCents:          fee,
+			repaymentCapCents: repaymentCap,
+			holdbackBps:       holdbackBps,
+			repaidCents:       repaid,
+			remainingCents:    remaining,
+			status:            status,
+			createdAt:         createdAt,
+			updatedAt:         updatedAt,
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "UPDATE RBF_LOANS"):
+		repaid := args[0].(int64)
+		remaining := args[1].(int64)
+		status := fmt.Sprint(args[2])
+		updatedAt := args[3].(time.Time)
+		merchantID := fmt.Sprint(args[4])
+		db.mu.Lock()
+		if l, ok := db.rbfLoans[merchantID]; ok {
+			l.repaidCents = repaid
+			l.remainingCents = remaining
+			l.status = status
+			l.updatedAt = updatedAt
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "INSERT INTO EMV_PAYMENTS"):
+		id := fmt.Sprint(args[0])
+		mID := fmt.Sprint(args[1])
+		amount := args[2].(int64)
+		currency := fmt.Sprint(args[3])
+		status := fmt.Sprint(args[4])
+		pan := fmt.Sprint(args[5])
+		cryptoType := fmt.Sprint(args[6])
+		cryptoHex := fmt.Sprint(args[7])
+		var atc int
+		switch v := args[8].(type) {
+		case int:
+			atc = v
+		case int64:
+			atc = int(v)
+		}
+		tlv := fmt.Sprint(args[9])
+		createdAt := args[10].(time.Time)
+		updatedAt := args[11].(time.Time)
+		db.mu.Lock()
+		db.emvPayments[id] = &mockEMVPayment{
+			id:             id,
+			merchantID:     mID,
+			amountCents:    amount,
+			currency:       currency,
+			status:         status,
+			maskedPAN:      pan,
+			cryptogramType: cryptoType,
+			cryptogramHex:  cryptoHex,
+			atc:            atc,
+			tlvPayloadHex:  tlv,
+			createdAt:      createdAt,
+			updatedAt:      updatedAt,
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "UPDATE EMV_PAYMENTS SET STATUS"):
+		status := fmt.Sprint(args[0])
+		updatedAt := args[1].(time.Time)
+		id := fmt.Sprint(args[2])
+		db.mu.Lock()
+		if p, ok := db.emvPayments[id]; ok {
+			p.status = status
+			p.updatedAt = updatedAt
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "INSERT INTO OUTBOX_EVENTS"):
+		evType := fmt.Sprint(args[0])
+		aggID := fmt.Sprint(args[1])
+		payload := args[2].([]byte)
+		now := args[3].(time.Time)
+		db.mu.Lock()
+		db.outboxSeq++
+		id := db.outboxSeq
+		db.outboxEvents[id] = &mockOutboxEvent{
+			id:          id,
+			eventType:   evType,
+			aggregateID: aggID,
+			payloadJSON: payload,
+			status:      "PENDING",
+			retryCount:  0,
+			maxRetries:  5,
+			lastError:   "",
+			createdAt:   now,
+			updatedAt:   now,
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "UPDATE OUTBOX_EVENTS SET STATUS = 'PUBLISHED'"):
+		updatedAt := args[0].(time.Time)
+		id := args[1].(int64)
+		db.mu.Lock()
+		if ev, ok := db.outboxEvents[id]; ok {
+			ev.status = "PUBLISHED"
+			ev.updatedAt = updatedAt
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
+
+	case strings.HasPrefix(q, "UPDATE OUTBOX_EVENTS") && strings.Contains(q, "RETRY_COUNT"):
+		errMsg := fmt.Sprint(args[0])
+		updatedAt := args[1].(time.Time)
+		id := args[2].(int64)
+		db.mu.Lock()
+		if ev, ok := db.outboxEvents[id]; ok {
+			ev.retryCount++
+			ev.lastError = errMsg
+			if ev.retryCount >= ev.maxRetries {
+				ev.status = "FAILED"
+			} else {
+				ev.status = "PENDING"
+			}
+			ev.updatedAt = updatedAt
+		}
+		db.mu.Unlock()
+		return driver.RowsAffected(1), nil
 	}
 
 	return driver.RowsAffected(0), nil
@@ -463,9 +656,104 @@ func (s *mockStmt) Query(args []driver.Value) (driver.Rows, error) {
 			return &singleRow{[3]driver.Value{int64(idemp.statusCode), idemp.body, idemp.expiresAt}}, nil
 		}
 		return &emptyRows{}, nil
+
+	case strings.Contains(q, "FROM RBF_LOANS WHERE MERCHANT_ID = $1"):
+		mID := fmt.Sprint(args[0])
+		if strings.Contains(q, "FOR UPDATE") && s.conn.inTx {
+			lock := db.getRowLock("rbf:" + mID)
+			lock.Lock()
+			s.conn.heldLock = append(s.conn.heldLock, lock)
+		}
+		db.mu.RLock()
+		defer db.mu.RUnlock()
+		if l, ok := db.rbfLoans[mID]; ok {
+			return &singleRow{[]driver.Value{
+				l.merchantID, l.principalCents, l.feeCents, l.repaymentCapCents,
+				l.holdbackBps, l.repaidCents, l.remainingCents, l.status,
+				l.createdAt, l.updatedAt,
+			}}, nil
+		}
+		return &emptyRows{}, nil
+
+	case strings.Contains(q, "FROM EMV_PAYMENTS WHERE ID = $1"):
+		id := fmt.Sprint(args[0])
+		if strings.Contains(q, "FOR UPDATE") && s.conn.inTx {
+			lock := db.getRowLock("emv:" + id)
+			lock.Lock()
+			s.conn.heldLock = append(s.conn.heldLock, lock)
+		}
+		db.mu.RLock()
+		defer db.mu.RUnlock()
+		if p, ok := db.emvPayments[id]; ok {
+			if strings.HasPrefix(q, "SELECT STATUS FROM EMV_PAYMENTS") {
+				return &singleRow{[1]driver.Value{p.status}}, nil
+			}
+			return &singleRow{[]driver.Value{
+				p.id, p.merchantID, p.amountCents, p.currency, p.status,
+				p.maskedPAN, p.cryptogramType, p.cryptogramHex, p.atc,
+				p.tlvPayloadHex, p.createdAt, p.updatedAt,
+			}}, nil
+		}
+		return &emptyRows{}, nil
+
+	case strings.Contains(q, "FROM OUTBOX_EVENTS WHERE STATUS = 'PENDING'"):
+		limit := 10
+		if len(args) > 0 {
+			switch v := args[0].(type) {
+			case int:
+				limit = v
+			case int64:
+				limit = int(v)
+			}
+		}
+		db.mu.RLock()
+		defer db.mu.RUnlock()
+		var ids []int64
+		for id := range db.outboxEvents {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+		var rows [][]driver.Value
+		for _, id := range ids {
+			ev := db.outboxEvents[id]
+			if ev.status == "PENDING" && ev.retryCount < ev.maxRetries {
+				rows = append(rows, []driver.Value{
+					ev.id, ev.eventType, ev.aggregateID, ev.payloadJSON, ev.status,
+					ev.retryCount, ev.maxRetries, ev.lastError, ev.createdAt, ev.updatedAt,
+				})
+				if len(rows) >= limit {
+					break
+				}
+			}
+		}
+		return &multiRows{
+			cols: []string{"id", "event_type", "aggregate_id", "payload_json", "status", "retry_count", "max_retries", "last_error", "created_at", "updated_at"},
+			rows: rows,
+		}, nil
 	}
 
 	return &emptyRows{}, nil
+}
+
+type multiRows struct {
+	cols []string
+	rows [][]driver.Value
+	idx  int
+}
+
+func (r *multiRows) Columns() []string { return r.cols }
+func (r *multiRows) Close() error      { return nil }
+func (r *multiRows) Next(dest []driver.Value) error {
+	if r.idx >= len(r.rows) {
+		return io.EOF
+	}
+	row := r.rows[r.idx]
+	r.idx++
+	for i := 0; i < len(row) && i < len(dest); i++ {
+		dest[i] = row[i]
+	}
+	return nil
 }
 
 type emptyRows struct{}
@@ -490,6 +778,12 @@ func (r *singleRow) Columns() []string {
 		return []string{"col1", "col2", "col3", "col4"}
 	case [8]driver.Value:
 		return []string{"col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8"}
+	case []driver.Value:
+		cols := make([]string, len(v))
+		for i := range cols {
+			cols[i] = fmt.Sprintf("col%d", i+1)
+		}
+		return cols
 	default:
 		_ = v
 		return []string{}
@@ -513,6 +807,10 @@ func (r *singleRow) Next(dest []driver.Value) error {
 		dest[0], dest[1], dest[2], dest[3] = v[0], v[1], v[2], v[3]
 	case [8]driver.Value:
 		for i := 0; i < 8; i++ {
+			dest[i] = v[i]
+		}
+	case []driver.Value:
+		for i := 0; i < len(v) && i < len(dest); i++ {
 			dest[i] = v[i]
 		}
 	}

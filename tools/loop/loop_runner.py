@@ -510,7 +510,7 @@ def print_status():
             "failed": "❌"
         }.get(t["status"], "❓")
         print(f"{status_emoji} [{t['id']}] {t['title']} ({t['status'].upper()})")
-        if t["completed_at"]:
+        if t.get("completed_at"):
             print(f"   Completed at: {t['completed_at']}")
     print("=" * 60 + "\n")
 

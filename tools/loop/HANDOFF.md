@@ -21,6 +21,8 @@ fb24768 feat(android): implement CVM rules evaluator, scrambled keypad PIN-on-gl
 - Auto-push to `origin main`: READY
 
 ## Next Available Roadmap (Loop 5: Criptografía Bancaria HSM & DUKPT)
+Consulte la especificación completa y lista para ejecución en `docs/NEXT_LOOPS_SPEC.md`:
 - **[TASK-GO-025] DUKPT ANSI X9.24 Key Derivation (BDK / KSN)**
 - **[TASK-GO-026] PIN Translation Service (PEK a ZPK)**
 - **[TASK-GO-027] Payment HSM Client Interface (Thales / Futurex / KMS)**
+- **[Loops 6 y 7] Compensación STEC, Controversias, y Blindaje Android PCI MPoC**

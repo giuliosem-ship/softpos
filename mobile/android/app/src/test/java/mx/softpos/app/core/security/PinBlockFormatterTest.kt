@@ -20,12 +20,12 @@ class PinBlockFormatterTest {
         val pan = "4152313899999012"
 
         // Plaintext PIN field: 04 12 34 FF FF FF FF FF
-        // PAN field (12 rightmost digits excluding check digit): 00 00 52 31 38 99 99 90
-        // Expected XOR: 04 12 66 CE C7 66 66 6F
+        // PAN field (12 rightmost digits excluding check digit): 00 00 23 13 89 99 99 01
+        // Expected XOR: 04 12 17 EC 76 66 66 FE
         val block = PinBlockFormatter.formatIso0(pin.toCharArray(), pan)
 
         assertEquals(8, block.size)
-        assertEquals("041266CEC766666F", bytesToHex(block))
+        assertEquals("041217EC766666FE", bytesToHex(block))
     }
 
     @Test

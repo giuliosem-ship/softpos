@@ -923,6 +923,45 @@
       "test_results": "PASS: ",
       "audit_notes": "**Audit Report: Chargeback Dispute Lifecycle & Dynamic Rolling Reserve Engine**\n\n---\n\n### **1. Numerical Precision & Overflow Safety**\n- **Risk**: The `roundHalfUp` function may cause incorrect rounding or overflow due to integer division and multiplication without overflow checks.\n- **Recommendation**: Replace the current rounding logic with a safe implementation that handles large values and ensures correct decimal arithmetic.\n\n---\n\n### **2. Concurrency Safety**\n- **Risk**: While mutex locking is used, simultaneous state changes could lead to race conditions during concurrent dispute or reserve operations.\n- **Recommendation**: Implement stricter concurrency controls and ensure all state transitions are properly guarded by the mutex to prevent race conditions.\n\n---\n\n### **3. Regulatory Compliance (Mexican SAT/Banxico)**\n- **Risk**: The code may not fully comply with cryptographic requirements for financial transactions, especially in dispute resolution.\n- **Recommendation**: Conduct a detailed review against Mexican regulations and ensure all cryptographic signatures are properly validated.\n\n---\n\n### **4. Error Handling & State Consistency**\n- **Risk**: Ledger operations might leave the engine's state inconsistent if they fail after creating a dispute or reserve record.\n- **Recommendation**: Implement rollback mechanisms to ensure the engine's state matches ledger transactions, especially on errors during posting.\n\n---\n\n### **5. Edge Cases**\n- **Risk**: Unhandled edge cases such as multiple concurrent disputes or reserves near maturity could lead to incorrect balance calculations.\n- **Recommendation**: Add comprehensive testing for edge scenarios and implement checks to prevent negative balances or invalid state transitions.\n\n---\n\n**Actionable Bullet Points:**\n\n1. **Fix Numerical Rounding**: Replace the `roundHalfUp` function with a safe implementation that prevents overflow and handles large values correctly.\n2. **Enhance Concurrency Controls**: Ensure all state-changing operations are properly guarded by mutex locks to prevent race conditions during concurrent access.\n3. **Implement Regulatory Compliance Checks**: Validate cryptographic requirements against Mexican regulations, especially in dispute resolution processes.\n4. **Add Rollback Mechanisms**: Handle ledger transaction failures gracefully to maintain engine state consistency and prevent discrepancies.\n5. **Test Edge Scenarios**: Conduct thorough testing for edge cases, including multiple disputes, concurrent operations, and near-maturity reserve releases.\n\n---\n\nThis report highlights critical areas requiring attention to ensure the system's correctness, security, and compliance with financial regulations.",
       "completed_at": "2026-10-31T22:08:36.558329"
+    },
+    {
+      "id": "AND-20",
+      "component": "android-security",
+      "title": "Android Window Security Guard & Accessibility Keylogger Detector in Kotlin",
+      "status": "completed",
+      "priority": 59,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/ui/security/WindowSecurityGuardTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/ui/security/WindowSecurityGuard.kt"
+      },
+      "spec": "Implement WindowSecurityGuard in Kotlin 2.0: apply/clear FLAG_SECURE on window holders to block screenshots/screencast, and evaluate enabled accessibility services against trusted allowlists to detect potential software keyloggers before PIN-on-Glass.",
+      "test_results": "PASS: ",
+      "audit_notes": "**Audit Report: WindowSecurityGuard Implementation**\n\n**1. Concurrency Safety Concerns**\n- **Findings**: The current implementation does not synchronize access to `SecureWindow` operations. Concurrent calls from multiple threads could lead to race conditions, causing inconsistent window states (e.g., flags being improperly set or cleared).\n- **Recommendation**: Introduce thread-safe mechanisms such as mutexes or semaphores around `addFlags`, `clearFlags`, and `hasFlag` methods to ensure atomicity and prevent race conditions.\n\n**2. Incomplete Regulatory Compliance**\n- **Findings**: The implementation assumes a static allowlist of accessibility services but may not account for all regulatory requirements imposed by Mexican SAT and Banxico (e.g., CFDI 4.0). This could lead to non-compliance if the allowlist is insufficient.\n- **Recommendation**: Review and update the `DEFAULT_ALLOWLIST` dynamically based on device-specific system services and OS versions, ensuring it aligns with legal standards.\n\n**3. Potential Edge Cases in Flag Management**\n- **Findings**: While flag operations are idempotent, improper handling during exceptions (e.g., null `scanner`) could leave flags incorrectly set.\n- **Recommendation**: Encapsulate `addFlags` within a try-finally block to ensure flags are only set when necessary and properly released if an error occurs.\n\n**4. Performance Considerations**\n- **Findings**: Iterating over all accessibility services each time may impact performance, especially on devices with many services.\n- **Recommendation**: Optimize service checking by caching results or using efficient filtering mechanisms based on package names.\n\n**5. Cryptographic and Data Protection Gaps**\n- **Findings**: The code lacks cryptographic operations, but sensitive data exposure risks exist if threat detection is insufficient.\n- **Recommendation**: Ensure no sensitive data is exposed through accessibility services. Implement additional checks for data protection as needed.\n\n---\n\nThis report highlights critical areas requiring attention to enhance security, compliance, and robustness in the WindowSecurityGuard implementation. Addressing these points will improve the system's resilience against unauthorized access and regulatory non-compliance.",
+      "completed_at": "2026-11-01T12:44:15.161795"
+    },
+    {
+      "id": "AND-21",
+      "component": "android-integrity",
+      "title": "Android Google Play Integrity Client Handshake & Nonce Verifier in Kotlin",
+      "status": "pending",
+      "priority": 60,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/core/network/PlayIntegrityClientTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/core/network/PlayIntegrityClient.kt"
+      },
+      "spec": "Implement PlayIntegrityClient in Kotlin 2.0: fetch cryptographic nonces from backend /api/v1/auth/attestation-nonce, validate nonce freshness (< 300s), generate integrity token with exponential backoff retries, and attach X-Play-Integrity-Token header."
+    },
+    {
+      "id": "AND-22",
+      "component": "android-saf",
+      "title": "Android Encrypted Store-and-Forward (SAF) Offline Queue in Kotlin",
+      "status": "pending",
+      "priority": 61,
+      "files": {
+        "tests": "mobile/android/app/src/test/java/mx/softpos/app/domain/saf/StoreAndForwardQueueTest.kt",
+        "implementation": "mobile/android/app/src/main/java/mx/softpos/app/domain/saf/StoreAndForwardQueue.kt"
+      },
+      "spec": "Implement StoreAndForwardQueue in Kotlin 2.0: enforce strict .00 MXN (40000 cents) offline transaction cap, encrypt payloads at rest with AES-256-GCM, and orderly dispatch FIFO queue items when network connectivity is restored."
     }
   ]
 }

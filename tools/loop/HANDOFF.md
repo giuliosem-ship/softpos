@@ -1,28 +1,30 @@
 # Engineering Loop Handoff Checkpoint
-**Updated at:** 2026-10-31T19:15:40.000000
-**Progress:** 52/52 tasks completed | 0 pending 🎉
+**Updated at:** 2026-10-31T21:24:00.000000
+**Progress:** 55/55 tasks completed | 0 pending 🎉
 
 ## Recent Git Commits
 ```text
-fb24768 feat(android): implement CVM rules evaluator, scrambled keypad PIN-on-glass, and ISO 9564 PIN formatter [AND-17..AND-19]
-2e5d0be feat(security): implement JWT auth, Play Integrity verifier, and production config guard [TASK-GO-019..021]
-28fe57e docs(rules): enforce full validation and auto-push to main after loop completion
-23841c1 feat(store): implement Loop 1 SQL persistence for RBF, EMV payments and Transactional Outbox [TASK-GO-016..018]
+0a0ddfb feat(crypto-hsm): Payment HSM Client Interface and Software HSM Simulator in Go [TASK-GO-027]
+17913e7 feat(crypto-pin-translation): PIN Translation Service from PEK to Switch ZPK in Go [TASK-GO-026]
+7a7b3de feat(crypto-dukpt): DUKPT ANSI X9.24 Key Derivation and PIN Block Decryption Engine in Go [TASK-GO-025]
+7ca061d docs(roadmap): document specifications and TDD contracts for Loops 5, 6, and 7
 ```
 
-## Last Completed Batch Summary (Loop 4: Switch Financiero & Protocolo ISO 8583)
-- **[TASK-GO-022] ISO 8583 Acquirer Financial Message Pack & Unpack Engine in Go** (`pkg/iso8583/message.go`) — Status: `COMPLETED`
-- **[TASK-GO-023] DE 55 EMV ICC System Related Data BER-TLV Builder & Parser in Go** (`pkg/iso8583/de55.go`) — Status: `COMPLETED`
-- **[TASK-GO-024] EMV ARQC Cryptogram Verifier & ARPC Issuer Response Generator in Go** (`pkg/iso8583/cryptogram.go`) — Status: `COMPLETED`
+## Last Completed Batch Summary (Loop 5: Criptografía Bancaria HSM & DUKPT)
+- **[TASK-GO-025] DUKPT ANSI X9.24 Key Derivation and PIN Block Decryption Engine in Go** (`pkg/crypto/dukpt.go`) — Status: `COMPLETED`
+  - ANSI X9.24-1 IPEK derivation, 21-bit shift register transaction session key and PEK variant derivation, 3DES ECB/CBC PIN block decryption, and sensitive buffer zeroization.
+- **[TASK-GO-026] PIN Translation Service from PEK to Switch ZPK in Go** (`pkg/crypto/pin_translation.go`) — Status: `COMPLETED`
+  - ISO 9564-1 Format 0 PIN block translation from terminal PEK to switch ZPK with PAN validation and immediate memory zeroization.
+- **[TASK-GO-027] Payment HSM Client Interface and Software HSM Simulator in Go** (`pkg/crypto/hsm_client.go`) — Status: `COMPLETED`
+  - Thread-safe `PaymentHSM` interface and `SoftwareHSMSimulator` supporting `GenerateZPK`, `TranslatePIN`, `VerifyARQC`, and `GenerateARPC` with `context.Context` cancellation.
 
 ## Validation & Main Branch Status
 - Full backend suite (`go test -v ./...`): PASS (0 issues)
 - Web POS SDK suite (`node --test web/pos/softpos_sdk.test.js`): PASS (0 issues)
-- Auto-push to `origin main`: READY
+- Auto-push to `origin main`: PUSHED
 
-## Next Available Roadmap (Loop 5: Criptografía Bancaria HSM & DUKPT)
-Consulte la especificación completa y lista para ejecución en `docs/NEXT_LOOPS_SPEC.md`:
-- **[TASK-GO-025] DUKPT ANSI X9.24 Key Derivation (BDK / KSN)**
-- **[TASK-GO-026] PIN Translation Service (PEK a ZPK)**
-- **[TASK-GO-027] Payment HSM Client Interface (Thales / Futurex / KMS)**
-- **[Loops 6 y 7] Compensación STEC, Controversias, y Blindaje Android PCI MPoC**
+## Next Available Roadmap (Loop 6: Compensación, Lotes STEC & Controversias)
+Consulte la especificación en `docs/NEXT_LOOPS_SPEC.md`:
+- **[TASK-GO-028] Generador de Lotes STEC / TEF para PROSA / E-Global** (`pkg/clearing/stec.go`)
+- **[TASK-GO-029] Calculadora de Tasa de Intercambio (MIF Banxico / ABM)** (`pkg/clearing/interchange.go`)
+- **[TASK-GO-030] Motor de Contracargos y Reserva Dinámica (*Rolling Reserve*)** (`pkg/disputes/disputes.go`)

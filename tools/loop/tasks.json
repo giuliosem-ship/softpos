@@ -878,6 +878,45 @@
       "test_results": "PASS: ",
       "audit_notes": "### Audit Report: SoftwareHSMSimulator Implementation\n\n#### 1. **Concurrency Safety**\n- **Findings**: The `SoftwareHSMSimulator` uses a read-only lock (`RLock()`) for all its methods. While this prevents write conflicts, it may lead to inefficiencies when multiple goroutines are reading simultaneously. However, the critical sections are properly bounded by `defer s.mu.RUnlock()` after each operation.\n- **Recommendation**: Ensure that future modifications do not introduce mutable state within the simulator as this could cause race conditions if the lock type is changed.\n\n#### 2. **Numerical Precision and Overflow**\n- **Findings**: The code does not involve any monetary calculations or operations that would require handling `int64` cents vs `float`. However, cryptographic functions rely on byte arrays and do not exhibit overflow issues in their current form.\n- **Recommendation**: No immediate action required unless additional numerical operations are introduced.\n\n#### 3. **Regulatory Compliance**\n- **Findings**: The implementation adheres to ANSI X9.24 and ISO 9564 standards but lacks explicit validation for Mexican SAT (CFDI 4.0) or Banxico (SPEI/CoDi) cryptographic requirements.\n- **Recommendation**: Introduce checks to ensure compliance with Mexican regulatory cryptographic standards, particularly for CoDi and SPEI protocols.\n\n#### 4. **Edge Cases and Invariant Violations**\n- **Findings**: The tests cover most scenarios, including concurrent access and context cancellation. However, there is no explicit handling of certain edge cases, such as repeated calls to `GenerateZPK()` producing identical keys or cryptographic function failures.\n- **Recommendation**: Add tests for key entropy validation and handle potential cryptographic errors more gracefully.\n\n#### 5. **Test Coverage**\n- **Findings**: The test suite is comprehensive, including concurrency testing with multiple workers. However, it lacks exhaustive coverage of all possible error paths (e.g., invalid inputs or unexpected states).\n- **Recommendation**: Enhance test cases to cover additional error scenarios and ensure full path coverage.\n\n### Actionable Bullet Points:\n1. **Introduce Mexican Regulatory Compliance Checks**  \n   Add validations for CFDI 4.0, CoDi, and SPEI cryptographic requirements in the `SoftwareHSMSimulator`.\n\n2. **Enhance Error Handling and Logging**  \n   Improve error messages and logging to provide better context when operations fail.\n\n3. **Refactor Locking Mechanism for Future Changes**  \n   Replace `RLock()` with a more flexible mutex approach if mutable state is introduced in future updates.\n\n4. **Expand Test Coverage for Edge Cases**  \n   Include tests for cryptographic entropy, repeated key generation, and additional error conditions.\n\n5. **Review Cryptographic Practices Against Banxico Guidelines**  \n   Ensure all cryptographic operations align with Banxico's standards for financial systems in Mexico.",
       "completed_at": "2026-10-31T21:23:06.814105"
+    },
+    {
+      "id": "TASK-GO-028",
+      "component": "clearing-stec",
+      "title": "STEC / TEF Clearing Batch File Generator for PROSA/E-Global in Go",
+      "status": "completed",
+      "priority": 56,
+      "files": {
+        "tests": "pkg/clearing/stec_test.go",
+        "implementation": "pkg/clearing/stec.go"
+      },
+      "spec": "Implement STEC/TEF clearing batch file generator and parser in Go for Mexican clearinghouses (PROSA/E-Global): fixed-length header, detail records (masked PAN, cent amounts, STAN, auth code, MID, RRN), trailer record with record counts, debit/credit cent sums, and SHA-256 integrity hash.",
+      "test_results": "PASS: ",
+      "audit_notes": "### Audit Report\n\n**1. Numerical Precision & Overflow Safety**\n- **Findings**: \n  - Amounts are stored as `int64`, which prevents floating-point inaccuracies and is appropriate for cent-based transactions.\n  - However, potential integer overflow isn't checked during amount assignment or parsing. For example, converting very large string values to `int64` could cause overflows.\n- **Recommendation**: Add checks for maximum allowed transaction amounts (e.g., up to $9,223,372,036,854,775,807 cents) and handle overflow scenarios gracefully.\n\n**2. Concurrency Safety**\n- **Findings**: \n  - The code doesn't use concurrency primitives like mutexes, assuming single-threaded execution.\n  - Shared state mutations (e.g., batch file modification) aren't synchronized, leading to potential race conditions in concurrent environments.\n- **Recommendation**: Introduce mutex locking around shared state accesses and ensure thread-safety for all public methods modifying the BatchFile struct.\n\n**3. Regulatory Compliance (Mexican SAT/Banxico)**\n- **Findings**: \n  - Proper use of SHA-256 for checksums meets cryptographic requirements.\n  - Network codes are correctly set, but additional fields required by CFDI 4.0 (e.g., UUID, conceptCode) are missing.\n  - Date formatting adheres to \"YYYYMMDD\" but lacks timezone handling, which could affect compliance with Banxico standards.\n- **Recommendation**: Include all mandatory regulatory fields and ensure date-time fields include UTC offsets or time zone information.\n\n**4. Edge Cases & Invariant Violations**\n- **Findings**: \n  - The `ParseBatchFile` function uses `time.Now()` as a fallback for invalid dates, which might not reflect the actual transaction time.\n  - No validation is performed on masked PAN lengths beyond 16 characters, potentially leading to data truncation or incorrect parsing.\n- **Recommendation**: Implement stricter date parsing with error handling and enforce exact field length validations during both generation and parsing.\n\n---\n\n### Summary of Key Issues\n\n- **Integer Overflow Risk**: Ensure amount checks include maximum limits to prevent overflow and handle errors appropriately.\n- **Concurrency Vulnerabilities**: Protect shared state with mutexes or other synchronization mechanisms for thread-safety.\n- **Regulatory Gaps**: Add missing fields (e.g., UUID, conceptCode) and ensure date-time compliance with Banxico standards.\n- **Data Validation Weaknesses**: Strengthen field length checks and handle invalid dates more robustly during parsing.\n\nThese improvements will enhance the system's reliability, security, and regulatory compliance.",
+      "completed_at": "2026-10-31T22:03:49.987079"
+    },
+    {
+      "id": "TASK-GO-029",
+      "component": "clearing-interchange",
+      "title": "Banxico & ABM Multilateral Interchange Fee (MIF) Calculator in Go",
+      "status": "pending",
+      "priority": 57,
+      "files": {
+        "tests": "pkg/clearing/interchange_test.go",
+        "implementation": "pkg/clearing/interchange.go"
+      },
+      "spec": "Implement Banxico/ABM regulated interchange fee calculator in Go: debit fee caps by MCC/category (fuel, supermarkets, schools, general) in basis points, credit fees by card tier (classic, gold, platinum, corporate), 16% IVA calculation with integer half-up rounding, and net merchant payout settlement."
+    },
+    {
+      "id": "TASK-GO-030",
+      "component": "disputes-engine",
+      "title": "Chargeback Dispute Lifecycle & Dynamic Rolling Reserve Engine in Go",
+      "status": "pending",
+      "priority": 58,
+      "files": {
+        "tests": "pkg/disputes/disputes_test.go",
+        "implementation": "pkg/disputes/disputes.go"
+      },
+      "spec": "Implement chargeback dispute lifecycle state machine (OPENED, DOCS_REQUIRED, REPRESENTMENT, WON, LOST) and dynamic rolling reserve engine in Go integrated with double-entry LedgerEngine (blocking available funds to dispute escrow and releasing on WON/LOST)."
     }
   ]
 }

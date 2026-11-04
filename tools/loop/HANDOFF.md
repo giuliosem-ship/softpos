@@ -1,6 +1,6 @@
 # Engineering Loop Handoff Checkpoint
-**Updated at:** 2026-11-01T12:53:00.000000
-**Progress:** 61/61 tasks completed | 0 pending 🎉
+**Updated at:** 2026-11-03T20:48:00.000000
+**Progress:** 61/61 tasks completed | LM Studio & Qwen 2.5 Coder 14B Connector Configured 🎉
 
 ## Recent Git Commits
 ```text
@@ -11,18 +11,22 @@ d53bc34 feat(android-security): Android Window Security Guard & Accessibility Ke
 808d7a6 feat(clearing-interchange): Banxico & ABM Multilateral Interchange Fee (MIF) Calculator in Go [TASK-GO-029]
 ```
 
-## Last Completed Batch Summary (Loop 7: Blindaje Mobile PCI MPoC & Handshake - Android Kotlin)
-- **[AND-20] Window Security Guard & Detección de Accesibilidad** (`WindowSecurityGuard.kt`) — Status: `COMPLETED`
-  - Activación y limpieza de `FLAG_SECURE` en la ventana de cobro para evitar capturas/grabación de pantalla, y escaneo de servicios de accesibilidad no autorizados con capacidad de interceptación de teclado (mitigación de keyloggers de software).
-- **[AND-21] Handshake Cliente Play Integrity** (`PlayIntegrityClient.kt`) — Status: `COMPLETED`
-  - Solicitud y validación de frescura de nonces criptográficos (< 300s), atestación de integridad con Google Play con reintentos y backoff exponencial, y adjunto automático de la cabecera `X-Play-Integrity-Token` para autorizaciones EMV.
-- **[AND-22] Cola Offline Store-and-Forward (SAF) Cifrada** (`StoreAndForwardQueue.kt`) — Status: `COMPLETED`
-  - Encolado seguro con tope regulatorio de $400.00 MXN (40,000 centavos), cifrado simétrico en reposo con AES-256-GCM y despacho ordenado FIFO ante reconexión de red deteniéndose ante fallas para preservar el orden.
+## LM Studio Preset & Qwen 2.5 Coder 14B Integration (Paridad Sabino SAM)
+- **Preset de LM Studio (`~/.lmstudio/config-presets/SoftPOS-Payment-Coder.preset.json`):**
+  - Configurado con `contextLength=16384`, `flashAttention=true`, `offloadRatio=1` (100% GPU en M4 Pro 24 GB).
+  - Parámetros de muestreo determinista: `temperature=0.15`, `min_p=0.05`, `top_p=0.92`, `top_k=20`, `repeat_penalty=1.05`, `max_tokens=4096`.
+  - System Prompt institucional inquebrantable de SoftPOS: Zero-Lazy Coding, aritmética determinista (int64/Long cents sin floats), sanitización de memoria PCI MPoC (`ByteArray.fill(0)`), reglas CVM contactless México ($1,000 MXN vs CDCVM sin límite), y tipado estricto en Go y Kotlin.
+- **Conector Orquestador (`tools/loop/models_manager.py` / `lms_manager.py`):**
+  - Implementación de `LMStudioManager` con gestión secuencial de VRAM (`lms unload --all` antes de cargar modelos de 14B).
+  - Método directo `ask_qwen_coder()` y fallback de esquemas JSON con soporte para streaming y bloques `<think>`.
+  - CLI interactivo `tools/loop/lms_consult.py` para consultas de arquitectura e ingeniería.
+  - Suite de pruebas unitarias `tools/loop/test_lms_qwen_connector.py` (4/4 tests PASS).
 
 ## Validation & Main Branch Status
-- Full backend suite (`go test -v -race ./...`): PASS (0 issues)
+- Full backend suite (`go test -v ./...`): PASS (0 issues)
 - Android test suite (`gradle :app:test`): PASS (79/79 unit tests)
 - Web POS SDK suite (`node --test web/pos/softpos_sdk.test.js`): PASS (7/7 tests)
+- LM Studio connector suite (`python3 tools/loop/test_lms_qwen_connector.py`): PASS (4/4 tests)
 - Auto-push to `origin main`: READY
 
 ## Project Milestones Completed

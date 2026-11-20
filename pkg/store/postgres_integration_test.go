@@ -368,3 +368,104 @@ func TestPGIntegration_MerchantRepositoryErrorMapping(t *testing.T) {
 		t.Fatalf("duplicate CLABE: want ErrDuplicateCLABE, got %v", err)
 	}
 }
+
+func TestPGIntegration_OutboxClaimRetryAndSkipLocked(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	repo := NewSQLOutboxRepository(db)
+
+	for i := 0; i < 20; i++ {
+		tx, _ := db.BeginTx(ctx, nil)
+		if err := repo.SaveEventTx(ctx, tx, "evt", "agg", map[string]int{"i": i}); err != nil {
+			t.Fatalf("SaveEventTx: %v", err)
+		}
+		_ = tx.Commit()
+	}
+
+	// Two concurrent claimers never receive the same event.
+	now := time.Now()
+	type claim struct {
+		evs []OutboxEvent
+		err error
+	}
+	results := make(chan claim, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			evs, err := repo.ClaimDueEvents(ctx, 15, now, time.Minute)
+			results <- claim{evs, err}
+		}()
+	}
+	seen := map[int64]bool{}
+	total := 0
+	for i := 0; i < 2; i++ {
+		c := <-results
+		if c.err != nil {
+			t.Fatalf("ClaimDueEvents: %v", c.err)
+		}
+		for _, ev := range c.evs {
+			if seen[ev.ID] {
+				t.Fatalf("event %d claimed twice", ev.ID)
+			}
+			seen[ev.ID] = true
+			if ev.Status != "PROCESSING" {
+				t.Fatalf("claimed event status %s", ev.Status)
+			}
+		}
+		total += len(c.evs)
+	}
+	if total != 20 {
+		t.Fatalf("expected all 20 events claimed exactly once, got %d", total)
+	}
+	// Live leases: nothing claimable now.
+	if evs, _ := repo.ClaimDueEvents(ctx, 50, now, time.Minute); len(evs) != 0 {
+		t.Fatalf("expected no claimable events while leased, got %d", len(evs))
+	}
+	// Expired lease: reclaimable.
+	if evs, _ := repo.ClaimDueEvents(ctx, 50, time.Now().Add(2*time.Minute), time.Minute); len(evs) != 20 {
+		t.Fatalf("expected 20 reclaimed after lease expiry, got %d", len(evs))
+	}
+
+	var id int64
+	_ = db.QueryRow(`SELECT MIN(id) FROM outbox_events`).Scan(&id)
+	next := time.Now().Add(time.Hour)
+	if err := repo.MarkRetry(ctx, id, "timeout", next); err != nil {
+		t.Fatalf("MarkRetry: %v", err)
+	}
+	var status, lastErr string
+	var retries int
+	var gotNext time.Time
+	_ = db.QueryRow(`SELECT status, retry_count, last_error, next_attempt_at FROM outbox_events WHERE id=$1`, id).Scan(&status, &retries, &lastErr, &gotNext)
+	if status != "PENDING" || retries != 1 || lastErr != "timeout" || gotNext.Sub(next).Abs() > time.Millisecond {
+		t.Fatalf("after MarkRetry: %s %d %s %v", status, retries, lastErr, gotNext)
+	}
+	// Not due before next_attempt_at, due after.
+	for _, ev := range mustClaim(t, repo, time.Now().Add(3*time.Minute)) {
+		if ev.ID == id {
+			t.Fatalf("event claimed before its backoff elapsed")
+		}
+	}
+	found := false
+	for _, ev := range mustClaim(t, repo, next.Add(time.Second)) {
+		found = found || ev.ID == id
+	}
+	if !found {
+		t.Fatalf("event not claimable after backoff")
+	}
+
+	// max_retries reached -> FAILED (dead letter) and never claimed again.
+	_, _ = db.Exec(`UPDATE outbox_events SET retry_count = max_retries - 1, status = 'PENDING' WHERE id = $1`, id)
+	_ = repo.MarkRetry(ctx, id, "final", time.Now())
+	_ = db.QueryRow(`SELECT status FROM outbox_events WHERE id=$1`, id).Scan(&status)
+	if status != "FAILED" {
+		t.Fatalf("expected FAILED after max retries, got %s", status)
+	}
+}
+
+func mustClaim(t *testing.T, repo *SQLOutboxRepository, now time.Time) []OutboxEvent {
+	t.Helper()
+	evs, err := repo.ClaimDueEvents(context.Background(), 100, now, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDueEvents: %v", err)
+	}
+	return evs
+}

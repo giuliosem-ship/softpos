@@ -996,6 +996,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 15/15 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 11/11 PASS incl. TestPGIntegration_StateSurvivesRestart (merchant, CLABE, CSD->CFDI stamp, payments refund/void/duplicate, CoDi rows, monthly sales, ledger balances across rebuild).",
       "audit_notes": "Integers only (int64 cents). RBF loans still in-memory (pkg/rbf out of scope; SQLRBFRepository unwired). Payment transition, ledger post and monthly sales are not one DB transaction yet. CoDi confirmation upsert keeps previous replay semantics (dedupe needs same-tx ledger posting).",
       "priority": 63
+    },
+    {
+      "id": "MVP-03",
+      "component": "outbox-dispatcher",
+      "title": "Run the outbox dispatcher with retry, backoff and graceful shutdown",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/outbox/dispatcher_test.go, cmd/server/outbox_test.go, pkg/store/postgres_integration_test.go",
+        "implementation": "pkg/outbox/dispatcher.go, pkg/store/outbox.go, migrations/004_outbox_dispatch.up.sql, migrations/004_outbox_dispatch.down.sql, cmd/server/main.go, docs/PERSISTENCE.md"
+      },
+      "spec": "pkg/outbox.Dispatcher polls a Source (SQLOutboxRepository) and hands due events to a Publisher (LogPublisher default, NoopPublisher). ClaimDueEvents uses FOR UPDATE SKIP LOCKED + PROCESSING lease (reclaimed after 5m); MarkRetry increments retry_count, stores last_error and schedules next_attempt_at = now + base*2^retry (capped), FAILED at max_retries. Publisher panics become retries. cmd/server starts it when DATABASE_URL is set (OUTBOX_POLL_INTERVAL, OUTBOX_BATCH_SIZE, OUTBOX_PUBLISHER) and stops it after HTTP shutdown; bookkeeping uses context.WithoutCancel so in-flight results are recorded.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok (pkg/outbox 7 tests); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 13/13 PASS incl. SKIP LOCKED concurrent claim, backoff/dead-letter, dispatcher publish+shutdown (outbox tests repeated -count=15, stable); node --test web/pos/softpos_sdk.test.js 7/7; binary smoke test: dispatcher starts/stops on SIGTERM.",
+      "audit_notes": "At-least-once delivery; publishers must dedupe on event ID. No producer enqueues events yet. Legacy FetchPendingEventsWithLock/MarkFailed kept for existing fake-driver tests (they ignore next_attempt_at).",
+      "priority": 64
     }
   ]
 }

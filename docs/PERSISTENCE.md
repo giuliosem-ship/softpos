@@ -59,6 +59,25 @@ Notes:
   transactions; a crash between them can leave them inconsistent (F5 gap
   "errores de posteo ignorados").
 
+## Outbox dispatcher
+
+With a database configured, `cmd/server` starts `pkg/outbox.Dispatcher` in a
+goroutine; on SIGTERM it is stopped after the HTTP server drains.
+
+- `store.SQLOutboxRepository.ClaimDueEvents` claims due events with
+  `FOR UPDATE SKIP LOCKED` and marks them `PROCESSING` (safe with several
+  replicas). Events stuck in `PROCESSING` longer than the lease (5 min) are
+  reclaimed.
+- On publisher error (or panic) `MarkRetry` increments `retry_count`, stores
+  `last_error` and sets `next_attempt_at = now + 1s * 2^retry_count` (capped at
+  5 min, migration 004). At `max_retries` (default 5) the event becomes
+  `FAILED` (dead letter).
+- Delivery is at-least-once: publishers must be idempotent on the event ID.
+- Publishers: `log` (default; logs metadata, never the payload) and `noop`.
+  Real targets implement `outbox.Publisher`.
+- Nothing enqueues events yet (`SaveEventTx` must be called inside the business
+  transaction by later batches).
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -66,6 +85,9 @@ Notes:
 | `DATABASE_URL` | empty (in-memory mode) | e.g. `postgres://user:pass@host:5432/softpos?sslmode=require` |
 | `SQL_DRIVER` | `pgx` | database/sql driver name |
 | `MIGRATIONS_DIR` | empty (embedded) | on-disk migrations override |
+| `OUTBOX_POLL_INTERVAL` | `2s` | dispatcher poll interval (Go duration) |
+| `OUTBOX_BATCH_SIZE` | `50` | events claimed per pass |
+| `OUTBOX_PUBLISHER` | `log` | `log` or `noop` |
 | `TEST_DATABASE_URL` | empty | enables real-Postgres integration tests |
 
 ## Running locally

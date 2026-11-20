@@ -22,6 +22,7 @@ import (
 	"softpos/pkg/api"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
+	"softpos/pkg/outbox"
 	"softpos/pkg/store"
 	"softpos/pkg/stp"
 )
@@ -39,6 +40,11 @@ type Config struct {
 	STPBaseURL        string
 	SeedDemoMerchant  bool
 	StaticDir         string
+
+	// Outbox dispatcher (only runs when DatabaseURL is set).
+	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
+	OutboxBatchSize    int           // OUTBOX_BATCH_SIZE, default 50
+	OutboxPublisher    string        // OUTBOX_PUBLISHER: "log" (default) | "noop"
 }
 
 func LoadConfigFromEnv() Config {
@@ -75,18 +81,38 @@ func LoadConfigFromEnv() Config {
 
 	sqlDriver := store.NormalizeDriverName(os.Getenv("SQL_DRIVER"))
 
+	var outboxPoll time.Duration
+	if val := os.Getenv("OUTBOX_POLL_INTERVAL"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil && d > 0 {
+			outboxPoll = d
+		} else {
+			slog.Warn("invalid OUTBOX_POLL_INTERVAL, using default", "value", val)
+		}
+	}
+	var outboxBatch int
+	if val := os.Getenv("OUTBOX_BATCH_SIZE"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			outboxBatch = n
+		} else {
+			slog.Warn("invalid OUTBOX_BATCH_SIZE, using default", "value", val)
+		}
+	}
+
 	return Config{
-		Port:              port,
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		SQLDriver:         sqlDriver,
-		MigrationsDir:     migrationsDir,
-		RedisAddr:         os.Getenv("REDIS_ADDR"),
-		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
-		VaultMasterKeyHex: os.Getenv("VAULT_MASTER_KEY_HEX"),
-		STPHMACSecret:     hmacSecret,
-		STPBaseURL:        os.Getenv("STP_BASE_URL"),
-		SeedDemoMerchant:  seedDemo,
-		StaticDir:         staticDir,
+		OutboxPollInterval: outboxPoll,
+		OutboxBatchSize:    outboxBatch,
+		OutboxPublisher:    os.Getenv("OUTBOX_PUBLISHER"),
+		Port:               port,
+		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		SQLDriver:          sqlDriver,
+		MigrationsDir:      migrationsDir,
+		RedisAddr:          os.Getenv("REDIS_ADDR"),
+		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
+		VaultMasterKeyHex:  os.Getenv("VAULT_MASTER_KEY_HEX"),
+		STPHMACSecret:      hmacSecret,
+		STPBaseURL:         os.Getenv("STP_BASE_URL"),
+		SeedDemoMerchant:   seedDemo,
+		StaticDir:          staticDir,
 	}
 }
 
@@ -194,6 +220,42 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	return server, db, redisClient, nil
 }
 
+// newOutboxPublisher selects the outbox publisher by name. Real brokers/webhooks
+// plug in here in later batches.
+func newOutboxPublisher(name string) (outbox.Publisher, error) {
+	switch name {
+	case "", "log":
+		return outbox.LogPublisher{}, nil
+	case "noop":
+		return outbox.NoopPublisher{}, nil
+	default:
+		return nil, fmt.Errorf("unknown OUTBOX_PUBLISHER %q (want log|noop)", name)
+	}
+}
+
+// StartOutboxDispatcher launches the outbox dispatcher in a goroutine when a
+// database is configured. It stops when ctx is cancelled; the returned wait
+// function blocks until the dispatcher has exited. With db == nil it is a no-op.
+func StartOutboxDispatcher(ctx context.Context, cfg Config, db *sql.DB) (wait func(), err error) {
+	if db == nil {
+		return func() {}, nil
+	}
+	pub, err := newOutboxPublisher(cfg.OutboxPublisher)
+	if err != nil {
+		return nil, err
+	}
+	d := outbox.NewDispatcher(store.NewSQLOutboxRepository(db), pub, outbox.Config{
+		PollInterval: cfg.OutboxPollInterval,
+		BatchSize:    cfg.OutboxBatchSize,
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = d.Run(ctx)
+	}()
+	return func() { <-done }, nil
+}
+
 func generateSelfSignedCSD() ([]byte, []byte, error) {
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -255,6 +317,14 @@ func main() {
 		}
 	}()
 
+	dispatcherCtx, stopDispatcher := context.WithCancel(context.Background())
+	defer stopDispatcher()
+	waitDispatcher, err := StartOutboxDispatcher(dispatcherCtx, cfg, db)
+	if err != nil {
+		slog.Error("fatal initialization error", "error", err)
+		os.Exit(1)
+	}
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      server.Router(),
@@ -287,6 +357,16 @@ func main() {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			_ = httpServer.Close()
 			slog.Error("graceful shutdown failed, forced close", "error", err)
+		}
+
+		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
+		stopDispatcher()
+		dispatcherDone := make(chan struct{})
+		go func() { waitDispatcher(); close(dispatcherDone) }()
+		select {
+		case <-dispatcherDone:
+		case <-shutdownCtx.Done():
+			slog.Warn("outbox dispatcher did not stop before shutdown deadline")
 		}
 		slog.Info("SoftPOS server shutdown completed successfully")
 	}

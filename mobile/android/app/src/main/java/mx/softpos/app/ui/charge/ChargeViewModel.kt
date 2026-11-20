@@ -115,7 +115,9 @@ class ChargeViewModel(
     private val newIdempotencyKey: () -> String = { UUID.randomUUID().toString() },
     private val newReference: () -> String = { SpeiQrPayload.newReference() },
     private val nowEpochSec: () -> Long = { System.currentTimeMillis() / 1000L },
-    private val poll: PollPolicy = PollPolicy()
+    private val poll: PollPolicy = PollPolicy(),
+    /** Monotonic clock for the poll timeout (requests count, not only the waits). */
+    private val elapsedMs: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : ViewModel() {
     /** Keypad + money preview logic reused from the pure-logic module. */
     private val pos = PosTerminalViewModel()
@@ -217,6 +219,7 @@ class ChargeViewModel(
         var waited = 0L
         var wait = poll.initialDelayMs
         var last: CardPayment? = null
+        val start = elapsedMs()
         while (true) {
             when (val r = withContext(io) { cardApi.getPayment(paymentId) }) {
                 is ApiResult.Success -> {
@@ -225,7 +228,8 @@ class ChargeViewModel(
                 }
                 is ApiResult.Error -> if (r.statusCode == 404) return last
             }
-            if (waited >= poll.timeoutMs) return last
+            // Waits alone under-count: each GET can take up to the HTTP timeout.
+            if (maxOf(waited, elapsedMs() - start) >= poll.timeoutMs) return last
             delay(wait)
             waited += wait
             wait = poll.next(wait)

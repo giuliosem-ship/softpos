@@ -193,6 +193,26 @@ class ChargeViewModelTest {
     }
 
     @Test
+    fun pollTimeoutCountsTheTimeSpentInRequests() = runTest(dispatcher) {
+        val silentTap = object : TapToPayProvider {
+            override val isAvailable = true
+            override suspend fun collect(intent: CardPaymentIntent) = TapToPayOutcome.Approved
+        }
+        var clock = 0L
+        backend.onGet = { clock += 1_500L } // each slow GET takes 1.5 s
+        val vm = ChargeViewModel(
+            cardApi = backend, tapToPay = silentTap, merchantApi = merchant, merchantId = { "mer_1" }, io = dispatcher,
+            newIdempotencyKey = { "key_${++keys}" }, poll = PollPolicy(initialDelayMs = 100, maxDelayMs = 400, timeoutMs = 2_000),
+            elapsedMs = { clock }
+        )
+        vm.type(1, 0, 0)
+        vm.chargeWithCard()
+        advanceUntilIdle()
+        assertTrue(vm.state.value.step is ChargeStep.CardPending)
+        assertEquals(2, backend.getCalls, "1.5 s + 0.1 s + 1.5 s > 2 s")
+    }
+
+    @Test
     fun pollingBacksOffAndTimesOutAsPending() = runTest(dispatcher) {
         // An SDK that "approves" but no webhook ever arrives: the status stays CREATED.
         val silentTap = object : TapToPayProvider {

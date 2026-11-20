@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote G (MVP-17..19) aplicado y auditado
+**Última actualización:** 2026-11-20 — Lotes G (MVP-17..19) y H (AND-33..35) aplicados y auditados
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -194,11 +194,10 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Sin UI real (pantallas restantes) | P0 | M | Desde el Lote F existen login/OTP, saldo/apartado, cobrar, ventas y perfil. Faltan: onboarding KYB (contrato backend listo en el Lote G, `docs/KYB.md`), devoluciones (sobre `POST /api/v1/card-payments/{id}/refunds`), facturar y selector de comercio cuando el usuario tiene varias membresías. |
-| Contrato de cobro de la app desalineado con el backend | P0 | S | La app aún llama al endpoint legacy `/api/v1/payments/emv/authorize` (`SoftPosApiClient`, responde `410` sin `DEV_MODE`) y su `CardPaymentsApi` usa un contrato provisional (`id`, estados en minúsculas). Debe usar `/api/v1/card-payments/*` (campo `card_payment_id`, estados del backend) y consultar `GET /api/v1/card-payments/{id}` hasta `final: true`. (`GET /api/v1/merchants/{id}/sales` existe desde el Lote G.) |
+| Sin UI real (pantallas restantes) | P1 | S | Desde los Lotes F y H existen login/OTP, selector de comercio, onboarding KYB con documentos, saldo/apartado, cobrar (contrato real `/api/v1/card-payments/*`), ventas con paginación, devoluciones (solo `owner`) y perfil. Falta: facturar (CFDI, depende de F8). El selector muestra solo id y rol porque el backend no expone nombres de comercio en las membresías. |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
 | Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
-| Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. Antes de subir a Play: `targetSdk` 36 (hoy 35) y regenerar `gradle-wrapper.jar` para Gradle 8.14.3 con `distributionSha256Sum` en `gradle-wrapper.properties`. |
+| Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. (`targetSdk` 36 y wrapper 8.14.3 con `distributionSha256Sum` resueltos en el Lote H.) |
 | Telemetría y crash reporting | P1 | S | Crashlytics/Sentry sin datos sensibles. |
 
 ### F10 — Devoluciones, cancelaciones y comprobante
@@ -237,7 +236,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 1. **Cadena de fraude cerrada en lo esencial (Lote C):** `settle` toma el monto del pago autorizado y la comisión de la tarifa, el posteo es atómico y exactly-once, las dispersiones van solo a la CLABE de liquidación verificada y las devoluciones revierten apartado y comisión. Queda: verificación real de titularidad de esa CLABE (hoy la marca un operador) y 2FA al cambiarla (ver F6).
 2. **La bóveda CSD ya no usa llave hardcodeada** (Lote C); falta KMS real y re-cifrado al rotar (ver F2).
-3. **La app Android ya es una app (Lote F), pero su cobro con tarjeta no está conectado al flujo real**: sigue llamando al endpoint EMV legacy (`410` sin `DEV_MODE`) y a un contrato provisional en vez de `/api/v1/card-payments/*`, (el endpoint de ventas y el paquete de Play Integrity del backend ya quedaron alineados en el Lote G; ver F9).
+3. **La app Android usa ya el contrato real de cobro (Lote H)**, pero sin SDK de Tap to Pay de un procesador real no puede cobrar con tarjeta fuera de `DEV_MODE` (ver F3/F9).
 4. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks. Para el procesador, el flujo backend completo (intent, webhooks firmados, devoluciones, contracargos, conciliación) ya existe sobre el puerto `acquirer.Provider` (Lote E); falta el adaptador real.
 
 ---

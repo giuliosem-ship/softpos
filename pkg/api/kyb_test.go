@@ -389,3 +389,32 @@ func TestKYB_ClientPersonaMoralIsIgnored(t *testing.T) {
 		t.Fatalf("persona moral must be server-derived, got %+v", cp)
 	}
 }
+
+// Audit (batch G): RBF origination credits the merchant's AVAILABLE balance,
+// so it is a money route: never for a not-approved merchant, and never
+// self-served by the owner (who could mint a fee-free "loan" and pay it out).
+func TestKYB_RBFOriginationIsGatedAndNotSelfServed(t *testing.T) {
+	s, _ := setupTestServer(t)
+	draft := "m_kyb_rbf_draft"
+	draftMerchant(t, s, draft)
+	loan := func(m string, role auth.Role) *httptest.ResponseRecorder {
+		return serve(s, asRole(t, s, m, role, jsonReq(http.MethodPost, "/api/v1/rbf/loans",
+			map[string]any{"merchant_id": m, "principal_cents": 10_000_000, "fixed_fee_bps": 0, "holdback_bps": 100})))
+	}
+	if rec := loan(draft, auth.RoleOperator); rec.Code != http.StatusForbidden || !contains(rec.Body.String(), "MERCHANT_NOT_APPROVED") {
+		t.Fatalf("loan for a not-approved merchant: want 403 MERCHANT_NOT_APPROVED, got %d %s", rec.Code, rec.Body.String())
+	}
+	approved := "m_kyb_rbf_ok"
+	if err := s.RegisterMerchant(approved, "GARM850101ABC", "RBF ok", true); err != nil {
+		t.Fatal(err)
+	}
+	if rec := loan(approved, auth.RoleOwner); rec.Code != http.StatusForbidden {
+		t.Fatalf("owner self-originated loan: want 403, got %d %s", rec.Code, rec.Body.String())
+	}
+	if bal, err := s.ledger.GetBalance("LIABILITY:MERCHANT:" + approved + ":AVAILABLE"); err == nil && bal.AmountCents != 0 {
+		t.Fatalf("refused loan must not credit the merchant, balance %d", bal.AmountCents)
+	}
+	if rec := loan(approved, auth.RoleOperator); rec.Code != http.StatusCreated {
+		t.Fatalf("operator loan for an approved merchant: want 201, got %d %s", rec.Code, rec.Body.String())
+	}
+}

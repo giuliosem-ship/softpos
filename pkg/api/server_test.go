@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"softpos/pkg/auth"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/pac"
@@ -712,7 +713,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 		HoldbackBps:    2000,
 	})
 	recOrig := httptest.NewRecorder()
-	server.Router().ServeHTTP(recOrig, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/rbf/loans", bytes.NewReader(origBody))))
+	server.Router().ServeHTTP(recOrig, asRole(t, server, merchantID, auth.RoleOperator, httptest.NewRequest(http.MethodPost, "/api/v1/rbf/loans", bytes.NewReader(origBody))))
 	if recOrig.Code != http.StatusCreated {
 		t.Fatalf("expected 201 on RBF origination, got %d: %s", recOrig.Code, recOrig.Body.String())
 	}

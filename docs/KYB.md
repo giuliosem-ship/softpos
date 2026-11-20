@@ -3,7 +3,8 @@
 A merchant is created by its owner (`POST /api/v1/merchants`, see
 `docs/AUTH.md`) and starts with a **DRAFT** onboarding. Until an operator
 approves it, the merchant **cannot move money**: card intents and refunds,
-CoDi / SPEI QR codes, payouts and the legacy EMV endpoints answer `403
+CoDi / SPEI QR codes, payouts, RBF loan origination and the legacy EMV
+endpoints answer `403
 MERCHANT_NOT_APPROVED` (a blocked merchant answers `403 MERCHANT_BLOCKED`,
 see `docs/BACKOFFICE.md`). Inbound money that still arrives (STP abonos,
 processor webhooks) is recorded; it is never rejected.

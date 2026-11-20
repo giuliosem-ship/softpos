@@ -51,11 +51,14 @@ func (s *Server) HandleOriginateRBFLoan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	// Origination credits the merchant's AVAILABLE balance: a money route
+	// (approved, not blocked merchant) decided by a Kerno operator, never
+	// self-served by the owner.
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
-	if !requireRole(w, r, auth.RoleOwner, auth.RoleOperator) {
+	if !requireRole(w, r, auth.RoleOperator) {
 		return
 	}
 	req.MerchantID = tenant

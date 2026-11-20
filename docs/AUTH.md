@@ -131,8 +131,9 @@ Rules for protected handlers:
   payments stay open to cashiers); `POST
   /api/v1/merchants/{id}/settlement-account/verify` requires `operator` (or the
   owner in `DEV_MODE`, for the demo); `/api/v1/backoffice/*` requires a
-  platform operator (`docs/BACKOFFICE.md`); `POST /api/v1/rbf/loans` requires `owner`
-  or `operator`; other tenant routes accept any member. See
+  platform operator (`docs/BACKOFFICE.md`); `POST /api/v1/rbf/loans` requires `operator`
+  (never the owner: origination credits the balance) and an approved, not
+  blocked merchant; other tenant routes accept any member. See
   `docs/MONEY_FLOWS.md`.
 - `POST /api/v1/merchants` requires a token of an existing user; the **server
   generates the id** (`mer_…`; a client `id` is ignored), validates the RFC

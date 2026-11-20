@@ -139,11 +139,15 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Sign and dispatch outbound order via STP registraOrden client
+	// 4. Sign and dispatch outbound order via STP registraOrden client. The
+	// call is detached from the client connection: a disconnect must not
+	// abort an order that may already have reached STP.
 	s.mu.RLock()
 	stpClient := s.stpClient
 	s.mu.RUnlock()
-	stpResp, err := stpClient.RegisterOrder(ctx, stp.STPOrderRequest{
+	dctx, cancelDispatch := context.WithTimeout(context.WithoutCancel(ctx), stpDispatchTimeout)
+	defer cancelDispatch()
+	stpResp, err := stpClient.RegisterOrder(dctx, stp.STPOrderRequest{
 		ClaveRastreo:        claveRastreo,
 		FechaOperacion:      now.Format("20060102"),
 		AmountCents:         req.AmountCents,
@@ -152,8 +156,41 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		RfcCurpBeneficiario: merchant.RFC,
 		ConceptoPago:        req.Concept,
 	})
+	if err != nil && dispatchOutcomeUnknown(err) {
+		// The order may have been registered (timeout, reset, 5xx): returning
+		// the funds could pay the merchant twice. Keep the reservation and
+		// leave it to CEP/STP reconciliation.
+		cctx := context.WithoutCancel(ctx)
+		if eerr := s.moneyStore().InTx(cctx, func(tx store.MoneyTx) error {
+			return tx.EnqueueEvent(cctx, "disbursement.dispatch_unknown", claveRastreo, map[string]any{
+				"clave_rastreo": claveRastreo, "merchant_id": tenant, "amount_cents": req.AmountCents, "error": err.Error(),
+			})
+		}); eerr != nil {
+			slog.Error("disbursement dispatch outcome unknown and event not recorded", "clave_rastreo", claveRastreo, "error", eerr)
+		}
+		slog.Error("disbursement dispatch outcome unknown; funds stay reserved pending reconciliation", "clave_rastreo", claveRastreo, "error", err)
+		s.cepReconciler.TrackDisbursement(stp.DisbursementRecord{
+			ClaveRastreo:          claveRastreo,
+			MerchantID:            tenant,
+			AmountCents:           req.AmountCents,
+			DestinationCLABE:      acct.CLABE,
+			BeneficiaryName:       beneficiary,
+			Concept:               req.Concept,
+			FechaOperacion:        now.Format("20060102"),
+			Status:                stp.StatusPendingCEP,
+			RemainingBalanceCents: remaining,
+			CreatedAt:             now,
+		})
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":        "PENDING_RECONCILIATION",
+			"clave_rastreo": claveRastreo,
+			"amount_cents":  req.AmountCents,
+		})
+		return
+	}
 	if err != nil {
-		// Compensate the reservation; if even that fails the journal stays and
+		// Definitive rejection (STP answered, or the order never left):
+		// compensate the reservation; if even that fails the journal stays and
 		// must be resolved by reconciliation (logged loudly).
 		cctx := context.WithoutCancel(ctx)
 		dispatchErr := err
@@ -200,6 +237,17 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		RemainingBalanceCents: remaining,
 		Timestamp:             now.Format(time.RFC3339),
 	})
+}
+
+// stpDispatchTimeout bounds a registraOrden call detached from the request.
+const stpDispatchTimeout = 30 * time.Second
+
+// dispatchOutcomeUnknown reports whether a registraOrden error leaves it
+// unknown whether STP registered the order (transport failure after sending,
+// timeout, 5xx, unreadable response). Rejections and validation/signing
+// errors are definitive.
+func dispatchOutcomeUnknown(err error) bool {
+	return errors.Is(err, stp.ErrSTPNetworkError) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func (s *Server) HandleGetDisbursement(w http.ResponseWriter, r *http.Request) {

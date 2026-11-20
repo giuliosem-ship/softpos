@@ -130,10 +130,20 @@ always the registered account; `destination_clabe`, if sent, must equal it
    check balance ≥ amount (`400 INSUFFICIENT_FUNDS`), post `disb_<clave>` (Dr
    `AVAILABLE`, Cr `ASSET:STP_CONCENTRATOR`), outbox `disbursement.requested`.
    Concurrent payouts serialize on the account lock and cannot overdraw.
-2. `registraOrden` to STP outside the transaction.
-3. Dispatch error → compensating journal `disb_rev_<clave>` (reverse
-   entries) + outbox `disbursement.failed` in a new transaction, `502`. If the
+2. `registraOrden` to STP outside the transaction, detached from the client
+   connection (30 s timeout): a disconnect cannot abort an order in flight.
+3. Definitive failure (STP rejected the order, or it never left: validation /
+   signing) → compensating journal `disb_rev_<clave>` (reverse entries) +
+   outbox `disbursement.failed` in a new transaction, `502`. If the
    compensation itself fails it is logged for manual reconciliation.
+4. Unknown outcome (`stp.ErrSTPNetworkError`: timeout, reset, 5xx, unreadable
+   response) → **no compensation** (STP may have paid; returning the funds
+   would allow a double withdrawal): the reservation stays, outbox
+   `disbursement.dispatch_unknown`, the payout is tracked for CEP
+   reconciliation, `202 PENDING_RECONCILIATION`.
+5. A crash between the debit commit and the STP call leaves the funds reserved
+   with only `disbursement.requested` in the outbox; there is no dispatcher
+   that re-sends or releases it yet (manual reconciliation).
 
 ## Not covered yet
 

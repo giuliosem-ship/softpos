@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -255,5 +256,64 @@ func TestRefund_OwnerOnlyByDefaultAndIdempotent(t *testing.T) {
 	}
 	if got := len(memEvents(t, s, "payment.refunded")); got != 1 {
 		t.Fatalf("retry must not refund twice, events=%d", got)
+	}
+}
+
+// ambiguousSTP fails after the order may already have reached STP (timeout,
+// connection reset, 5xx): the outcome is unknown.
+type ambiguousSTP struct{}
+
+func (ambiguousSTP) RegisterOrder(context.Context, stp.STPOrderRequest) (*stp.STPOrderResponse, error) {
+	return nil, fmt.Errorf("%w: read: connection reset by peer", stp.ErrSTPNetworkError)
+}
+
+func TestDisbursement_AmbiguousDispatchKeepsReservation(t *testing.T) {
+	s, _ := setupTestServer(t)
+	const m = "merch_payout_ambiguous"
+	_ = s.RegisterMerchant(m, "GARM850101ABC", "M", true)
+	_ = s.SeedVerifiedSettlementAccount(context.Background(), m, settlementCLABE)
+	fundMerchant(t, s, m, 50000)
+	s.SetSTPClient(ambiguousSTP{})
+	rec := serve(s, asTenant(t, s, m, jsonReq("POST", "/api/v1/disbursements", map[string]any{"amount_cents": 20000})))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "PENDING_RECONCILIATION") {
+		t.Fatalf("want 202 PENDING_RECONCILIATION, got %d %s", rec.Code, rec.Body.String())
+	}
+	// STP may have paid: returning the funds would let the merchant withdraw twice.
+	if got := availableCents(t, s, m); got != 30000 {
+		t.Fatalf("funds must stay reserved until reconciliation, available=%d", got)
+	}
+	if len(memEvents(t, s, "disbursement.failed")) != 0 || len(memEvents(t, s, "disbursement.dispatch_unknown")) != 1 {
+		t.Fatalf("expected dispatch_unknown and no failed event")
+	}
+}
+
+// cancelingSTP emulates the client disconnecting while registraOrden is in
+// flight: it cancels the request context and fails if that aborts the call.
+type cancelingSTP struct{ cancel context.CancelFunc }
+
+func (c cancelingSTP) RegisterOrder(ctx context.Context, o stp.STPOrderRequest) (*stp.STPOrderResponse, error) {
+	c.cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", stp.ErrSTPNetworkError, err)
+	}
+	return &stp.STPOrderResponse{STPOrderID: 7, ClaveRastreo: o.ClaveRastreo}, nil
+}
+
+func TestDisbursement_ClientDisconnectDoesNotAbortDispatch(t *testing.T) {
+	s, _ := setupTestServer(t)
+	const m = "merch_payout_cancel"
+	_ = s.RegisterMerchant(m, "GARM850101ABC", "M", true)
+	_ = s.SeedVerifiedSettlementAccount(context.Background(), m, settlementCLABE)
+	fundMerchant(t, s, m, 50000)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.SetSTPClient(cancelingSTP{cancel: cancel})
+	req := asTenant(t, s, m, jsonReq("POST", "/api/v1/disbursements", map[string]any{"amount_cents": 20000}))
+	rec := serve(s, req.WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dispatch must not depend on the client connection: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := availableCents(t, s, m); got != 30000 {
+		t.Fatalf("available=%d", got)
 	}
 }

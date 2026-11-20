@@ -9,7 +9,6 @@ object KybValidators {
     )
     private val EMAIL = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$")
     private val POSTAL_CODE = Regex("^\\d{5}$")
-    private val TAX_REGIME = Regex("^\\d{3}$")
     private val MCC = Regex("^\\d{4}$")
 
     fun isValidRfc(rfc: String) = KybOnboardingPresenter.isValidRfc(rfc)
@@ -17,7 +16,13 @@ object KybValidators {
     fun isValidCurp(curp: String) = CURP.matches(curp.trim().uppercase())
     fun isValidEmail(email: String) = EMAIL.matches(email.trim())
     fun isValidPostalCode(cp: String) = POSTAL_CODE.matches(cp.trim())
-    /** SAT c_RegimenFiscal, e.g. 626 (RESICO), 612, 601. */
-    fun isValidTaxRegime(code: String) = TAX_REGIME.matches(code.trim())
+    /**
+     * Backend `kyb.TaxRegime` values (pkg/kyb knownRegimes), not the SAT numeric
+     * c_RegimenFiscal key. Only RESICO_PF passes the submission checks in the MVP;
+     * the others are accepted by PUT and rejected at submit (UNSUPPORTED_TAX_REGIME).
+     */
+    const val RESICO_PF = "RESICO_PF"
+    val TAX_REGIMES = listOf(RESICO_PF, "RESICO_PM", "ACTIVIDAD_EMPRESARIAL_PF", "PLATAFORMAS_TECNOLOGICAS_PF", "GENERAL_PM", "OTHER")
+    fun isValidTaxRegime(code: String) = code.trim() in TAX_REGIMES
     fun isValidMcc(mcc: String) = MCC.matches(mcc.trim())
 }

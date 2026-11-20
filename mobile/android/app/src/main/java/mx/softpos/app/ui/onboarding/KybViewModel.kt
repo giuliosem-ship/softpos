@@ -38,7 +38,7 @@ data class KybForm(
     val legalName: String = "",
     val rfc: String = "",
     val curp: String = "",
-    val taxRegime: String = "",
+    val taxRegime: String = KybValidators.RESICO_PF,
     val mcc: String = "",
     val street: String = "",
     val extNumber: String = "",

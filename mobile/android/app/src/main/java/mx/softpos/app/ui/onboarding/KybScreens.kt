@@ -6,6 +6,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +65,7 @@ fun KybScreen(viewModel: KybViewModel, reader: DocumentReader, onDone: () -> Uni
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun KybFormView(state: KybUiState, vm: KybViewModel) {
     val f = state.form
@@ -70,9 +74,17 @@ private fun KybFormView(state: KybUiState, vm: KybViewModel) {
     KybTextField(R.string.kyb_legal_name, f.legalName, KybField.LEGAL_NAME in errors) { v -> vm.onFormChange { it.copy(legalName = v) } }
     KybTextField(R.string.kyb_rfc, f.rfc, KybField.RFC in errors, errorText = R.string.kyb_rfc_error) { v -> vm.onFormChange { it.copy(rfc = v) } }
     KybTextField(R.string.kyb_curp, f.curp, KybField.CURP in errors, errorText = R.string.kyb_curp_error) { v -> vm.onFormChange { it.copy(curp = v) } }
-    KybTextField(R.string.kyb_tax_regime, f.taxRegime, KybField.TAX_REGIME in errors, errorText = R.string.kyb_tax_regime_error, keyboard = KeyboardType.Number) { v ->
-        vm.onFormChange { it.copy(taxRegime = v.filter(Char::isDigit).take(3)) }
+    Text(stringResource(R.string.kyb_tax_regime), style = MaterialTheme.typography.titleSmall)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KybValidators.TAX_REGIMES.forEach { regime ->
+            FilterChip(
+                selected = f.taxRegime == regime,
+                onClick = { vm.onFormChange { it.copy(taxRegime = regime) } },
+                label = { Text(stringResource(taxRegimeLabel(regime))) }
+            )
+        }
     }
+    if (KybField.TAX_REGIME in errors) Text(stringResource(R.string.kyb_tax_regime_error), color = MaterialTheme.colorScheme.error)
     KybTextField(R.string.kyb_mcc, f.mcc, KybField.MCC in errors, errorText = R.string.kyb_mcc_error, keyboard = KeyboardType.Number) { v ->
         vm.onFormChange { it.copy(mcc = v.filter(Char::isDigit).take(4)) }
     }
@@ -101,6 +113,15 @@ private fun KybFormView(state: KybUiState, vm: KybViewModel) {
         Text(stringResource(R.string.kyb_save_continue))
     }
     if (state.isBusy) CircularProgressIndicator()
+}
+
+private fun taxRegimeLabel(regime: String): Int = when (regime) {
+    KybValidators.RESICO_PF -> R.string.kyb_regime_resico_pf
+    "RESICO_PM" -> R.string.kyb_regime_resico_pm
+    "ACTIVIDAD_EMPRESARIAL_PF" -> R.string.kyb_regime_actividad_empresarial
+    "PLATAFORMAS_TECNOLOGICAS_PF" -> R.string.kyb_regime_plataformas
+    "GENERAL_PM" -> R.string.kyb_regime_general_pm
+    else -> R.string.kyb_regime_other
 }
 
 @Composable

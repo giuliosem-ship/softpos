@@ -144,8 +144,14 @@
     <string name="kyb_rfc_error">RFC inválido: 12 caracteres (moral) o 13 (física).</string>
     <string name="kyb_curp">CURP (persona física, opcional)</string>
     <string name="kyb_curp_error">CURP inválida: revisa los 18 caracteres.</string>
-    <string name="kyb_tax_regime">Régimen fiscal (clave SAT, ej. 626)</string>
-    <string name="kyb_tax_regime_error">Escribe la clave de 3 dígitos.</string>
+    <string name="kyb_tax_regime">Régimen fiscal</string>
+    <string name="kyb_tax_regime_error">Elige tu régimen fiscal.</string>
+    <string name="kyb_regime_resico_pf">RESICO persona física (626)</string>
+    <string name="kyb_regime_resico_pm">RESICO persona moral</string>
+    <string name="kyb_regime_actividad_empresarial">Actividad empresarial (612)</string>
+    <string name="kyb_regime_plataformas">Plataformas tecnológicas</string>
+    <string name="kyb_regime_general_pm">General de ley persona moral (601)</string>
+    <string name="kyb_regime_other">Otro</string>
     <string name="kyb_mcc">Giro (MCC, 4 dígitos)</string>
     <string name="kyb_mcc_error">Escribe el código de 4 dígitos.</string>
     <string name="kyb_address">Domicilio fiscal</string>

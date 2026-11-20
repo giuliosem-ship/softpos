@@ -57,7 +57,7 @@ class KybViewModelTest {
     private fun vm(role: String = "owner") = KybViewModel(api, { "mer_1" }, { role }, dispatcher).also { it.load() }
 
     private val validForm = KybForm(
-        legalName = "Juan Pérez", rfc = "pepj800101ab1", curp = "PEPJ800101HDFRRN09", taxRegime = "626", mcc = "5812",
+        legalName = "Juan Pérez", rfc = "pepj800101ab1", curp = "PEPJ800101HDFRRN09", taxRegime = "RESICO_PF", mcc = "5812",
         street = "Reforma", extNumber = "10", neighborhood = "Juárez", city = "Cuauhtémoc", state = "CDMX",
         postalCode = "06600", email = "juan@tacos.mx", phone = "55 1234 5678"
     )
@@ -149,6 +149,19 @@ class KybViewModelTest {
         val missing = vm()
         assertEquals(KybStep.STATUS, missing.state.value.step)
         assertEquals(mx.softpos.app.ui.onboarding.KybError.NOT_AVAILABLE, missing.state.value.error)
+    }
+
+    @Test
+    fun taxRegimeUsesTheBackendEnumNotTheSatNumericKey() {
+        // pkg/kyb knownRegimes: the PUT is rejected (400 INVALID_KYB_DATA tax_regime) for "626".
+        assertEquals(listOf("RESICO_PF", "RESICO_PM", "ACTIVIDAD_EMPRESARIAL_PF", "PLATAFORMAS_TECNOLOGICAS_PF", "GENERAL_PM", "OTHER"), KybValidators.TAX_REGIMES)
+        assertFalse(KybValidators.isValidTaxRegime("626"))
+        assertTrue(KybValidators.isValidTaxRegime("RESICO_PF"))
+        assertEquals("RESICO_PF", KybForm().taxRegime, "the only regime the MVP supports is preselected")
+        val vm = vm()
+        vm.onFormChange { validForm }
+        vm.saveForm()
+        assertEquals("RESICO_PF", api.saved?.taxRegime)
     }
 
     @Test

@@ -30,7 +30,8 @@ database dump alone cannot brute-force the 6-digit codes.
    interval returns `429 OTP_RATE_LIMITED` + `Retry-After`. Invalid phone → `400 INVALID_PHONE`.
 2. `POST /api/v1/auth/otp/verify {"phone","code","merchant_id"?}` → `200` token pair.
    Each attempt is counted atomically *before* comparing (constant-time);
-   after `OTP max attempts` the challenge is deleted (`429 OTP_LOCKED`).
+   after `OTP max attempts` the challenge stays locked (`429 OTP_LOCKED`) until
+   a new code is requested, which still waits out the resend interval.
    Wrong/expired/used code → `401 OTP_INVALID`. The code is single-use.
    Tenant selection: `merchant_id` if given (must be a membership, else
    `403 NOT_A_MERCHANT_MEMBER`); otherwise the only membership; otherwise no

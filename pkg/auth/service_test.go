@@ -138,9 +138,9 @@ func TestOTP_InvalidPhoneExpiryAttemptsAndResend(t *testing.T) {
 	if _, err := svc.VerifyOTP(ctx, phone, code, ""); !errors.Is(err, auth.ErrOTPLocked) {
 		t.Fatalf("want ErrOTPLocked, got %v", err)
 	}
-	// Challenge is gone after lockout.
-	if _, err := svc.VerifyOTP(ctx, phone, code, ""); !errors.Is(err, auth.ErrOTPInvalid) {
-		t.Fatalf("after lockout: want ErrOTPInvalid, got %v", err)
+	// The challenge stays locked until it expires or a new code is requested.
+	if _, err := svc.VerifyOTP(ctx, phone, code, ""); !errors.Is(err, auth.ErrOTPLocked) {
+		t.Fatalf("after lockout: want ErrOTPLocked, got %v", err)
 	}
 }
 
@@ -297,5 +297,41 @@ func TestAccessToken_ExpiryAndTampering(t *testing.T) {
 	clk.Advance(auth.DefaultAccessTTL + time.Second)
 	if _, err := svc.ParseAccessToken(tok); !errors.Is(err, auth.ErrTokenExpired) {
 		t.Fatalf("want ErrTokenExpired, got %v", err)
+	}
+}
+
+// A lockout must not reset the resend throttle: otherwise an attacker gets a
+// fresh code (and 5 more guesses) immediately after every lockout.
+func TestOTP_LockoutKeepsResendThrottle(t *testing.T) {
+	svc, _, sender, clk := newService(t)
+	ctx := context.Background()
+	phone := "+525544445555"
+	if _, err := svc.RequestOTP(ctx, phone); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := sender.LastCode(phone)
+	wrong := "000000"
+	if wrong == code {
+		wrong = "111111"
+	}
+	for i := 0; i < auth.DefaultOTPMaxAttempts; i++ {
+		_, _ = svc.VerifyOTP(ctx, phone, wrong, "")
+	}
+	if _, err := svc.VerifyOTP(ctx, phone, code, ""); !errors.Is(err, auth.ErrOTPLocked) {
+		t.Fatalf("want ErrOTPLocked, got %v", err)
+	}
+	if _, err := svc.RequestOTP(ctx, phone); !errors.Is(err, auth.ErrOTPRateLimited) {
+		t.Fatalf("resend right after lockout: want ErrOTPRateLimited, got %v", err)
+	}
+	if _, err := svc.VerifyOTP(ctx, phone, code, ""); !errors.Is(err, auth.ErrOTPLocked) {
+		t.Fatalf("locked challenge must stay locked, got %v", err)
+	}
+	clk.Advance(auth.DefaultOTPResendInterval + time.Second)
+	if _, err := svc.RequestOTP(ctx, phone); err != nil {
+		t.Fatalf("resend after interval: %v", err)
+	}
+	code, _ = sender.LastCode(phone)
+	if _, err := svc.VerifyOTP(ctx, phone, code, ""); err != nil {
+		t.Fatalf("fresh code after lockout: %v", err)
 	}
 }

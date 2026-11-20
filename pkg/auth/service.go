@@ -184,7 +184,8 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, code, merchantID string)
 		return TokenPair{}, ErrOTPInvalid
 	}
 	if attempts > s.cfg.OTPMaxAttempts {
-		_, _ = s.repo.DeleteOTPChallenge(ctx, phone)
+		// Keep the locked challenge: deleting it would also drop LastSentAt and
+		// let RequestOTP issue a fresh code (5 more guesses) immediately.
 		return TokenPair{}, ErrOTPLocked
 	}
 	if !hmac.Equal([]byte(s.hashOTP(phone, code)), []byte(ch.CodeHash)) {

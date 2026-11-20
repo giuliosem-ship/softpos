@@ -2,4 +2,27 @@
 <resources>
     <string name="app_name">Kerno</string>
     <string name="app_tagline">Cobra con tu celular</string>
+
+    <!-- Errores comunes -->
+    <string name="error_network">Sin conexión. Revisa tu internet e inténtalo de nuevo.</string>
+    <string name="error_unknown">Algo salió mal. Inténtalo de nuevo.</string>
+    <string name="action_retry">Reintentar</string>
+
+    <!-- Inicio de sesión -->
+    <string name="login_phone_label">Número celular</string>
+    <string name="login_phone_hint">10 dígitos</string>
+    <string name="login_send_code">Enviar código</string>
+    <string name="login_code_sent_to">Te enviamos un código a %1$s</string>
+    <string name="login_code_label">Código de 6 dígitos</string>
+    <string name="login_verify">Entrar</string>
+    <string name="login_change_phone">Cambiar número</string>
+    <string name="login_error_invalid_phone">Escribe un celular de 10 dígitos.</string>
+    <string name="login_error_code_format">El código tiene 6 dígitos.</string>
+    <string name="login_error_rate_limited">Espera un minuto antes de pedir otro código.</string>
+    <string name="login_error_otp_invalid">Código incorrecto o vencido.</string>
+    <string name="login_error_otp_locked">Demasiados intentos. Pide un código nuevo.</string>
+
+    <!-- Sesión -->
+    <string name="session_signed_in">Sesión iniciada</string>
+    <string name="action_logout">Cerrar sesión</string>
 </resources>

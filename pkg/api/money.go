@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"math/bits"
 	"time"
 
 	"softpos/pkg/payments"
@@ -17,9 +18,16 @@ func bpsHalfUp(amountCents, bps int64) int64 {
 	return (amountCents*bps + 5000) / 10000
 }
 
-// ratioHalfUp returns value * num / den rounded half-up (den > 0, non-negative inputs).
+// ratioHalfUp returns value * num / den rounded half-up (den > 0, non-negative
+// inputs, num <= den). The product is computed in 128 bits: value * num
+// overflows int64 for amounts above ~30M MXN (EMV amounts reach 12 digits).
 func ratioHalfUp(value, num, den int64) int64 {
-	return (value*num*2 + den) / (den * 2)
+	hi, lo := bits.Mul64(uint64(value), uint64(num))
+	q, rem := bits.Div64(hi, lo, uint64(den)) // hi < den because num <= den
+	if rem >= uint64(den)-rem {               // rem*2 >= den, without overflow
+		q++
+	}
+	return int64(q)
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }

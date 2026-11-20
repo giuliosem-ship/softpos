@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	_ "softpos/pkg/store" // register mockpostgres driver
 )
@@ -39,6 +41,7 @@ func TestBuildServer_InMemoryAndMockDB(t *testing.T) {
 		Port:             8080,
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
+		JWTSecret:        testJWTSecret,
 	}
 	srvMem, dbMem, rdMem, err := BuildServer(ctx, cfgMem)
 	if err != nil {
@@ -70,6 +73,7 @@ func TestBuildServer_InMemoryAndMockDB(t *testing.T) {
 		MigrationsDir:    tmpDir,
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
+		JWTSecret:        testJWTSecret,
 	}
 	srvSQL, dbSQL, _, err := BuildServer(ctx, cfgSQL)
 	if err != nil {
@@ -100,6 +104,7 @@ func TestServerLifecycle_GracefulShutdown(t *testing.T) {
 		Port:             0, // ephemeral
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
+		JWTSecret:        testJWTSecret,
 	}
 
 	srv, _, _, err := BuildServer(ctx, cfg)
@@ -118,5 +123,30 @@ func TestServerLifecycle_GracefulShutdown(t *testing.T) {
 
 	if res.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", res.StatusCode)
+	}
+}
+
+const testJWTSecret = "cmd_server_test_jwt_secret_32_bytes_min"
+
+func TestBuildServer_RequiresJWTSecretUnlessDevMode(t *testing.T) {
+	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret"}); !errors.Is(err, ErrMissingJWTSecret) {
+		t.Fatalf("expected ErrMissingJWTSecret, got %v", err)
+	}
+	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", DevMode: true}); err != nil {
+		t.Fatalf("DEV_MODE without JWT_SECRET must boot with an ephemeral secret, got %v", err)
+	}
+	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: "too_short"}); err == nil {
+		t.Fatal("short JWT secret must be rejected")
+	}
+}
+
+func TestLoadConfigFromEnv_AuthSettings(t *testing.T) {
+	t.Setenv("DEV_MODE", "true")
+	t.Setenv("JWT_SECRET", testJWTSecret)
+	t.Setenv("AUTH_ACCESS_TTL", "5m")
+	t.Setenv("AUTH_REFRESH_TTL", "bogus")
+	cfg := LoadConfigFromEnv()
+	if !cfg.DevMode || cfg.JWTSecret != testJWTSecret || cfg.AuthAccessTTL != 5*time.Minute || cfg.AuthRefreshTTL != 0 {
+		t.Fatalf("unexpected auth config: %+v", cfg)
 	}
 }

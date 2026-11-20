@@ -36,6 +36,7 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		SQLDriver:     "pgx",
 		DatabaseURL:   pgtest.URL(t),
 		STPHMACSecret: "test_secret",
+		JWTSecret:     testJWTSecret,
 	}
 	const (
 		merchantID = "merch_restart_01"

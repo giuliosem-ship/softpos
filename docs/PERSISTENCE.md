@@ -45,6 +45,7 @@ same interfaces use in-memory implementations.
 | CoDi requests / confirmations | `payments.CoDiRepository` | `store.SQLCoDiRepository` (`codi_requests`, `codi_confirmations`) | maps inside `payments.CoDiService` |
 | Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |
 | SAT 69-B blacklist | `identity` repository | `store.SQLBlacklistRepository` | map |
+| Users, memberships, OTP challenges, refresh tokens (`docs/AUTH.md`) | `auth.Repository` | `store.SQLAuthRepository` (migration 005) | `auth.MemoryRepository` |
 
 Notes:
 - The raw EMV TLV payload is **not** stored (it can contain the clear PAN /

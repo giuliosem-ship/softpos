@@ -32,6 +32,7 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 		VaultMasterKeyHex: "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
 		STPHMACSecret:     "prod_stp_hmac_secret_very_long_and_random_string_xyz",
 		SeedDemoMerchant:  false,
+		JWTSecret:         "prod_jwt_secret_with_at_least_32_random_bytes",
 	}
 
 	// 1. Valid production config passes
@@ -65,5 +66,19 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 	badSeedCfg.SeedDemoMerchant = true
 	if err := ValidateProductionConfig(badSeedCfg, "production"); !errors.Is(err, ErrDemoMerchantInProduction) {
 		t.Errorf("expected ErrDemoMerchantInProduction, got: %v", err)
+	}
+
+	// 6. Reject missing / short JWT secret and DEV_MODE in production
+	for _, weak := range []string{"", "short_secret"} {
+		badJWT := prodCfg
+		badJWT.JWTSecret = weak
+		if err := ValidateProductionConfig(badJWT, "production"); !errors.Is(err, ErrWeakJWTSecret) {
+			t.Errorf("JWT_SECRET %q: expected ErrWeakJWTSecret, got: %v", weak, err)
+		}
+	}
+	devCfg := prodCfg
+	devCfg.DevMode = true
+	if err := ValidateProductionConfig(devCfg, "production"); !errors.Is(err, ErrDevModeInProduction) {
+		t.Errorf("expected ErrDevModeInProduction, got: %v", err)
 	}
 }

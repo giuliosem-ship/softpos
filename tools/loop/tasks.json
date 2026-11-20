@@ -1010,6 +1010,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok (pkg/outbox 7 tests); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 13/13 PASS incl. SKIP LOCKED concurrent claim, backoff/dead-letter, dispatcher publish+shutdown (outbox tests repeated -count=15, stable); node --test web/pos/softpos_sdk.test.js 7/7; binary smoke test: dispatcher starts/stops on SIGTERM.",
       "audit_notes": "At-least-once delivery; publishers must dedupe on event ID. No producer enqueues events yet. Legacy FetchPendingEventsWithLock/MarkFailed kept for existing fake-driver tests (they ignore next_attempt_at).",
       "priority": 64
+    },
+    {
+      "id": "MVP-04",
+      "component": "auth",
+      "title": "Users, OTP login and token issuance",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/auth/service_test.go, pkg/auth/authtest/contract.go, pkg/store/auth_integration_test.go, pkg/api/handlers_auth_test.go, cmd/server/main_test.go, cmd/server/config_guard_test.go",
+        "implementation": "pkg/auth/auth.go, pkg/auth/jwt.go, pkg/auth/service.go, pkg/auth/memory.go, pkg/auth/otp_sender.go, pkg/store/auth_store.go, migrations/005_auth.up.sql, migrations/005_auth.down.sql, pkg/api/handlers_auth.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, docs/AUTH.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Users identified by E.164 phone, user<->merchant memberships with role owner|cashier|operator (migration 005: users, merchant_memberships, otp_challenges, refresh_tokens). POST /api/v1/auth/otp/request (6-digit crypto/rand code, HMAC-hashed with a pepper derived from JWT_SECRET, 5m TTL, 60s resend limit -> 429 + Retry-After), /otp/verify (attempt counted atomically before constant-time compare, 5 max -> lockout, single use; optional merchant_id must be a membership), /refresh (opaque rt_ token stored as SHA-256, rotation on use, reuse of a rotated token revokes the whole family, optional re-scope to another membership), /logout (revokes family). Access JWT HS256 (sub=user, merchant_id, role, typ=access, iss, jti, exp mandatory, alg pinned). auth.Repository with SQL + memory implementations sharing one contract test. JWT_SECRET required (>=32 bytes) unless DEV_MODE=true (ephemeral random secret); production guard rejects weak/missing JWT_SECRET and DEV_MODE.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 17/17 packages ok (new pkg/auth: 12 tests); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 16/16 PASS incl. auth repository contract and 10-way concurrent refresh rotation (exactly one winner, family revoked) and concurrent OTP brute force bounded by max attempts.",
+      "audit_notes": "Only LogSender exists (masked unless DEV_MODE): real logins need an SMS/WhatsApp OTPSender. Access tokens are stateless (no revocation list) - rely on 15m TTL. Per-phone resend limit only; per-IP limiting lands in MVP-05. Middleware not mounted yet (MVP-05).",
+      "priority": 65
     }
   ]
 }

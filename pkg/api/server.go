@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"softpos/pkg/auth"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/pac"
@@ -46,6 +48,7 @@ type Server struct {
 	rbfRepo           *store.SQLRBFRepository
 	emvPaymentRepo    *store.SQLEMVPaymentRepository
 	outboxRepo        *store.SQLOutboxRepository
+	auth              *auth.Service
 	staticDir         string
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -75,9 +78,41 @@ func NewServer(
 		merchantRepo:      store.NewMemoryMerchantRepository(),
 		router:            http.NewServeMux(),
 	}
+	s.auth = newEphemeralAuthService()
 
 	s.routes()
 	return s
+}
+
+// newEphemeralAuthService builds the default auth service: in-memory users and
+// a random per-process JWT secret (never a hardcoded key). cmd/server replaces
+// it with SetAuthService using JWT_SECRET and the SQL repository.
+func newEphemeralAuthService() *auth.Service {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	svc, err := auth.NewService(auth.NewMemoryRepository(), auth.LogSender{}, auth.Config{JWTSecret: secret})
+	if err != nil {
+		panic(err)
+	}
+	return svc
+}
+
+// SetAuthService replaces the auth service (JWT secret, user repository, OTP sender).
+func (s *Server) SetAuthService(svc *auth.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auth = svc
+}
+
+// AuthService returns the configured auth service.
+func (s *Server) AuthService() *auth.Service { return s.authService() }
+
+func (s *Server) authService() *auth.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.auth
 }
 
 func (s *Server) SetSTPClient(client stp.STPClient) {
@@ -366,6 +401,12 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 func (s *Server) routes() {
 	// Health and System Status
 	s.router.HandleFunc("GET /healthz", s.HandleHealthz)
+
+	// Authentication: OTP login, token refresh/rotation, logout
+	s.router.HandleFunc("POST /api/v1/auth/otp/request", s.HandleOTPRequest)
+	s.router.HandleFunc("POST /api/v1/auth/otp/verify", s.HandleOTPVerify)
+	s.router.HandleFunc("POST /api/v1/auth/refresh", s.HandleRefresh)
+	s.router.HandleFunc("POST /api/v1/auth/logout", s.HandleLogout)
 
 	// Merchant Catalog
 	s.router.HandleFunc("GET /api/v1/merchants/{id}", s.HandleGetMerchant)

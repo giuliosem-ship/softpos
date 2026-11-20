@@ -1,0 +1,143 @@
+// Package authtest holds a behavioural contract shared by every
+// auth.Repository implementation (memory and PostgreSQL).
+package authtest
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"softpos/pkg/auth"
+)
+
+// MerchantSeeder creates a merchant row the repository can reference (FK).
+type MerchantSeeder func(t *testing.T, merchantID string)
+
+// Harness builds a fresh repository plus an optional merchant seeder (nil when
+// the implementation has no merchant foreign key).
+type Harness struct {
+	NewRepo func(t *testing.T) (auth.Repository, MerchantSeeder)
+}
+
+// RunRepositoryContract exercises every Repository method.
+func RunRepositoryContract(t *testing.T, h Harness) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	newRepo := func(t *testing.T) (auth.Repository, MerchantSeeder) {
+		r, seed := h.NewRepo(t)
+		if seed == nil {
+			seed = func(*testing.T, string) {}
+		}
+		return r, seed
+	}
+
+	t.Run("users", func(t *testing.T) {
+		r, _ := newRepo(t)
+		u := auth.User{ID: "usr_1", Phone: "+525511112222", CreatedAt: now}
+		if err := r.CreateUser(ctx, u); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := r.CreateUser(ctx, auth.User{ID: "usr_2", Phone: u.Phone, CreatedAt: now}); !errors.Is(err, auth.ErrConflict) {
+			t.Fatalf("duplicate phone: want ErrConflict, got %v", err)
+		}
+		got, found, err := r.GetUserByPhone(ctx, u.Phone)
+		if err != nil || !found || got.ID != u.ID {
+			t.Fatalf("GetUserByPhone = %+v %v %v", got, found, err)
+		}
+		if _, found, _ := r.GetUser(ctx, "usr_missing"); found {
+			t.Fatal("unexpected user")
+		}
+	})
+
+	t.Run("memberships", func(t *testing.T) {
+		r, mkMerchant := newRepo(t)
+		_ = r.CreateUser(ctx, auth.User{ID: "usr_m", Phone: "+525533334444", CreatedAt: now})
+		mkMerchant(t, "mer_b")
+		mkMerchant(t, "mer_a")
+		if err := r.AddMembership(ctx, auth.Membership{UserID: "usr_m", MerchantID: "mer_b", Role: auth.RoleCashier, CreatedAt: now}); err != nil {
+			t.Fatalf("AddMembership: %v", err)
+		}
+		if err := r.AddMembership(ctx, auth.Membership{UserID: "usr_m", MerchantID: "mer_a", Role: auth.RoleOwner, CreatedAt: now}); err != nil {
+			t.Fatalf("AddMembership: %v", err)
+		}
+		// upsert changes role
+		if err := r.AddMembership(ctx, auth.Membership{UserID: "usr_m", MerchantID: "mer_b", Role: auth.RoleOwner, CreatedAt: now}); err != nil {
+			t.Fatalf("AddMembership upsert: %v", err)
+		}
+		list, err := r.ListMemberships(ctx, "usr_m")
+		if err != nil || len(list) != 2 || list[0].MerchantID != "mer_a" || list[1].Role != auth.RoleOwner {
+			t.Fatalf("ListMemberships = %+v %v", list, err)
+		}
+		m, found, err := r.GetMembership(ctx, "usr_m", "mer_a")
+		if err != nil || !found || m.Role != auth.RoleOwner {
+			t.Fatalf("GetMembership = %+v %v %v", m, found, err)
+		}
+		if _, found, _ := r.GetMembership(ctx, "usr_m", "mer_zzz"); found {
+			t.Fatal("unexpected membership")
+		}
+	})
+
+	t.Run("otp", func(t *testing.T) {
+		r, _ := newRepo(t)
+		phone := "+525555556666"
+		c := auth.OTPChallenge{Phone: phone, CodeHash: "h1", ExpiresAt: now.Add(time.Minute), LastSentAt: now}
+		if err := r.SaveOTPChallenge(ctx, c); err != nil {
+			t.Fatalf("SaveOTPChallenge: %v", err)
+		}
+		for want := 1; want <= 2; want++ {
+			n, found, err := r.IncrementOTPAttempts(ctx, phone)
+			if err != nil || !found || n != want {
+				t.Fatalf("IncrementOTPAttempts = %d %v %v, want %d", n, found, err, want)
+			}
+		}
+		c.CodeHash = "h2"
+		_ = r.SaveOTPChallenge(ctx, c) // resend resets attempts
+		got, found, err := r.GetOTPChallenge(ctx, phone)
+		if err != nil || !found || got.CodeHash != "h2" || got.Attempts != 0 || !got.ExpiresAt.Equal(c.ExpiresAt) {
+			t.Fatalf("GetOTPChallenge = %+v %v %v", got, found, err)
+		}
+		if del, err := r.DeleteOTPChallenge(ctx, phone); err != nil || !del {
+			t.Fatalf("first delete = %v %v", del, err)
+		}
+		if del, _ := r.DeleteOTPChallenge(ctx, phone); del {
+			t.Fatal("second delete must report false")
+		}
+		if _, found, _ := r.IncrementOTPAttempts(ctx, phone); found {
+			t.Fatal("increment on missing challenge must report not found")
+		}
+	})
+
+	t.Run("refresh rotation and family revocation", func(t *testing.T) {
+		r, _ := newRepo(t)
+		_ = r.CreateUser(ctx, auth.User{ID: "usr_r", Phone: "+525577778888", CreatedAt: now})
+		t1 := auth.RefreshToken{ID: "rtk_1", FamilyID: "fam_1", UserID: "usr_r", TokenHash: "hash1", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+		if err := r.CreateRefreshToken(ctx, t1); err != nil {
+			t.Fatalf("CreateRefreshToken: %v", err)
+		}
+		t2 := t1
+		t2.ID, t2.TokenHash = "rtk_2", "hash2"
+		if err := r.RotateRefreshToken(ctx, "rtk_1", t2, now); err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		old, found, _ := r.GetRefreshTokenByHash(ctx, "hash1")
+		if !found || old.RevokedAt == nil || old.ReplacedBy != "rtk_2" {
+			t.Fatalf("old token after rotate = %+v", old)
+		}
+		t3 := t1
+		t3.ID, t3.TokenHash = "rtk_3", "hash3"
+		if err := r.RotateRefreshToken(ctx, "rtk_1", t3, now); !errors.Is(err, auth.ErrRefreshTokenReused) {
+			t.Fatalf("rotating a revoked token: want ErrRefreshTokenReused, got %v", err)
+		}
+		if _, found, _ := r.GetRefreshTokenByHash(ctx, "hash3"); found {
+			t.Fatal("failed rotation must not insert the new token")
+		}
+		if err := r.RevokeRefreshFamily(ctx, "fam_1", now); err != nil {
+			t.Fatalf("RevokeRefreshFamily: %v", err)
+		}
+		cur, _, _ := r.GetRefreshTokenByHash(ctx, "hash2")
+		if cur.RevokedAt == nil {
+			t.Fatal("family revocation must revoke the current token")
+		}
+	})
+}

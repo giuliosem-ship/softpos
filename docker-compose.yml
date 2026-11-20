@@ -49,6 +49,8 @@ services:
       STP_HMAC_SECRET: "softpos_prod_hmac_secret_key"
       VAULT_MASTER_KEY_HEX: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
       SEED_DEMO_MERCHANT: "true"
+      # Local demo only: ephemeral JWT secret + OTP codes in logs (docs/AUTH.md)
+      DEV_MODE: "true"
       STATIC_DIR: "/app/web/pos"
     ports:
       - "8080:8080"

@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"softpos/migrations"
 	"softpos/pkg/api"
+	"softpos/pkg/auth"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/outbox"
@@ -40,6 +42,15 @@ type Config struct {
 	STPBaseURL        string
 	SeedDemoMerchant  bool
 	StaticDir         string
+
+	// DevMode (DEV_MODE=true) enables explicit local-development conveniences:
+	// ephemeral JWT secret when JWT_SECRET is unset, OTP codes revealed in logs.
+	// The production guard rejects it.
+	DevMode bool
+	// Auth (MVP-04)
+	JWTSecret      string        // JWT_SECRET (>= 32 bytes); required unless DevMode
+	AuthAccessTTL  time.Duration // AUTH_ACCESS_TTL, default 15m
+	AuthRefreshTTL time.Duration // AUTH_REFRESH_TTL, default 720h
 
 	// Outbox dispatcher (only runs when DatabaseURL is set).
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
@@ -98,7 +109,16 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	devMode := false
+	if val := strings.ToLower(os.Getenv("DEV_MODE")); val == "true" || val == "1" {
+		devMode = true
+	}
+
 	return Config{
+		DevMode:            devMode,
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		AuthAccessTTL:      parseDurationEnv("AUTH_ACCESS_TTL"),
+		AuthRefreshTTL:     parseDurationEnv("AUTH_REFRESH_TTL"),
 		OutboxPollInterval: outboxPoll,
 		OutboxBatchSize:    outboxBatch,
 		OutboxPublisher:    os.Getenv("OUTBOX_PUBLISHER"),
@@ -114,6 +134,48 @@ func LoadConfigFromEnv() Config {
 		SeedDemoMerchant:   seedDemo,
 		StaticDir:          staticDir,
 	}
+}
+
+func parseDurationEnv(name string) time.Duration {
+	val := os.Getenv(name)
+	if val == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil || d <= 0 {
+		slog.Warn("invalid duration, using default", "var", name, "value", val)
+		return 0
+	}
+	return d
+}
+
+// ErrMissingJWTSecret is returned when JWT_SECRET is unset outside DEV_MODE.
+var ErrMissingJWTSecret = errors.New("JWT_SECRET is required (>= 32 bytes) unless DEV_MODE=true")
+
+// buildAuthService creates the auth service over repo using the configured
+// JWT secret. Without JWT_SECRET it only proceeds in explicit dev mode, with a
+// random per-process secret (tokens die on restart).
+func buildAuthService(cfg Config, repo auth.Repository) (*auth.Service, error) {
+	secret := []byte(cfg.JWTSecret)
+	if len(secret) == 0 {
+		if !cfg.DevMode {
+			return nil, ErrMissingJWTSecret
+		}
+		secret = make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, err
+		}
+		slog.Warn("DEV_MODE: JWT_SECRET not set, using an ephemeral random secret")
+	}
+	svc, err := auth.NewService(repo, auth.LogSender{RevealCode: cfg.DevMode}, auth.Config{
+		JWTSecret:  secret,
+		AccessTTL:  cfg.AuthAccessTTL,
+		RefreshTTL: cfg.AuthRefreshTTL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth service: %w", err)
+	}
+	return svc, nil
 }
 
 // BuildServer instantiates and connects all infrastructure, repositories, and domain services.
@@ -162,6 +224,19 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	// 3. Create HTTP Server
 	server := api.NewServer(ledgerEngine, blacklistService, stpSigner)
 	server.SetStaticDir(cfg.StaticDir)
+
+	var authRepo auth.Repository = auth.NewMemoryRepository()
+	if db != nil {
+		authRepo = store.NewSQLAuthRepository(db)
+	}
+	authSvc, err := buildAuthService(cfg, authRepo)
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, err
+	}
+	server.SetAuthService(authSvc)
 
 	if db != nil {
 		sqlMerchantRepo := store.NewSQLMerchantRepository(db)

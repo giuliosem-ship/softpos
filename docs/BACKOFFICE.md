@@ -39,7 +39,7 @@ any `operator` role, as before.)
 | `GET merchants?kyb_status=&blocked=true\|false&limit=` | onboardings, newest update first (`kyb_status`, `reason`, 69-B, identity check, block flag) | — |
 | `GET merchants/{merchant}` | profile, full KYB (application, checks, identity verdict and provider reference, processor sub-merchant, decision, block), documents (metadata incl. superseded), settlement account | `kyb.view` (written **before** serving; audit failure → `503`) |
 | `GET merchants/{merchant}/documents/{document}` | decrypted file, sniffed `Content-Type`, `Content-Disposition: attachment`, `nosniff` | `document.download` (before serving, fail closed) |
-| `POST merchants/{merchant}/kyb/approve {"note"?}` | `IN_REVIEW`/`SUBMITTED` → `APPROVED`: assigns the virtual CLABE if missing, onboards the sub-merchant at the processor (`docs/KYB.md`); `409 KYB_INVALID_TRANSITION`, `502 ACQUIRER_ONBOARDING_FAILED` (stays in review, retry) | `kyb.approve` |
+| `POST merchants/{merchant}/kyb/approve {"note"?}` | `IN_REVIEW`/`SUBMITTED` → `APPROVED`: assigns the virtual CLABE if missing, onboards the sub-merchant at the processor (`docs/KYB.md`); `409 KYB_INVALID_TRANSITION`, `409 RFC_LISTED_69B` (69-B lookup found the RFC listed), `502 ACQUIRER_ONBOARDING_FAILED` (stays in review, retry) | `kyb.approve` |
 | `POST merchants/{merchant}/kyb/reject {"reason"}` | → `REJECTED` with the reason shown to the owner (`400 REASON_REQUIRED`) | `kyb.reject` |
 | `POST merchants/{merchant}/block {"reason"}` | any status; every money operation of the merchant → `403 MERCHANT_BLOCKED` (`409 ALREADY_BLOCKED`) | `merchant.block` |
 | `POST merchants/{merchant}/unblock {"reason"?}` | lifts the block (`409 NOT_BLOCKED`) | `merchant.unblock` |

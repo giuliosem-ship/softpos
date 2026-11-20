@@ -27,6 +27,10 @@ var (
 	ErrKYBInvalidTransition = errors.New("kyb status does not allow this transition")
 	// ErrKYBNotFound is returned when the merchant has no onboarding record.
 	ErrKYBNotFound = errors.New("kyb record not found")
+	// ErrKYBListed69B is returned when approving an onboarding whose RFC the
+	// 69-B lookup found listed (a submission interrupted before the
+	// automatic rejection).
+	ErrKYBListed69B = errors.New("kyb RFC is listed in SAT 69-B")
 )
 
 // System actors recorded in decided_by.
@@ -507,6 +511,9 @@ func (s *Server) ApproveMerchantKYB(ctx context.Context, merchantID, operatorID 
 	}
 	if rec.Status != kyb.StatusInReview && rec.Status != kyb.StatusSubmitted {
 		return rec, ErrKYBInvalidTransition
+	}
+	if rec.List69B == kyb.List69BListed {
+		return rec, ErrKYBListed69B
 	}
 	if clabe, found := s.GetMerchantCLABE(merchantID); !found || clabe == "" {
 		if _, err := s.AssignVirtualCLABE(ctx, merchantID); err != nil {

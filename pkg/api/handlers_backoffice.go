@@ -352,6 +352,8 @@ func writeDecisionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "KYB_NOT_FOUND")
 	case errors.Is(err, ErrKYBInvalidTransition):
 		writeError(w, http.StatusConflict, "KYB_INVALID_TRANSITION")
+	case errors.Is(err, ErrKYBListed69B):
+		writeError(w, http.StatusConflict, kyb.ReasonListed69B)
 	case errors.Is(err, store.ErrKYBConflict):
 		writeError(w, http.StatusConflict, "KYB_CONCURRENT_UPDATE")
 	case errors.Is(err, acquirer.ErrProviderUnavailable), errors.Is(err, acquirer.ErrProviderRejected):

@@ -438,3 +438,27 @@ func TestKYB_VirtualCLABEIsAssignedOnlyOnce(t *testing.T) {
 		t.Fatalf("virtual CLABE reassigned: first %s, second %s, stored %s", first, second, got)
 	}
 }
+
+// Audit (batch G): a submission interrupted between the SUBMITTED write and
+// the automatic 69-B rejection stays SUBMITTED with list_69b LISTED; the
+// operator "approve a stuck SUBMITTED" path must not approve it.
+func TestKYB_ApprovalRefusesRFCListed69B(t *testing.T) {
+	s, _ := setupTestServer(t)
+	m := "m_kyb_listed_stuck"
+	draftMerchant(t, s, m)
+	repo, _ := s.kybStore()
+	rec, _, _ := repo.GetKYB(context.Background(), m)
+	rec.Status, rec.List69B, rec.RFCValid, rec.DocumentsComplete = kyb.StatusSubmitted, kyb.List69BListed, true, true
+	if _, err := repo.UpdateKYB(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApproveMerchantKYB(context.Background(), m, "usr_op_1"); !errors.Is(err, ErrKYBListed69B) {
+		t.Fatalf("approve a 69-B listed RFC: want ErrKYBListed69B, got %v", err)
+	}
+	if got, _, _ := repo.GetKYB(context.Background(), m); got.Status == kyb.StatusApproved {
+		t.Fatal("69-B listed merchant approved")
+	}
+	if _, has := s.GetMerchantCLABE(m); has {
+		t.Fatal("no CLABE for a refused approval")
+	}
+}

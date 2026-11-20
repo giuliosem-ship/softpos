@@ -143,7 +143,8 @@ default, rejected by the production guard) or empty (identity check
 
 ## Operator decision (backoffice)
 
-`Server.ApproveMerchantKYB` (from `IN_REVIEW` or a stuck `SUBMITTED`):
+`Server.ApproveMerchantKYB` (from `IN_REVIEW` or a stuck `SUBMITTED`; never
+when `list_69b` is `LISTED`, `ErrKYBListed69B`):
 
 1. assigns the virtual collection CLABE if the merchant has none
    (`AssignVirtualCLABE`; the alta no longer assigns it);

@@ -119,8 +119,10 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		if err != nil || !fresh {
 			return false, err
 		}
-		if e.AmountCents > cp.CapturedCents-cp.RefundedCents {
-			return false, fmt.Errorf("%w: refund %d exceeds remaining %d of %s", errEventConflict, e.AmountCents, cp.CapturedCents-cp.RefundedCents, cp.ID)
+		// Disputed funds were already taken back by the chargeback: refund +
+		// chargeback never exceed the capture.
+		if remaining := cp.CapturedCents - cp.RefundedCents - cp.ChargebackCents; e.AmountCents > remaining {
+			return false, fmt.Errorf("%w: refund %d exceeds remaining %d of %s", errEventConflict, e.AmountCents, remaining, cp.ID)
 		}
 		rec, found, err := tx.GetSettlementForUpdate(ctx, cp.ID)
 		if err != nil {

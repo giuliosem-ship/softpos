@@ -264,6 +264,12 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 			if amount <= 0 || amount > remaining {
 				return errRefundExceedsBalance
 			}
+			// Lock order (docs/MONEY_FLOWS.md): the RESICO month row before the
+			// ledger accounts, as settles and CoDi confirmations do; otherwise
+			// concurrent settles and refunds of one merchant deadlock.
+			if _, err := tx.MonthlySalesForUpdate(ctx, tenant, rec.YearMonth); err != nil {
+				return err
+			}
 			sp := proportionalRefund(rec, amount)
 			rec.RefundedGrossCents += sp.amount
 			rec.RefundedBaseCents += sp.base

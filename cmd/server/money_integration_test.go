@@ -253,3 +253,51 @@ func TestPGIntegration_PayoutsAndRefunds(t *testing.T) {
 		t.Fatalf("disbursement.requested events = %d", n)
 	}
 }
+
+// TestPGIntegration_ConcurrentSettlesAndRefundsDoNotDeadlock: settles and
+// refunds of one merchant touch the same RESICO month row and ledger accounts;
+// both must take them in the same order (month row first) or PostgreSQL
+// aborts one of them with a deadlock (500 LEDGER_POSTING_FAILED).
+func TestPGIntegration_ConcurrentSettlesAndRefundsDoNotDeadlock(t *testing.T) {
+	cfg := Config{SQLDriver: "pgx", DatabaseURL: pgtest.URL(t), STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex}
+	srv, db, _, err := BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("BuildServer: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	const m = "merch_pg_lockorder"
+	if err := srv.RegisterMerchantCLABE("646180123400000007", m, "GARM850101ABC"); err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := srv.AuthService().MintAccessToken("usr_pg_lock", m, auth.RoleOwner)
+	const n = 16
+	for i := 0; i < 2*n; i++ {
+		id := "pay_lock_" + strconv.Itoa(i)
+		if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/authorize", map[string]any{"payment_id": id, "tlv_hex": validEMVTLVHex}); rec.Code != http.StatusOK {
+			t.Fatalf("authorize %s: %d %s", id, rec.Code, rec.Body.String())
+		}
+		if i < n {
+			if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/settle", map[string]any{"payment_id": id}); rec.Code != http.StatusOK {
+				t.Fatalf("settle %s: %d", id, rec.Code)
+			}
+		}
+	}
+	for round := 0; round < 3; round++ {
+		bodies := make([]string, 2*n)
+		codes := runConcurrently(2*n, func(i int) int {
+			var rec *httptest.ResponseRecorder
+			if i < n { // refund 1/4 of an already settled payment
+				rec = doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_lock_" + strconv.Itoa(i), "refund_cents": 6250})
+			} else { // settle a fresh one (idempotent on later rounds)
+				rec = doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/settle", map[string]any{"payment_id": "pay_lock_" + strconv.Itoa(i)})
+			}
+			bodies[i] = rec.Body.String()
+			return rec.Code
+		})
+		for i, c := range codes {
+			if c != http.StatusOK {
+				t.Fatalf("round %d op %d: %d %s", round, i, c, bodies[i])
+			}
+		}
+	}
+}

@@ -48,25 +48,40 @@ class MerchantViewModelsTest {
         assertEquals(false, offline.state.value.isLoading)
     }
 
-    @Test
-    fun salesListAndDetailLookup() {
-        val sales = listOf(Sale("s2", 500, "SPEI", "settled"), Sale("s1", 100, "CARD", "succeeded"))
-        val api = object : SalesApi {
-            override fun listSales(merchantId: String, limit: Int) = ApiResult.Success(SalesPage(sales), 200)
+    private class PagedSales(val pages: Map<String?, SalesPage>) : SalesApi {
+        val cursors = mutableListOf<String?>()
+        override fun listSales(merchantId: String, limit: Int, before: String?): ApiResult<SalesPage> {
+            cursors += before
+            return pages[before]?.let { ApiResult.Success(it, 200) } ?: ApiResult.Error(404, "HTTP_404", "")
         }
+    }
+
+    @Test
+    fun salesListPaginatesWithCursorAndDedupes() {
+        val s1 = Sale("s1", "card", "CAPTURED", 100, cardPaymentId = "cp_1")
+        val s2 = Sale("s2", "spei", "SETTLED", 500)
+        val s3 = Sale("s3", "codi", "CONFIRMED", 700)
+        val api = PagedSales(mapOf(null to SalesPage(listOf(s1, s2), "c1"), "c1" to SalesPage(listOf(s2, s3), null)))
         val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
         vm.load()
-        assertEquals(sales, vm.state.value.sales)
+        assertEquals(listOf(s1, s2), vm.state.value.sales)
+        assertEquals(true, vm.state.value.canLoadMore)
+
+        vm.loadMore()
+        assertEquals(listOf(s1, s2, s3), vm.state.value.sales)
+        assertNull(vm.state.value.nextCursor)
+        vm.loadMore() // last page: no request
+        assertEquals(listOf(null, "c1"), api.cursors)
         assertEquals(500L, vm.sale("s2")?.amountCents)
         assertNull(vm.sale("missing"))
+
+        vm.load() // refresh starts over from the first page
+        assertEquals(listOf(s1, s2), vm.state.value.sales)
     }
 
     @Test
     fun salesEndpointMissingIsReportedAsNotAvailable() {
-        val api = object : SalesApi {
-            override fun listSales(merchantId: String, limit: Int) = ApiResult.Error(404, "HTTP_404", "")
-        }
-        val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
+        val vm = SalesViewModel(PagedSales(emptyMap()), { "mer_1" }, dispatcher)
         vm.load()
         assertEquals(LoadError.NOT_AVAILABLE, vm.state.value.error)
     }

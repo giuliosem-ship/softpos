@@ -8,43 +8,73 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** One sale (card or SPEI) as shown in the history. */
+/** One sale (card, SPEI or CoDi) as listed by the backend, newest first. */
 @Serializable
 data class Sale(
     @SerialName("id") val id: String,
-    @SerialName("amount_cents") val amountCents: Long,
-    @SerialName("method") val method: String,
+    @SerialName("kind") val kind: String,
     @SerialName("status") val status: String,
+    @SerialName("amount_cents") val amountCents: Long,
     @SerialName("created_at") val createdAt: String = "",
-    @SerialName("reference") val reference: String = ""
+    @SerialName("card_payment_id") val cardPaymentId: String? = null
 )
 
 @Serializable
-data class SalesPage(@SerialName("sales") val sales: List<Sale> = emptyList())
+data class SalesPage(
+    @SerialName("items") val items: List<Sale> = emptyList(),
+    @SerialName("next_cursor") val nextCursor: String? = null
+)
 
-object SaleMethod {
-    const val CARD = "CARD"
-    const val SPEI = "SPEI"
+object SaleKind {
+    const val CARD = "card"
+    const val SPEI = "spei"
+    const val CODI = "codi"
+}
+
+/** Coarse status groups for labels (card statuses plus SPEI/CoDi ones). */
+enum class SaleStatusGroup { APPROVED, PENDING, FAILED, PARTIALLY_REFUNDED, REFUNDED, CHARGEBACK }
+
+object SaleStatus {
+    private val approved = setOf(
+        CardPaymentStatus.CAPTURED, CardPaymentStatus.CHARGEBACK_REVERSED,
+        "SETTLED", "CONFIRMED", "COMPLETED", "CREDITED", "PAID", "SUCCEEDED"
+    )
+    private val failed = setOf(
+        CardPaymentStatus.DECLINED, CardPaymentStatus.CANCELED, "CANCELLED", "FAILED", "REJECTED", "EXPIRED"
+    )
+
+    fun group(status: String): SaleStatusGroup = when (status.uppercase()) {
+        CardPaymentStatus.PARTIALLY_REFUNDED -> SaleStatusGroup.PARTIALLY_REFUNDED
+        CardPaymentStatus.REFUNDED -> SaleStatusGroup.REFUNDED
+        CardPaymentStatus.CHARGEBACK -> SaleStatusGroup.CHARGEBACK
+        in approved -> SaleStatusGroup.APPROVED
+        in failed -> SaleStatusGroup.FAILED
+        else -> SaleStatusGroup.PENDING
+    }
 }
 
 /**
- * PROVISIONAL: the backend has no sales listing yet. Expected contract:
- * `GET /api/v1/merchants/{id}/sales?limit=50` → `{"sales":[Sale…]}`, newest
- * first, tenant from the token.
+ * `GET /api/v1/merchants/{id}/sales?limit=50&before=<cursor>` →
+ * `{"items":[Sale…],"next_cursor":string|null}` (null = last page).
  */
 interface SalesApi {
-    fun listSales(merchantId: String, limit: Int = 50): ApiResult<SalesPage>
+    fun listSales(merchantId: String, limit: Int = PAGE_SIZE, before: String? = null): ApiResult<SalesPage>
+
+    companion object {
+        const val PAGE_SIZE = 50
+    }
 }
 
 class HttpSalesApi(baseUrl: String, private val client: OkHttpClient) : SalesApi {
     private val base = baseUrl.trimEnd('/').toHttpUrl()
 
-    override fun listSales(merchantId: String, limit: Int): ApiResult<SalesPage> {
+    override fun listSales(merchantId: String, limit: Int, before: String?): ApiResult<SalesPage> {
         val url = base.newBuilder()
             .addPathSegments("api/v1/merchants")
             .addPathSegment(merchantId)
             .addPathSegment("sales")
             .addQueryParameter("limit", limit.toString())
+            .apply { if (!before.isNullOrBlank()) addQueryParameter("before", before) }
             .build()
         return client.executeJsonRequired(Request.Builder().url(url).get().build(), SalesPage.serializer())
     }

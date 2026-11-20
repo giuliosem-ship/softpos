@@ -22,9 +22,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import mx.softpos.app.R
 import mx.softpos.app.core.money.MoneyFormatter
-import mx.softpos.app.payments.CardPaymentStatus
 import mx.softpos.app.payments.Sale
-import mx.softpos.app.payments.SaleMethod
+import mx.softpos.app.payments.SaleKind
+import mx.softpos.app.payments.SaleStatus
+import mx.softpos.app.payments.SaleStatusGroup
 
 @Composable
 fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
@@ -38,18 +39,26 @@ fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
         if (!state.isLoading && state.error == null && state.sales.isEmpty()) {
             Text(stringResource(R.string.sales_empty))
         }
-        LazyColumn {
+        TextButton(onClick = viewModel::load) { Text(stringResource(R.string.action_refresh)) }
+        LazyColumn(Modifier.weight(1f)) {
             items(state.sales, key = { it.id }) { sale ->
                 ListItem(
                     headlineContent = { Text(MoneyFormatter.formatMxn(sale.amountCents)) },
-                    supportingContent = { Text(stringResource(sale.methodRes()) + " · " + stringResource(sale.statusRes())) },
+                    supportingContent = { Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))) },
                     trailingContent = { Text(sale.createdAt.take(10)) },
                     modifier = Modifier.clickable { onOpen(sale.id) }
                 )
                 HorizontalDivider()
             }
+            if (state.nextCursor != null) {
+                item(key = "more") {
+                    // Reaching the end of the list asks for the next page.
+                    LaunchedEffect(state.nextCursor) { viewModel.loadMore() }
+                    if (state.isLoadingMore) CircularProgressIndicator(Modifier.padding(16.dp))
+                    else TextButton(onClick = viewModel::loadMore) { Text(stringResource(R.string.sales_load_more)) }
+                }
+            }
         }
-        TextButton(onClick = viewModel::load) { Text(stringResource(R.string.action_refresh)) }
     }
 }
 
@@ -62,21 +71,26 @@ fun SaleDetailScreen(sale: Sale?, onBack: () -> Unit) {
             InfoCard(
                 title = stringResource(R.string.sale_amount),
                 value = MoneyFormatter.formatMxn(sale.amountCents),
-                caption = stringResource(sale.methodRes()) + " · " + stringResource(sale.statusRes())
+                caption = stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))
             )
             Text(stringResource(R.string.sale_id, sale.id))
             if (sale.createdAt.isNotBlank()) Text(stringResource(R.string.sale_date, sale.createdAt))
-            if (sale.reference.isNotBlank()) Text(stringResource(R.string.sale_reference, sale.reference))
         }
         TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
     }
 }
 
-private fun Sale.methodRes(): Int =
-    if (method.equals(SaleMethod.SPEI, ignoreCase = true)) R.string.method_spei else R.string.method_card
+internal fun Sale.kindRes(): Int = when (kind.lowercase()) {
+    SaleKind.SPEI -> R.string.method_spei
+    SaleKind.CODI -> R.string.method_codi
+    else -> R.string.method_card
+}
 
-private fun Sale.statusRes(): Int = when {
-    CardPaymentStatus.isApproved(status) -> R.string.status_approved
-    CardPaymentStatus.isFailed(status) -> R.string.status_failed
-    else -> R.string.status_pending
+internal fun statusRes(status: String): Int = when (SaleStatus.group(status)) {
+    SaleStatusGroup.APPROVED -> R.string.status_approved
+    SaleStatusGroup.FAILED -> R.string.status_failed
+    SaleStatusGroup.PENDING -> R.string.status_pending
+    SaleStatusGroup.PARTIALLY_REFUNDED -> R.string.status_partially_refunded
+    SaleStatusGroup.REFUNDED -> R.string.status_refunded
+    SaleStatusGroup.CHARGEBACK -> R.string.status_chargeback
 }

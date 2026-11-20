@@ -23,6 +23,13 @@ typealias MerchantIdProvider = () -> String?
 
 enum class LoadError { NO_MERCHANT, NETWORK, NOT_AVAILABLE, UNKNOWN }
 
+/**
+ * 403 because the merchant's KYB is not APPROVED (charging/disbursing is
+ * blocked until it is). The exact backend code is matched loosely on purpose.
+ */
+internal fun ApiResult.Error.isKybBlocked(): Boolean =
+    statusCode == 403 && (errorCode.contains("KYB") || errorCode.contains("NOT_APPROVED"))
+
 internal fun ApiResult.Error.toLoadError(): LoadError = when {
     statusCode == NETWORK_ERROR_STATUS -> LoadError.NETWORK
     statusCode == 403 && errorCode == "MERCHANT_SCOPE_REQUIRED" -> LoadError.NO_MERCHANT
@@ -63,10 +70,16 @@ class HomeViewModel(
 
 data class SalesUiState(
     val isLoading: Boolean = false,
+    val isLoadingMore: Boolean = false,
     val sales: List<Sale> = emptyList(),
+    /** Cursor for `before=`; null once the last page was read. */
+    val nextCursor: String? = null,
     val error: LoadError? = null
-)
+) {
+    val canLoadMore: Boolean get() = nextCursor != null && !isLoading && !isLoadingMore
+}
 
+/** Sales history with cursor pagination (`next_cursor` → `before`). */
 class SalesViewModel(
     private val salesApi: SalesApi,
     private val merchantId: MerchantIdProvider,
@@ -75,18 +88,45 @@ class SalesViewModel(
     private val _state = MutableStateFlow(SalesUiState())
     val state: StateFlow<SalesUiState> = _state.asStateFlow()
 
+    /** Reloads the first page (pull to refresh). */
     fun load() {
         val id = merchantId()
         if (id == null) {
             _state.value = SalesUiState(error = LoadError.NO_MERCHANT)
             return
         }
+        if (_state.value.isLoading) return
         _state.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch {
             val result = withContext(io) { salesApi.listSales(id) }
             _state.value = when (result) {
-                is ApiResult.Success -> SalesUiState(sales = result.data.sales)
+                is ApiResult.Success -> SalesUiState(sales = result.data.items, nextCursor = result.data.nextCursor)
                 is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
+            }
+        }
+    }
+
+    /** Appends the next page; duplicates (a sale that moved across pages) are dropped. */
+    fun loadMore() {
+        val id = merchantId() ?: return
+        val current = _state.value
+        val cursor = current.nextCursor ?: return
+        if (!current.canLoadMore) return
+        _state.update { it.copy(isLoadingMore = true, error = null) }
+        viewModelScope.launch {
+            val result = withContext(io) { salesApi.listSales(id, before = cursor) }
+            _state.update { s ->
+                when (result) {
+                    is ApiResult.Success -> {
+                        val seen = s.sales.mapTo(HashSet()) { it.id }
+                        s.copy(
+                            isLoadingMore = false,
+                            sales = s.sales + result.data.items.filter { it.id !in seen },
+                            nextCursor = result.data.nextCursor
+                        )
+                    }
+                    is ApiResult.Error -> s.copy(isLoadingMore = false, error = result.toLoadError())
+                }
             }
         }
     }

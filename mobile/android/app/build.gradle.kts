@@ -27,14 +27,15 @@ android {
             applicationIdSuffix = ".debug"
             // Android emulator alias of the host loopback (backend on :8080).
             buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080\"")
-            // In-memory card intents + sales and the mock Tap to Pay provider
-            // until the backend endpoints and the processor SDK exist.
-            buildConfigField("boolean", "MOCK_PAYMENTS", "true")
+            // Mock Tap to Pay provider that asks a DEV_MODE backend to play the
+            // processor webhooks (POST /api/v1/dev/card-payments/{id}/simulate)
+            // until the processor SDK is integrated.
+            buildConfigField("boolean", "DEV_TAP_SIMULATOR", "true")
         }
         release {
             // Placeholder until the production gateway exists; HTTPS only.
             buildConfigField("String", "API_BASE_URL", "\"https://api.kerno.mx\"")
-            buildConfigField("boolean", "MOCK_PAYMENTS", "false")
+            buildConfigField("boolean", "DEV_TAP_SIMULATOR", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

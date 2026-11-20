@@ -21,29 +21,6 @@ class SoftPosApiClient(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val normalizedBaseUrl = baseUrl.trimEnd('/')
 
-    fun authorizeEmv(
-        idempotencyKey: String,
-        merchantId: String,
-        amountCents: Long,
-        tlvHex: String
-    ): ApiResult<String> {
-        require(merchantId.isNotBlank()) { "merchantId must not be blank" }
-        require(amountCents > 0L) { "amountCents must be positive" }
-        require(tlvHex.isNotBlank()) { "tlvHex must not be blank" }
-
-        val payload = buildJsonObject {
-            put("merchant_id", merchantId)
-            put("amount_cents", amountCents)
-            put("tlv_hex", tlvHex)
-        }.toString()
-
-        return executePost(
-            path = "/api/v1/payments/emv/authorize",
-            idempotencyKey = idempotencyKey,
-            jsonBody = payload
-        )
-    }
-
     fun generateCodiQr(
         idempotencyKey: String,
         merchantId: String,

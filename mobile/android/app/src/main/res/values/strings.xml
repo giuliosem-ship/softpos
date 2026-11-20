@@ -66,6 +66,13 @@
     <string name="charge_error_no_clabe">Tu comercio aún no tiene CLABE para recibir SPEI.</string>
     <string name="charge_error_declined">Tarjeta rechazada. Pide otra forma de pago.</string>
     <string name="charge_error_cancelled">Cobro cancelado.</string>
+    <string name="charge_error_declined_code">Tarjeta rechazada (%1$s). Pide otra forma de pago.</string>
+    <string name="charge_error_acquirer_unavailable">El procesador no respondió. Reintenta: no se cobrará dos veces.</string>
+    <string name="charge_error_card_not_configured">El cobro con tarjeta aún no está habilitado para tu comercio.</string>
+    <string name="charge_error_idempotency">Este cobro cambió. Revisa el monto e inténtalo de nuevo.</string>
+    <string name="charge_error_not_approved">Termina tu alta para poder cobrar.</string>
+    <string name="charge_error_tap_failed">No se pudo leer la tarjeta. Inténtalo de nuevo.</string>
+    <string name="charge_cancel">Cancelar cobro</string>
 
     <!-- Ventas -->
     <string name="sales_title">Ventas</string>
@@ -74,12 +81,16 @@
     <string name="sale_amount">Monto</string>
     <string name="sale_id">Folio: %1$s</string>
     <string name="sale_date">Fecha: %1$s</string>
-    <string name="sale_reference">Referencia: %1$s</string>
     <string name="method_card">Tarjeta</string>
     <string name="method_spei">SPEI</string>
+    <string name="method_codi">CoDi</string>
+    <string name="sales_load_more">Ver más</string>
     <string name="status_approved">Aprobada</string>
     <string name="status_failed">Rechazada</string>
     <string name="status_pending">Pendiente</string>
+    <string name="status_partially_refunded">Devuelta parcialmente</string>
+    <string name="status_refunded">Devuelta</string>
+    <string name="status_chargeback">Contracargo</string>
 
     <!-- Perfil -->
     <string name="settings_title">Perfil</string>

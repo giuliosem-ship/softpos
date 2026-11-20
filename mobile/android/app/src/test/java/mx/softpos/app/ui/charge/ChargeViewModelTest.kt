@@ -3,8 +3,10 @@ package mx.softpos.app.ui.charge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
@@ -14,18 +16,19 @@ import kotlinx.serialization.json.long
 import mx.softpos.app.core.network.ApiResult
 import mx.softpos.app.core.network.NETWORK_ERROR_CODE
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
-import mx.softpos.app.merchant.MerchantBalances
 import mx.softpos.app.merchant.MerchantApi
+import mx.softpos.app.merchant.MerchantBalances
 import mx.softpos.app.merchant.MerchantProfile
 import mx.softpos.app.payments.CardPaymentIntent
-import mx.softpos.app.payments.CardPaymentsApi
-import mx.softpos.app.payments.InMemoryPaymentsBackend
+import mx.softpos.app.payments.CardPaymentStatus
+import mx.softpos.app.payments.FakeCardBackend
 import mx.softpos.app.payments.MockTapToPayProvider
 import mx.softpos.app.payments.TapToPayOutcome
 import mx.softpos.app.payments.TapToPayProvider
 import mx.softpos.app.payments.UnavailableTapToPayProvider
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -44,26 +47,29 @@ class FakeMerchantApi(
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChargeViewModelTest {
     private val dispatcher = StandardTestDispatcher()
-    private val backend = InMemoryPaymentsBackend()
+    private val backend = FakeCardBackend()
     private val merchant = FakeMerchantApi()
     private var keys = 0
 
     @BeforeEach fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterEach fun tearDown() = Dispatchers.resetMain()
 
+    private fun mockTap(delayMs: Long = 10) = MockTapToPayProvider(backend, delayMs, dispatcher)
+
     private fun vm(
-        cardApi: CardPaymentsApi = backend,
-        tap: TapToPayProvider = MockTapToPayProvider(delayMs = 10, onOutcome = backend::onTapOutcome),
-        merchantId: String? = "mer_1"
+        tap: TapToPayProvider = mockTap(),
+        merchantId: String? = "mer_1",
+        poll: PollPolicy = PollPolicy(initialDelayMs = 100, maxDelayMs = 400, timeoutMs = 2_000)
     ) = ChargeViewModel(
-        cardApi = cardApi,
+        cardApi = backend,
         tapToPay = tap,
         merchantApi = merchant,
         merchantId = { merchantId },
         io = dispatcher,
         newIdempotencyKey = { "key_${++keys}" },
         newReference = { "0012345" },
-        nowEpochSec = { 1_700_000_000L }
+        nowEpochSec = { 1_700_000_000L },
+        poll = poll
     )
 
     private fun ChargeViewModel.type(vararg digits: Int) = digits.forEach { onDigit(it) }
@@ -80,7 +86,7 @@ class ChargeViewModelTest {
     }
 
     @Test
-    fun cardChargeApprovedEndToEnd() = runTest(dispatcher) {
+    fun cardChargeCapturedEndToEndThroughDevSimulator() = runTest(dispatcher) {
         val vm = vm()
         vm.type(2, 5, 0, 0, 0)
         vm.chargeWithCard()
@@ -89,61 +95,112 @@ class ChargeViewModelTest {
 
         val step = vm.state.value.step as ChargeStep.CardApproved
         assertEquals(25_000L, step.amountCents)
-        val sales = (backend.listSales("mer_1") as ApiResult.Success).data.sales
-        assertEquals(1, sales.size)
-        assertEquals("succeeded", sales.single().status)
+        assertEquals("cp_1", step.paymentId)
+        assertEquals(listOf("tap:cp_1"), backend.simulated)
+        assertEquals(CardPaymentStatus.CAPTURED, backend.payments.getValue("cp_1").status)
     }
 
     @Test
-    fun declinedCardReturnsToKeypadWithError() = runTest(dispatcher) {
+    fun declinedByBackendShowsDeclineCode() = runTest(dispatcher) {
         val vm = vm()
-        vm.type(1, 1, 3) // $1.13 -> mock declines amounts ending in 13 centavos
+        vm.type(1, 5, 1) // $1.51 -> backend mock acquirer declines amounts ending in 51
         vm.chargeWithCard()
         advanceUntilIdle()
         assertEquals(ChargeStep.Entering, vm.state.value.step)
         assertEquals(ChargeError.DECLINED, vm.state.value.error)
-        assertEquals(113L, vm.state.value.amountCents)
+        assertEquals("do_not_honor", vm.state.value.declineCode)
+        assertEquals(151L, vm.state.value.amountCents)
+
+        vm.chargeWithCard() // a new attempt after a decline uses a new key
+        advanceUntilIdle()
+        assertEquals(listOf("key_1", "key_2"), backend.intentKeys)
     }
 
     @Test
-    fun retryAfterNetworkErrorReusesIdempotencyKey() = runTest(dispatcher) {
-        val seenKeys = mutableListOf<String>()
-        var fail = true
-        val api = object : CardPaymentsApi {
-            override fun createIntent(idempotencyKey: String, amountCents: Long): ApiResult<CardPaymentIntent> {
-                seenKeys += idempotencyKey
-                if (fail) return ApiResult.Error(NETWORK_ERROR_STATUS, NETWORK_ERROR_CODE, "")
-                return backend.createIntent(idempotencyKey, amountCents)
-            }
-            override fun getPayment(id: String) = backend.getPayment(id)
-        }
-        val vm = vm(cardApi = api)
+    fun networkErrorAnd502RetryWithTheSameKey() = runTest(dispatcher) {
+        backend.intentErrors += ApiResult.Error(NETWORK_ERROR_STATUS, NETWORK_ERROR_CODE, "")
+        backend.intentErrors += ApiResult.Error(502, "ACQUIRER_UNAVAILABLE", "")
+        val vm = vm()
         vm.type(5, 0, 0)
         vm.chargeWithCard()
         advanceUntilIdle()
         assertEquals(ChargeError.NETWORK, vm.state.value.error)
 
-        fail = false
         vm.chargeWithCard()
         advanceUntilIdle()
-        assertEquals(listOf("key_1", "key_1"), seenKeys)
+        assertEquals(ChargeError.ACQUIRER_UNAVAILABLE, vm.state.value.error)
+
+        vm.chargeWithCard()
+        advanceUntilIdle()
+        assertEquals(listOf("key_1", "key_1", "key_1"), backend.intentKeys)
         assertTrue(vm.state.value.step is ChargeStep.CardApproved)
+        assertEquals(1, backend.payments.size)
 
         vm.newCharge()
         vm.type(5, 0, 0)
         vm.chargeWithCard()
         advanceUntilIdle()
-        assertEquals("key_2", seenKeys.last())
+        assertEquals("key_2", backend.intentKeys.last())
     }
 
     @Test
-    fun tapWithoutBackendConfirmationIsPending() = runTest(dispatcher) {
-        // Tap approved but no webhook yet: status stays requires_tap.
-        val vm = vm(tap = MockTapToPayProvider(delayMs = 1))
+    fun nonRetryableErrorsDropTheKey() = runTest(dispatcher) {
+        backend.intentErrors += ApiResult.Error(503, "ACQUIRER_NOT_CONFIGURED", "")
+        backend.intentErrors += ApiResult.Error(409, "IDEMPOTENCY_KEY_REUSED", "")
+        backend.intentErrors += ApiResult.Error(403, "MERCHANT_KYB_NOT_APPROVED", "")
+        val vm = vm()
+        vm.type(1, 0, 0)
+        vm.chargeWithCard(); advanceUntilIdle()
+        assertEquals(ChargeError.CARD_NOT_CONFIGURED, vm.state.value.error)
+        vm.chargeWithCard(); advanceUntilIdle()
+        assertEquals(ChargeError.IDEMPOTENCY_CONFLICT, vm.state.value.error)
+        vm.chargeWithCard(); advanceUntilIdle()
+        assertEquals(ChargeError.NOT_APPROVED, vm.state.value.error)
+        assertEquals(listOf("key_1", "key_2", "key_3"), backend.intentKeys)
+    }
+
+    @Test
+    fun pollingBacksOffAndTimesOutAsPending() = runTest(dispatcher) {
+        // An SDK that "approves" but no webhook ever arrives: the status stays CREATED.
+        val silentTap = object : TapToPayProvider {
+            override val isAvailable = true
+            override suspend fun collect(intent: CardPaymentIntent) = TapToPayOutcome.Approved
+        }
+        val vm = vm(tap = silentTap)
         vm.type(1, 0, 0)
         vm.chargeWithCard()
         advanceUntilIdle()
         assertTrue(vm.state.value.step is ChargeStep.CardPending)
+        // 100,150,225,337,400,400,400 = 2012 ms ≥ 2000 → 8 GETs, not one per tick.
+        assertEquals(8, backend.getCalls)
+        assertEquals(1_000L, PollPolicy(maxDelayMs = 1_000).next(800))
+    }
+
+    @Test
+    fun cancelWhileWaitingForCardCancelsIntent() = runTest(dispatcher) {
+        val vm = vm(tap = mockTap(delayMs = 10_000))
+        vm.type(3, 0, 0)
+        vm.chargeWithCard()
+        runCurrent()
+        assertEquals(ChargeStep.ProcessingCard(CardStage.WAITING_FOR_CARD), vm.state.value.step)
+        vm.cancelCardCharge()
+        advanceUntilIdle()
+        assertEquals(ChargeStep.Entering, vm.state.value.step)
+        assertEquals(ChargeError.CANCELLED, vm.state.value.error)
+        assertEquals(listOf("cp_1"), backend.cancels)
+        assertTrue("cancel:cp_1" in backend.simulated)
+        assertFalse("tap:cp_1" in backend.simulated)
+    }
+
+    @Test
+    fun simulatorUnavailableIsATapFailureAndCancelsIntent() = runTest(dispatcher) {
+        backend.devMode = false
+        val vm = vm()
+        vm.type(1, 0, 0)
+        vm.chargeWithCard()
+        advanceUntilIdle()
+        assertEquals(ChargeError.TAP_FAILED, vm.state.value.error)
+        assertEquals(listOf("cp_1"), backend.cancels)
     }
 
     @Test
@@ -208,9 +265,11 @@ class ChargeViewModelTest {
     }
 
     @Test
-    fun mockProviderOutcomes() = runTest(dispatcher) {
-        val intent = CardPaymentIntent("cpi_1", "s", "requires_tap", 100)
-        assertTrue(MockTapToPayProvider(1).collect(intent, 100) is TapToPayOutcome.Approved)
-        assertTrue(MockTapToPayProvider(1).collect(intent, 213) is TapToPayOutcome.Declined)
+    fun mockProviderMirrorsBackendScenarios() = runTest(dispatcher) {
+        val approved = (backend.createIntent("a", 100) as ApiResult.Success).data
+        val declined = (backend.createIntent("b", 251) as ApiResult.Success).data
+        assertEquals(TapToPayOutcome.Approved, mockTap(1).collect(approved))
+        assertTrue(mockTap(1).collect(declined) is TapToPayOutcome.Declined)
+        advanceTimeBy(1)
     }
 }

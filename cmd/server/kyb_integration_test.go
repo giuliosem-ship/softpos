@@ -11,7 +11,9 @@ import (
 
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
+	"softpos/pkg/identity"
 	"softpos/pkg/kyb"
+	"softpos/pkg/store"
 	"softpos/pkg/store/pgtest"
 )
 
@@ -98,6 +100,11 @@ func TestPGIntegration_KYBFlowSurvivesRestart(t *testing.T) {
 		if rec := uploadPGDoc(t, srv, owner, m, string(d), content); rec.Code != http.StatusCreated {
 			t.Fatalf("upload %s: %d %s", d, rec.Code, rec.Body.String())
 		}
+	}
+	// A loaded 69-B list in sat_blacklist (without one the check is UNKNOWN).
+	if err := store.NewSQLBlacklistRepository(db).AddEntry(context.Background(),
+		identity.BlacklistEntry{RFC: "EFO110101XYZ", Status: identity.BlacklistDefinitivo, OficioSAT: "500-05-2023-1234"}); err != nil {
+		t.Fatal(err)
 	}
 	rec := doJSON(t, srv, owner, http.MethodPost, base+"/submit", nil)
 	var resp api.KYBResponse

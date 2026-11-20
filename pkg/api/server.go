@@ -387,7 +387,8 @@ const (
 )
 
 // AssignVirtualCLABE generates a random, checksum-valid STP CLABE and assigns
-// it to the merchant, retrying on collisions.
+// it to the merchant, retrying on collisions. A merchant that already has a
+// CLABE keeps it (concurrent approvals): the CLABE in effect is returned.
 func (s *Server) AssignVirtualCLABE(ctx context.Context, merchantID string) (string, error) {
 	for attempt := 0; attempt < 8; attempt++ {
 		var b [8]byte
@@ -399,14 +400,14 @@ func (s *Server) AssignVirtualCLABE(ctx context.Context, merchantID string) (str
 		if err != nil {
 			return "", err
 		}
-		err = s.merchantRepo.SetMerchantCLABE(ctx, merchantID, clabe)
+		assigned, err := s.merchantRepo.AssignMerchantCLABE(ctx, merchantID, clabe)
 		if errors.Is(err, store.ErrDuplicateCLABE) {
 			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		return clabe, nil
+		return assigned, nil
 	}
 	return "", errors.New("could not allocate a unique virtual CLABE")
 }

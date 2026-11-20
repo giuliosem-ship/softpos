@@ -83,3 +83,22 @@ func TestMemoryMerchantRepository_CSDAndMonthlySales(t *testing.T) {
 		t.Fatalf("expected new month to start at 0, got %d", total)
 	}
 }
+
+func TestMemoryMerchantRepository_AssignMerchantCLABEOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryMerchantRepository()
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "m1", RFC: "AAA010101AAA", Name: "A"})
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "m2", RFC: "BBB010101BBB", Name: "B"})
+	if got, err := repo.AssignMerchantCLABE(ctx, "m1", "646180123400000007"); err != nil || got != "646180123400000007" {
+		t.Fatalf("first assign: %q %v", got, err)
+	}
+	if got, err := repo.AssignMerchantCLABE(ctx, "m1", "646180123400000010"); err != nil || got != "646180123400000007" {
+		t.Fatalf("second assign must keep the first CLABE: %q %v", got, err)
+	}
+	if _, err := repo.AssignMerchantCLABE(ctx, "m2", "646180123400000007"); !errors.Is(err, ErrDuplicateCLABE) {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if _, err := repo.AssignMerchantCLABE(ctx, "ghost", "646180123400000023"); !errors.Is(err, ErrMerchantNotFound) {
+		t.Fatalf("ghost: %v", err)
+	}
+}

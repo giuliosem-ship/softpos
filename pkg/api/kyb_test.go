@@ -418,3 +418,23 @@ func TestKYB_RBFOriginationIsGatedAndNotSelfServed(t *testing.T) {
 		t.Fatalf("operator loan for an approved merchant: want 201, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Audit (batch G): two approvals racing past the "has no CLABE" check must
+// not hand the merchant a second virtual CLABE (the loser would overwrite the
+// one the winner already recorded and announced).
+func TestKYB_VirtualCLABEIsAssignedOnlyOnce(t *testing.T) {
+	s, _ := setupTestServer(t)
+	m := "m_kyb_clabe_once"
+	draftMerchant(t, s, m)
+	first, err := s.AssignVirtualCLABE(context.Background(), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AssignVirtualCLABE(context.Background(), m) // the racing approval
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetMerchantCLABE(m); second != first || got != first {
+		t.Fatalf("virtual CLABE reassigned: first %s, second %s, stored %s", first, second, got)
+	}
+}

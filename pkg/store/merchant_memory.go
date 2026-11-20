@@ -16,6 +16,9 @@ type MerchantRepository interface {
 	GetMerchantByCLABE(ctx context.Context, clabe string) (MerchantRecord, bool, error)
 	GetMerchantCLABE(ctx context.Context, merchantID string) (string, bool, error)
 	SetMerchantCLABE(ctx context.Context, merchantID, clabe string) error
+	// AssignMerchantCLABE sets clabe only if the merchant has no CLABE yet
+	// and returns the CLABE in effect (the existing one when already set).
+	AssignMerchantCLABE(ctx context.Context, merchantID, clabe string) (string, error)
 	SaveMerchantCSD(ctx context.Context, merchantID string, encryptedCSDJSON []byte) error
 	GetMerchantCSD(ctx context.Context, merchantID string) ([]byte, bool, error)
 	GetMonthlySalesCents(ctx context.Context, merchantID, yearMonth string) (int64, error)
@@ -147,6 +150,26 @@ func (r *MemoryMerchantRepository) SetMerchantCLABE(_ context.Context, merchantI
 	r.merchants[merchantID] = m
 	r.clabeOwner[clabe] = merchantID
 	return nil
+}
+
+func (r *MemoryMerchantRepository) AssignMerchantCLABE(_ context.Context, merchantID, clabe string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.merchants[merchantID]
+	if !ok {
+		return "", ErrMerchantNotFound
+	}
+	if m.VirtualCLABE != "" {
+		return m.VirtualCLABE, nil
+	}
+	if owner, taken := r.clabeOwner[clabe]; taken && owner != merchantID {
+		return "", ErrDuplicateCLABE
+	}
+	m.VirtualCLABE = clabe
+	m.UpdatedAt = time.Now().UTC()
+	r.merchants[merchantID] = m
+	r.clabeOwner[clabe] = merchantID
+	return clabe, nil
 }
 
 func (r *MemoryMerchantRepository) SaveMerchantCSD(_ context.Context, merchantID string, encryptedCSDJSON []byte) error {

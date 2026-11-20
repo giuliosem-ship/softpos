@@ -449,6 +449,40 @@ func (r *SQLMerchantRepository) SetMerchantCLABE(ctx context.Context, merchantID
 	return requireRowAffected(res, ErrMerchantNotFound)
 }
 
+// AssignMerchantCLABE is a conditional UPDATE (only while virtual_clabe is
+// NULL), so concurrent assignments keep the first CLABE.
+func (r *SQLMerchantRepository) AssignMerchantCLABE(ctx context.Context, merchantID, clabe string) (string, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE merchants
+		SET virtual_clabe = $1, updated_at = $2
+		WHERE id = $3 AND (virtual_clabe IS NULL OR virtual_clabe = '')
+	`, clabe, time.Now().UTC(), merchantID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return "", ErrDuplicateCLABE
+		}
+		return "", fmt.Errorf("failed to assign merchant CLABE: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return "", err
+	} else if n == 1 {
+		return clabe, nil
+	}
+	current, found, err := r.GetMerchantCLABE(ctx, merchantID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		if _, exists, gErr := r.GetMerchant(ctx, merchantID); gErr != nil {
+			return "", gErr
+		} else if !exists {
+			return "", ErrMerchantNotFound
+		}
+		return "", fmt.Errorf("merchant %s CLABE neither assigned nor present", merchantID)
+	}
+	return current, nil
+}
+
 func (r *SQLMerchantRepository) SaveMerchantCSD(ctx context.Context, merchantID string, encryptedCSDJSON []byte) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE merchants

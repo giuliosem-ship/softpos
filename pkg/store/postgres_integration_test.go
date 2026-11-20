@@ -519,3 +519,23 @@ func TestPGIntegration_OutboxPoisonEventDeadLettersOnLeaseExpiry(t *testing.T) {
 		t.Fatalf("claims=%d status=%s retries=%d owner=%q last_error=%q", claims, status, retries, owner, lastErr)
 	}
 }
+
+func TestPGIntegration_AssignMerchantCLABEOnlyOnce(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	repo := NewSQLMerchantRepository(db)
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "ac1", RFC: "AAA010101AAA", Name: "A"})
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "ac2", RFC: "BBB010101BBB", Name: "B"})
+	if got, err := repo.AssignMerchantCLABE(ctx, "ac1", "646180123400000007"); err != nil || got != "646180123400000007" {
+		t.Fatalf("first assign: %q %v", got, err)
+	}
+	if got, err := repo.AssignMerchantCLABE(ctx, "ac1", "646180123400000010"); err != nil || got != "646180123400000007" {
+		t.Fatalf("second assign must keep the first CLABE: %q %v", got, err)
+	}
+	if _, err := repo.AssignMerchantCLABE(ctx, "ac2", "646180123400000007"); !errors.Is(err, ErrDuplicateCLABE) {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if _, err := repo.AssignMerchantCLABE(ctx, "ghost", "646180123400000023"); !errors.Is(err, ErrMerchantNotFound) {
+		t.Fatalf("ghost: %v", err)
+	}
+}

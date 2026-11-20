@@ -5,8 +5,10 @@ returns a short-lived **access JWT** and an opaque **refresh token**. The access
 token carries the tenant (`merchant_id`) every protected route works on.
 
 Code: `pkg/auth` (service, JWT, memory repository, OTP sender),
-`pkg/store/auth_store.go` (PostgreSQL repository, migration `005_auth`),
-`pkg/api/handlers_auth.go` (HTTP).
+`pkg/store/auth_store.go` (PostgreSQL repository, migrations `005_auth`,
+`006_attestation_nonces`), `pkg/api/handlers_auth.go` (HTTP),
+`pkg/api/middleware_auth.go` (gate, allowlist, tenant helpers),
+`pkg/api/ratelimit.go`.
 
 ## Model
 
@@ -68,12 +70,78 @@ tokens whose `typ` is not `access`.
 | OTP resend interval | 60 s | — |
 | OTP max attempts | 5 | — |
 
+## Tenancy (MVP-05)
+
+`Server.Router()` wraps the mux with `authGate`: every route requires a valid
+access token **unless it is on the explicit public allowlist** (default deny,
+including unknown paths). The middleware puts `merchant_id`, `user_id` and
+`role` from the token into the request context.
+
+Public allowlist (`publicRoutes` in `pkg/api/middleware_auth.go`):
+
+| Route | Why public |
+|---|---|
+| `GET /healthz`, `GET /`, `GET /pos/*` | Health check and static Web POS |
+| `POST /api/v1/auth/otp/request`, `/otp/verify`, `/refresh`, `/logout` | Login flow |
+| `GET`/`POST /api/v1/auth/attestation-nonce`, `POST /api/v1/auth/attestation/verify` | Play Integrity handshake |
+| `POST /api/v1/auth/dev-session` | `404` unless `DEV_MODE` |
+| `POST /api/v1/webhooks/stp/abono`, `POST /api/v1/webhooks/codi/confirm` | Authenticated by their own signatures |
+
+Rules for protected handlers:
+
+- The tenant **always comes from the token**. A `merchant_id` in the body or
+  path that differs from it → `403 TENANT_MISMATCH` / `403` anti-IDOR. Tokens
+  without a selected merchant → `403 MERCHANT_SCOPE_REQUIRED`.
+- Resources looked up by their own id that belong to another tenant
+  (payments in settle/reverse, disbursements by `clave_rastreo`, CEP
+  reconcile) answer `404` as if they did not exist.
+- CoDi QR always pays into the tenant's registered CLABE; a different
+  `seller_clabe` → `403 SELLER_CLABE_NOT_OWNED`, none registered → `409`.
+- Idempotency keys (client `Idempotency-Key` or derived) are prefixed with the
+  tenant, so one merchant can never replay another's cached response.
+- Roles: `POST /api/v1/disbursements` requires `owner`; `POST /api/v1/rbf/loans`
+  requires `owner` or `operator`; other tenant routes accept any member.
+- `POST /api/v1/merchants` requires a token of an existing user; the **server
+  generates the id** (`mer_…`; a client `id` is ignored) and the caller becomes
+  `owner`. Then `POST /api/v1/auth/refresh {"refresh_token","merchant_id"}`
+  returns a token scoped to the new merchant.
+
+Rate limiting: `/api/v1/auth/*` is limited per client IP (fixed window,
+`AUTH_RATE_LIMIT_PER_MINUTE`, default 30) → `429 RATE_LIMITED` + `Retry-After`.
+The IP is the TCP peer (`X-Forwarded-For` is ignored); behind a proxy put the
+limit in the gateway. CORS/TLS are also gateway concerns.
+
+## Device attestation (Play Integrity)
+
+1. `GET`/`POST /api/v1/auth/attestation-nonce` → `{"nonce","issued_at_ms","ttl_seconds":300}`
+   (matches Android `AttestationNonce`). 32 random bytes, stored as SHA-256
+   (`attestation_nonces`, migration 006), single use.
+2. `POST /api/v1/auth/attestation/verify {"nonce","integrity_token"}` (token may
+   also come in `X-Play-Integrity-Token`). The nonce is burned first, then the
+   token is checked with `identity.PlayIntegrityVerifier` (package, nonce,
+   freshness, device integrity) → `200 ATTESTED` | `401 ATTESTATION_NONCE_INVALID`
+   | `401 ATTESTATION_FAILED` | `503 ATTESTATION_NOT_CONFIGURED`.
+
+The verifier still checks the simulated HMAC-signed token format; the real
+Google decryption/verification API and binding the verdict to login are pending
+(F9 "Play Integrity real").
+
+## Dev-mode demo session
+
+`POST /api/v1/auth/dev-session {"merchant_id"}` (only with `DEV_MODE=true`)
+returns an owner access token for an existing merchant through a synthetic
+user. The Web POS demo (`web/pos/app.js`) calls it at start-up;
+`SoftPOSClient.setAccessToken`/`verifyOTP` attach `Authorization` to every call.
+
 ## Configuration
 
 | Env | Meaning |
 |---|---|
 | `JWT_SECRET` | ≥ 32 bytes. Required unless `DEV_MODE=true`; the production guard rejects missing/short values. |
-| `DEV_MODE` | `true`/`1` enables explicit local-dev conveniences: ephemeral random JWT secret if `JWT_SECRET` is unset and OTP codes printed in the log. Rejected in production. |
+| `DEV_MODE` | `true`/`1` enables explicit local-dev conveniences: ephemeral random JWT secret if `JWT_SECRET` is unset, OTP codes printed in the log, `POST /api/v1/auth/dev-session`. Rejected in production. |
+| `AUTH_RATE_LIMIT_PER_MINUTE` | Per-IP budget for `/api/v1/auth/*` (default 30). |
+| `PLAY_INTEGRITY_SECRET` | Enables attestation verification; empty → `503`. |
+| `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
 
 OTP delivery: only `auth.LogSender` exists (no SMS/WhatsApp provider yet).
 Outside `DEV_MODE` it logs a masked phone and **does not reveal the code**, so

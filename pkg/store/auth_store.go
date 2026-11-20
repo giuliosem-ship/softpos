@@ -225,3 +225,26 @@ func (r *SQLAuthRepository) RevokeRefreshFamily(ctx context.Context, familyID st
 	}
 	return nil
 }
+
+func (r *SQLAuthRepository) SaveAttestationNonce(ctx context.Context, n auth.AttestationNonce) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO attestation_nonces (nonce_hash, expires_at, created_at) VALUES ($1, $2, $3)`,
+		n.NonceHash, n.ExpiresAt, n.CreatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return auth.ErrConflict
+		}
+		return fmt.Errorf("save attestation nonce: %w", err)
+	}
+	return nil
+}
+
+// ConsumeAttestationNonce is a single conditional UPDATE, so a nonce can be
+// consumed exactly once even under concurrency.
+func (r *SQLAuthRepository) ConsumeAttestationNonce(ctx context.Context, hash string, now time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE attestation_nonces SET used_at = $1 WHERE nonce_hash = $2 AND used_at IS NULL AND expires_at > $1`, now, hash)
+	if err != nil {
+		return false, fmt.Errorf("consume attestation nonce: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

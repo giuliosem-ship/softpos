@@ -100,4 +100,24 @@ describe('SoftPOS Universal SDK Suite', () => {
     assert.equal(SoftPOSSDK.formatMXN(0), '$0.00 MXN');
   });
 
+  test('SoftPOSClient sends the Bearer token and stores it after OTP verify', async () => {
+    const calls = [];
+    global.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      const body = url.endsWith('/otp/verify') ? { access_token: 'tok_123', refresh_token: 'rt_1' } : { ok: true };
+      return { ok: true, status: 200, json: async () => body };
+    };
+    try {
+      const client = new SoftPOSSDK.SoftPOSClient('http://kerno.test');
+      await client.getHealth();
+      assert.equal(calls[0].opts.headers.Authorization, undefined, 'no token before login');
+      await client.verifyOTP('+525512345678', '123456');
+      await client.getMerchantBalances('m1');
+      assert.equal(calls[2].opts.headers.Authorization, 'Bearer tok_123');
+      assert.equal(calls[2].url, 'http://kerno.test/api/v1/merchants/m1/balances');
+    } finally {
+      delete global.fetch;
+    }
+  });
+
 });

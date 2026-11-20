@@ -60,12 +60,15 @@ PYTHONPATH=. python3 -m unittest discover -s tests -p "test_*.py"
 
 ### 1. Ejecución Local (Go)
 ```bash
-# Compilar y arrancar el servidor en modo desarrollo
-go run ./cmd/server
+# Compilar y arrancar el servidor en modo desarrollo (DEV_MODE: secreto JWT efímero,
+# códigos OTP en el log y sesión demo para el Punto de Cobro)
+DEV_MODE=true go run ./cmd/server
 
 # Abrir el Punto de Cobro en el navegador
 open http://localhost:8080/pos/
 ```
+
+Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados); ver [`docs/AUTH.md`](docs/AUTH.md).
 
 Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md).
 

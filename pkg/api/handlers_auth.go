@@ -125,3 +125,120 @@ func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+type AttestationNonceResponse struct {
+	Nonce      string `json:"nonce"`
+	IssuedAtMs int64  `json:"issued_at_ms"`
+	TTLSeconds int64  `json:"ttl_seconds"`
+}
+
+// HandleAttestationNonce: GET|POST /api/v1/auth/attestation-nonce. Shape matches
+// the Android AttestationNonce(nonce, issuedAtTimestampMs, ttlSeconds).
+func (s *Server) HandleAttestationNonce(w http.ResponseWriter, r *http.Request) {
+	nonce, issuedAt, ttl, err := s.authService().IssueAttestationNonce(r.Context())
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, AttestationNonceResponse{
+		Nonce:      nonce,
+		IssuedAtMs: issuedAt.UnixMilli(),
+		TTLSeconds: int64(ttl / time.Second),
+	})
+}
+
+type AttestationVerifyRequest struct {
+	Nonce          string `json:"nonce"`
+	IntegrityToken string `json:"integrity_token"`
+}
+
+// HandleAttestationVerify: POST /api/v1/auth/attestation/verify. The nonce is
+// burned before the token is checked, so every nonce allows one attempt.
+func (s *Server) HandleAttestationVerify(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	verifier := s.integrityVerifier
+	s.mu.RUnlock()
+	if verifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "ATTESTATION_NOT_CONFIGURED")
+		return
+	}
+	var req AttestationVerifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON")
+		return
+	}
+	if req.IntegrityToken == "" {
+		req.IntegrityToken = r.Header.Get("X-Play-Integrity-Token")
+	}
+	if err := s.authService().ConsumeAttestationNonce(r.Context(), req.Nonce); err != nil {
+		if errors.Is(err, auth.ErrAttestationNonceInvalid) {
+			writeError(w, http.StatusUnauthorized, "ATTESTATION_NONCE_INVALID")
+			return
+		}
+		writeAuthError(w, err)
+		return
+	}
+	verdict, err := verifier.VerifyToken(req.IntegrityToken, req.Nonce)
+	if err != nil {
+		slog.Warn("play integrity verification failed", "error", err)
+		writeError(w, http.StatusUnauthorized, "ATTESTATION_FAILED")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                     "ATTESTED",
+		"package_name":               verdict.PackageName,
+		"device_recognition_verdict": verdict.DeviceRecognitionVerdict,
+	})
+}
+
+// devSessionPhone is the synthetic user the DEV_MODE demo session logs in as.
+const devSessionPhone = "+520000000001"
+
+type DevSessionRequest struct {
+	MerchantID string `json:"merchant_id"`
+}
+
+// HandleDevSession: POST /api/v1/auth/dev-session (DEV_MODE only, 404
+// otherwise). Gives the Web POS demo an owner token for an existing merchant.
+func (s *Server) HandleDevSession(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dev := s.devMode
+	s.mu.RUnlock()
+	if !dev {
+		http.NotFound(w, r)
+		return
+	}
+	var req DevSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.MerchantID == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_MERCHANT_ID")
+		return
+	}
+	if _, exists := s.GetMerchant(req.MerchantID); !exists {
+		writeError(w, http.StatusNotFound, "MERCHANT_NOT_FOUND")
+		return
+	}
+	svc := s.authService()
+	user, err := svc.EnsureUser(r.Context(), devSessionPhone)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	if err := svc.AddMembership(r.Context(), user.ID, req.MerchantID, auth.RoleOwner); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	token, err := svc.MintAccessToken(user.ID, req.MerchantID, auth.RoleOwner)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	slog.Warn("DEV_MODE demo session issued", "merchant_id", req.MerchantID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token": token,
+		"token_type":   "Bearer",
+		"expires_in":   int64(svc.AccessTTL() / time.Second),
+		"merchant_id":  req.MerchantID,
+		"role":         auth.RoleOwner,
+	})
+}

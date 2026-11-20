@@ -51,6 +51,12 @@ type Config struct {
 	JWTSecret      string        // JWT_SECRET (>= 32 bytes); required unless DevMode
 	AuthAccessTTL  time.Duration // AUTH_ACCESS_TTL, default 15m
 	AuthRefreshTTL time.Duration // AUTH_REFRESH_TTL, default 720h
+	// AuthRateLimitPerMinute is the per-IP budget for /api/v1/auth/*
+	// (AUTH_RATE_LIMIT_PER_MINUTE, default 30; 0 keeps the default).
+	AuthRateLimitPerMinute int
+	// Play Integrity verification for /api/v1/auth/attestation/verify.
+	PlayIntegritySecret  string // PLAY_INTEGRITY_SECRET; empty disables verification (503)
+	PlayIntegrityPackage string // PLAY_INTEGRITY_PACKAGE, default "mx.softpos.app"
 
 	// Outbox dispatcher (only runs when DatabaseURL is set).
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
@@ -114,25 +120,41 @@ func LoadConfigFromEnv() Config {
 		devMode = true
 	}
 
+	authRate := 0
+	if val := os.Getenv("AUTH_RATE_LIMIT_PER_MINUTE"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			authRate = n
+		} else {
+			slog.Warn("invalid AUTH_RATE_LIMIT_PER_MINUTE, using default", "value", val)
+		}
+	}
+	integrityPkg := os.Getenv("PLAY_INTEGRITY_PACKAGE")
+	if integrityPkg == "" {
+		integrityPkg = "mx.softpos.app"
+	}
+
 	return Config{
-		DevMode:            devMode,
-		JWTSecret:          os.Getenv("JWT_SECRET"),
-		AuthAccessTTL:      parseDurationEnv("AUTH_ACCESS_TTL"),
-		AuthRefreshTTL:     parseDurationEnv("AUTH_REFRESH_TTL"),
-		OutboxPollInterval: outboxPoll,
-		OutboxBatchSize:    outboxBatch,
-		OutboxPublisher:    os.Getenv("OUTBOX_PUBLISHER"),
-		Port:               port,
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		SQLDriver:          sqlDriver,
-		MigrationsDir:      migrationsDir,
-		RedisAddr:          os.Getenv("REDIS_ADDR"),
-		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
-		VaultMasterKeyHex:  os.Getenv("VAULT_MASTER_KEY_HEX"),
-		STPHMACSecret:      hmacSecret,
-		STPBaseURL:         os.Getenv("STP_BASE_URL"),
-		SeedDemoMerchant:   seedDemo,
-		StaticDir:          staticDir,
+		AuthRateLimitPerMinute: authRate,
+		PlayIntegritySecret:    os.Getenv("PLAY_INTEGRITY_SECRET"),
+		PlayIntegrityPackage:   integrityPkg,
+		DevMode:                devMode,
+		JWTSecret:              os.Getenv("JWT_SECRET"),
+		AuthAccessTTL:          parseDurationEnv("AUTH_ACCESS_TTL"),
+		AuthRefreshTTL:         parseDurationEnv("AUTH_REFRESH_TTL"),
+		OutboxPollInterval:     outboxPoll,
+		OutboxBatchSize:        outboxBatch,
+		OutboxPublisher:        os.Getenv("OUTBOX_PUBLISHER"),
+		Port:                   port,
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		SQLDriver:              sqlDriver,
+		MigrationsDir:          migrationsDir,
+		RedisAddr:              os.Getenv("REDIS_ADDR"),
+		RedisPassword:          os.Getenv("REDIS_PASSWORD"),
+		VaultMasterKeyHex:      os.Getenv("VAULT_MASTER_KEY_HEX"),
+		STPHMACSecret:          hmacSecret,
+		STPBaseURL:             os.Getenv("STP_BASE_URL"),
+		SeedDemoMerchant:       seedDemo,
+		StaticDir:              staticDir,
 	}
 }
 
@@ -237,6 +259,13 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetAuthService(authSvc)
+	server.SetDevMode(cfg.DevMode)
+	if cfg.AuthRateLimitPerMinute > 0 {
+		server.SetAuthRateLimit(cfg.AuthRateLimitPerMinute)
+	}
+	if cfg.PlayIntegritySecret != "" {
+		server.SetPlayIntegrityVerifier(identity.NewPlayIntegrityVerifier(cfg.PlayIntegrityPackage, cfg.PlayIntegritySecret, 5*time.Minute))
+	}
 
 	if db != nil {
 		sqlMerchantRepo := store.NewSQLMerchantRepository(db)

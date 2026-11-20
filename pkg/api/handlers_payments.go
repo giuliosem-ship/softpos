@@ -41,16 +41,23 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	req.MerchantID = tenant
+
 	if req.GrossAmountCents <= 0 {
 		http.Error(w, `{"error":"INVALID_AMOUNT"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Idempotency check
+	// Idempotency check (scoped by tenant)
 	idempKey := r.Header.Get("Idempotency-Key")
 	if idempKey == "" {
 		idempKey = "pay:settle:" + req.PaymentID
 	}
+	idempKey = tenantIdempotencyKey(tenant, idempKey)
 	if rec, exists := s.idempotency.Get(idempKey); exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(rec.StatusCode)
@@ -60,6 +67,10 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 
 	// If payment was previously authorized in EMV PaymentEngine, verify it can transition to SETTLED
 	if existingPayment, err := s.paymentEngine.GetPayment(req.PaymentID); err == nil && existingPayment != nil {
+		if existingPayment.MerchantID != tenant {
+			http.Error(w, `{"error":"PAYMENT_NOT_FOUND"}`, http.StatusNotFound)
+			return
+		}
 		if existingPayment.Status != payments.PaymentAuthorized {
 			http.Error(w, `{"error":"INVALID_PAYMENT_STATE"}`, http.StatusConflict)
 			return

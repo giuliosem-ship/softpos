@@ -403,3 +403,46 @@ func (s *Service) AddMembership(ctx context.Context, userID, merchantID string, 
 	}
 	return s.repo.AddMembership(ctx, Membership{UserID: userID, MerchantID: merchantID, Role: role, CreatedAt: s.now()})
 }
+
+// DefaultAttestationNonceTTL matches the Android PlayIntegrityClient default.
+const DefaultAttestationNonceTTL = 300 * time.Second
+
+// IssueAttestationNonce creates a random single-use nonce for Play Integrity
+// (stored as SHA-256) and returns it with its issue time and TTL.
+func (s *Service) IssueAttestationNonce(ctx context.Context) (nonce string, issuedAt time.Time, ttl time.Duration, err error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", time.Time{}, 0, err
+	}
+	nonce = base64.RawURLEncoding.EncodeToString(raw)
+	now := s.now()
+	ttl = DefaultAttestationNonceTTL
+	if err := s.repo.SaveAttestationNonce(ctx, AttestationNonce{NonceHash: HashToken(nonce), ExpiresAt: now.Add(ttl), CreatedAt: now}); err != nil {
+		return "", time.Time{}, 0, err
+	}
+	return nonce, now, ttl, nil
+}
+
+// ConsumeAttestationNonce burns nonce; ErrAttestationNonceInvalid if it is
+// unknown, expired or was already used.
+func (s *Service) ConsumeAttestationNonce(ctx context.Context, nonce string) error {
+	if nonce == "" {
+		return ErrAttestationNonceInvalid
+	}
+	ok, err := s.repo.ConsumeAttestationNonce(ctx, HashToken(nonce), s.now())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrAttestationNonceInvalid
+	}
+	return nil
+}
+
+// EnsureUser returns the user for phone, creating it if needed.
+func (s *Service) EnsureUser(ctx context.Context, phone string) (User, error) {
+	if !ValidPhone(phone) {
+		return User{}, ErrInvalidPhone
+	}
+	return s.getOrCreateUser(ctx, phone, s.now())
+}

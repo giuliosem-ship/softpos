@@ -173,7 +173,7 @@ func TestSoftPOSPaymentSettle_SuccessWithRESICO(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
 	}
@@ -235,7 +235,7 @@ func TestDisbursement_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
 	}
@@ -280,7 +280,7 @@ func TestDisbursement_SAT69BBlacklistBlocked(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected HTTP 403 Forbidden for blacklisted merchant, got %d", rec.Code)
 	}
@@ -311,7 +311,7 @@ func TestDisbursement_InsufficientFundsFails(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected HTTP 400 for insufficient funds, got %d", rec.Code)
 	}
@@ -336,7 +336,7 @@ func TestDisbursement_InvalidCLABEFails(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected HTTP 400 for invalid CLABE, got %d", rec.Code)
 	}
@@ -360,7 +360,7 @@ func TestGetMerchantBalances(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil)
 	rec := httptest.NewRecorder()
 
-	server.Router().ServeHTTP(rec, req)
+	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
@@ -397,7 +397,7 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 	body1, _ := json.Marshal(sale1)
 	rec1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(body1))
-	server.Router().ServeHTTP(rec1, req1)
+	server.Router().ServeHTTP(rec1, asTenant(t, server, merchantID, req1))
 
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("expected 200 on sale 1, got %d: %s", rec1.Code, rec1.Body.String())
@@ -421,7 +421,7 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 	body2, _ := json.Marshal(sale2)
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(body2))
-	server.Router().ServeHTTP(rec2, req2)
+	server.Router().ServeHTTP(rec2, asTenant(t, server, merchantID, req2))
 
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("expected 200 on sale 2, got %d: %s", rec2.Code, rec2.Body.String())
@@ -463,14 +463,14 @@ func TestMerchantIsolatedRBFBalance(t *testing.T) {
 	}
 	b1, _ := json.Marshal(settleM1)
 	recSettle := httptest.NewRecorder()
-	server.Router().ServeHTTP(recSettle, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(b1)))
+	server.Router().ServeHTTP(recSettle, asTenant(t, server, m1, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(b1))))
 	if recSettle.Code != http.StatusOK {
 		t.Fatalf("settle M1 failed: %d", recSettle.Code)
 	}
 
 	// Query Merchant 1 balance -> RBF debt should be 40,000 cents (50,000 - 10,000)
 	recBal1 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recBal1, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+m1+"/balances", nil))
+	server.Router().ServeHTTP(recBal1, asTenant(t, server, m1, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+m1+"/balances", nil)))
 	var bal1 MerchantBalancesResponse
 	_ = json.Unmarshal(recBal1.Body.Bytes(), &bal1)
 	if bal1.RBFDebtCents != 40000 {
@@ -479,7 +479,7 @@ func TestMerchantIsolatedRBFBalance(t *testing.T) {
 
 	// Query Merchant 2 balance -> RBF debt MUST be 0 (strictly isolated from Merchant 1)
 	recBal2 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recBal2, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+m2+"/balances", nil))
+	server.Router().ServeHTTP(recBal2, asTenant(t, server, m2, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+m2+"/balances", nil)))
 	var bal2 MerchantBalancesResponse
 	_ = json.Unmarshal(recBal2.Body.Bytes(), &bal2)
 	if bal2.RBFDebtCents != 0 {
@@ -526,7 +526,7 @@ func TestEMVAuthorizeSettleAndReverse(t *testing.T) {
 		TLVHex:     validTLVHex,
 	})
 	recAuth1 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recAuth1, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(auth1Body)))
+	server.Router().ServeHTTP(recAuth1, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(auth1Body))))
 	if recAuth1.Code != http.StatusOK {
 		t.Fatalf("expected 200 on EMV authorize, got %d: %s", recAuth1.Code, recAuth1.Body.String())
 	}
@@ -538,7 +538,7 @@ func TestEMVAuthorizeSettleAndReverse(t *testing.T) {
 
 	rev1Body, _ := json.Marshal(EMVReverseRequest{PaymentID: "emv_pay_void_01"})
 	recRev1 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recRev1, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/reverse", bytes.NewReader(rev1Body)))
+	server.Router().ServeHTTP(recRev1, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/reverse", bytes.NewReader(rev1Body))))
 	if recRev1.Code != http.StatusOK {
 		t.Fatalf("expected 200 on EMV void, got %d: %s", recRev1.Code, recRev1.Body.String())
 	}
@@ -555,7 +555,7 @@ func TestEMVAuthorizeSettleAndReverse(t *testing.T) {
 		TLVHex:     validTLVHex,
 	})
 	recAuth2 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recAuth2, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(auth2Body)))
+	server.Router().ServeHTTP(recAuth2, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(auth2Body))))
 	if recAuth2.Code != http.StatusOK {
 		t.Fatalf("expected 200 on EMV authorize 2, got %d", recAuth2.Code)
 	}
@@ -567,14 +567,14 @@ func TestEMVAuthorizeSettleAndReverse(t *testing.T) {
 		PlatformFeeCents: 500,
 	})
 	recSettle := httptest.NewRecorder()
-	server.Router().ServeHTTP(recSettle, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody)))
+	server.Router().ServeHTTP(recSettle, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody))))
 	if recSettle.Code != http.StatusOK {
 		t.Fatalf("expected 200 on settle, got %d: %s", recSettle.Code, recSettle.Body.String())
 	}
 
 	rev2Body, _ := json.Marshal(EMVReverseRequest{PaymentID: "emv_pay_settle_02", RefundCents: 25000})
 	recRev2 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recRev2, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/reverse", bytes.NewReader(rev2Body)))
+	server.Router().ServeHTTP(recRev2, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/reverse", bytes.NewReader(rev2Body))))
 	if recRev2.Code != http.StatusOK {
 		t.Fatalf("expected 200 on EMV refund, got %d: %s", recRev2.Code, recRev2.Body.String())
 	}
@@ -599,7 +599,7 @@ func TestCoDiQRAndWebhookConfirm(t *testing.T) {
 		Reference:   "CODIREF01",
 	})
 	recQR := httptest.NewRecorder()
-	server.Router().ServeHTTP(recQR, httptest.NewRequest(http.MethodPost, "/api/v1/payments/codi/qr", bytes.NewReader(qrReq)))
+	server.Router().ServeHTTP(recQR, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/codi/qr", bytes.NewReader(qrReq))))
 	if recQR.Code != http.StatusOK {
 		t.Fatalf("expected 200 on CoDi QR, got %d: %s", recQR.Code, recQR.Body.String())
 	}
@@ -658,7 +658,7 @@ func TestCFDIIndividualAndFacturaGlobalStamping(t *testing.T) {
 		GrossAmountCents: 116000,
 	})
 	recIndiv := httptest.NewRecorder()
-	server.Router().ServeHTTP(recIndiv, httptest.NewRequest(http.MethodPost, "/api/v1/invoices/cfdi", bytes.NewReader(indivReq)))
+	server.Router().ServeHTTP(recIndiv, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/invoices/cfdi", bytes.NewReader(indivReq))))
 	if recIndiv.Code != http.StatusOK {
 		t.Fatalf("expected 200 on individual CFDI stamp, got %d: %s", recIndiv.Code, recIndiv.Body.String())
 	}
@@ -674,7 +674,7 @@ func TestCFDIIndividualAndFacturaGlobalStamping(t *testing.T) {
 		TotalGrossCents: 232000,
 	})
 	recGlobal := httptest.NewRecorder()
-	server.Router().ServeHTTP(recGlobal, httptest.NewRequest(http.MethodPost, "/api/v1/invoices/global", bytes.NewReader(globalReq)))
+	server.Router().ServeHTTP(recGlobal, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/invoices/global", bytes.NewReader(globalReq))))
 	if recGlobal.Code != http.StatusOK {
 		t.Fatalf("expected 200 on Factura Global stamp, got %d: %s", recGlobal.Code, recGlobal.Body.String())
 	}
@@ -699,7 +699,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 		HoldbackBps:    2000,
 	})
 	recOrig := httptest.NewRecorder()
-	server.Router().ServeHTTP(recOrig, httptest.NewRequest(http.MethodPost, "/api/v1/rbf/loans", bytes.NewReader(origBody)))
+	server.Router().ServeHTTP(recOrig, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/rbf/loans", bytes.NewReader(origBody))))
 	if recOrig.Code != http.StatusCreated {
 		t.Fatalf("expected 201 on RBF origination, got %d: %s", recOrig.Code, recOrig.Body.String())
 	}
@@ -716,7 +716,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 		GrossAmountCents: 348_000,
 	})
 	recS1 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recS1, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(s1Body)))
+	server.Router().ServeHTTP(recS1, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(s1Body))))
 	if recS1.Code != http.StatusOK {
 		t.Fatalf("sale 1 failed: %d", recS1.Code)
 	}
@@ -733,7 +733,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 		GrossAmountCents: 348_000,
 	})
 	recS2 := httptest.NewRecorder()
-	server.Router().ServeHTTP(recS2, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(s2Body)))
+	server.Router().ServeHTTP(recS2, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(s2Body))))
 	if recS2.Code != http.StatusOK {
 		t.Fatalf("sale 2 failed: %d", recS2.Code)
 	}
@@ -745,7 +745,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 
 	// 4. Query RBF status & merchant balances -> loan must be PAID_OFF and RBFDebtCents in ledger must be 0!
 	recLoan := httptest.NewRecorder()
-	server.Router().ServeHTTP(recLoan, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/rbf", nil))
+	server.Router().ServeHTTP(recLoan, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/rbf", nil)))
 	var finalLoan RBFLoanResponse
 	_ = json.Unmarshal(recLoan.Body.Bytes(), &finalLoan)
 	if finalLoan.Status != rbf.LoanPaidOff || finalLoan.RemainingCents != 0 {
@@ -753,7 +753,7 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 	}
 
 	recBal := httptest.NewRecorder()
-	server.Router().ServeHTTP(recBal, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil))
+	server.Router().ServeHTTP(recBal, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil)))
 	var balResp MerchantBalancesResponse
 	_ = json.Unmarshal(recBal.Body.Bytes(), &balResp)
 	if balResp.RBFDebtCents != 0 {
@@ -794,7 +794,7 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 		Concept:          "Liquidacion T+0",
 	})
 	recDisb := httptest.NewRecorder()
-	server.Router().ServeHTTP(recDisb, httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(disbBody)))
+	server.Router().ServeHTTP(recDisb, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(disbBody))))
 	if recDisb.Code != http.StatusOK {
 		t.Fatalf("expected 200 on disbursement, got %d: %s", recDisb.Code, recDisb.Body.String())
 	}
@@ -806,7 +806,7 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 
 	// 2. Reconcile CEP with Banxico
 	recCEP := httptest.NewRecorder()
-	server.Router().ServeHTTP(recCEP, httptest.NewRequest(http.MethodPost, "/api/v1/disbursements/"+disbResp.ClaveRastreo+"/reconcile-cep", nil))
+	server.Router().ServeHTTP(recCEP, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/disbursements/"+disbResp.ClaveRastreo+"/reconcile-cep", nil)))
 	if recCEP.Code != http.StatusOK {
 		t.Fatalf("expected 200 on CEP reconciliation, got %d: %s", recCEP.Code, recCEP.Body.String())
 	}
@@ -820,19 +820,29 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 
 func TestRegisterMerchantWithCLABE_KeepsProfileAndRejectsDuplicateCLABE(t *testing.T) {
 	server, _ := setupTestServer(t)
+	sender := withTestAuth(t, server)
+	user := httpLogin(t, server, sender, "+525510000001", "")
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		server.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/merchants", strings.NewReader(body)))
+		server.Router().ServeHTTP(rec, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/merchants", strings.NewReader(body)), user.AccessToken))
 		return rec
 	}
-	if rec := post(`{"id":"m_clabe_1","rfc":"GARM850101ABC","name":"Fonda Real","is_resico":false,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusCreated {
+	rec := post(`{"id":"m_clabe_1","rfc":"GARM850101ABC","name":"Fonda Real","is_resico":false,"virtual_clabe":"646180123400000007"}`)
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("register: %d %s", rec.Code, rec.Body.String())
 	}
-	m, ok := server.GetMerchant("m_clabe_1")
+	var created struct {
+		MerchantID string `json:"merchant_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.MerchantID == "" || created.MerchantID == "m_clabe_1" {
+		t.Fatalf("server must generate the merchant id (client id ignored), got %q", created.MerchantID)
+	}
+	m, ok := server.GetMerchant(created.MerchantID)
 	if !ok || m.Name != "Fonda Real" || m.IsRESICO || m.CLABE != "646180123400000007" {
 		t.Fatalf("CLABE assignment must not overwrite the merchant profile: %+v", m)
 	}
-	if rec := post(`{"id":"m_clabe_2","rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusConflict {
+	if rec := post(`{"rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409 for a CLABE owned by another merchant, got %d %s", rec.Code, rec.Body.String())
 	}
 	if err := server.RegisterMerchantCSD("ghost_merchant", []byte("k"), []byte("c")); err == nil {
@@ -856,7 +866,7 @@ func TestSetPaymentProcessor_IsUsedByHandlers(t *testing.T) {
 	server.SetPaymentProcessor(proc)
 	body := `{"payment_id":"pp_1","merchant_id":"m1","tlv_hex":"9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"}`
 	rec := httptest.NewRecorder()
-	server.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", strings.NewReader(body)))
+	server.Router().ServeHTTP(rec, asTenant(t, server, "m1", httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", strings.NewReader(body))))
 	if rec.Code != http.StatusOK || proc.authorizes != 1 {
 		t.Fatalf("expected injected processor to authorize once, got code=%d count=%d", rec.Code, proc.authorizes)
 	}

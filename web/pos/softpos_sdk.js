@@ -313,6 +313,12 @@
   class SoftPOSClient {
     constructor(baseURL = '') {
       this.baseURL = baseURL;
+      this.accessToken = null;
+    }
+
+    // Bearer access token sent on every request (see docs/AUTH.md).
+    setAccessToken(token) {
+      this.accessToken = token || null;
     }
 
     async _request(path, method = 'GET', body = null, headers = {}) {
@@ -320,6 +326,7 @@
         method,
         headers: {
           'Content-Type': 'application/json',
+          ...(this.accessToken ? { Authorization: `Bearer ${this.accessToken}` } : {}),
           ...headers,
         },
       };
@@ -339,6 +346,26 @@
 
     async getHealth() {
       return this._request('/healthz');
+    }
+
+    // --- Auth: OTP login (POST /api/v1/auth/otp/*) ---
+    async requestOTP(phone) {
+      return this._request('/api/v1/auth/otp/request', 'POST', { phone });
+    }
+
+    async verifyOTP(phone, code, merchantId) {
+      const tokens = await this._request('/api/v1/auth/otp/verify', 'POST', {
+        phone, code, ...(merchantId ? { merchant_id: merchantId } : {}),
+      });
+      this.setAccessToken(tokens.access_token);
+      return tokens;
+    }
+
+    // DEV_MODE only: owner token for the seeded demo merchant.
+    async startDevSession(merchantId) {
+      const session = await this._request('/api/v1/auth/dev-session', 'POST', { merchant_id: merchantId });
+      this.setAccessToken(session.access_token);
+      return session;
     }
 
     async getMerchant(merchantId) {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,9 @@ type Server struct {
 	emvPaymentRepo    *store.SQLEMVPaymentRepository
 	outboxRepo        *store.SQLOutboxRepository
 	auth              *auth.Service
+	authLimiter       *RateLimiter
+	integrityVerifier *identity.PlayIntegrityVerifier
+	devMode           bool
 	staticDir         string
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -79,6 +83,7 @@ func NewServer(
 		router:            http.NewServeMux(),
 	}
 	s.auth = newEphemeralAuthService()
+	s.authLimiter = NewRateLimiter(DefaultAuthRateLimitPerMinute, time.Minute)
 
 	s.routes()
 	return s
@@ -104,6 +109,28 @@ func (s *Server) SetAuthService(svc *auth.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auth = svc
+}
+
+// SetAuthRateLimit sets the per-IP request budget per minute for
+// /api/v1/auth/* (<= 0 disables it). Call at boot.
+func (s *Server) SetAuthRateLimit(perMinute int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authLimiter = NewRateLimiter(perMinute, time.Minute)
+}
+
+// SetPlayIntegrityVerifier enables POST /api/v1/auth/attestation/verify.
+func (s *Server) SetPlayIntegrityVerifier(v *identity.PlayIntegrityVerifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.integrityVerifier = v
+}
+
+// SetDevMode enables explicit local-development endpoints (demo session).
+func (s *Server) SetDevMode(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.devMode = enabled
 }
 
 // AuthService returns the configured auth service.
@@ -341,9 +368,8 @@ func (s *Server) HandleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleGetMerchant(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.PathValue("id")
-	if merchantID == "" {
-		http.Error(w, `{"error":"MISSING_MERCHANT_ID"}`, http.StatusBadRequest)
+	merchantID, ok := requireTenant(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
 	m, exists := s.GetMerchant(merchantID)
@@ -360,41 +386,77 @@ func (s *Server) HandleGetMerchant(w http.ResponseWriter, r *http.Request) {
 }
 
 type RegisterMerchantRequest struct {
-	ID           string `json:"id"`
+	// ID is ignored: the server generates merchant ids (F1 "el id lo manda el cliente").
+	ID           string `json:"id,omitempty"`
 	RFC          string `json:"rfc"`
 	Name         string `json:"name"`
 	IsRESICO     bool   `json:"is_resico"`
 	VirtualCLABE string `json:"virtual_clabe,omitempty"`
 }
 
+func newMerchantID() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "mer_" + hex.EncodeToString(b), nil
+}
+
+// HandleRegisterMerchant: POST /api/v1/merchants. Requires an authenticated
+// user; the server generates the merchant id and makes the caller its owner.
+// Use POST /api/v1/auth/refresh with merchant_id to get a token for it.
 func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED")
+		return
+	}
+	authSvc := s.authService()
+	if _, found, err := authSvc.Repository().GetUser(r.Context(), userID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "USER_LOOKUP_FAILED")
+		return
+	} else if !found {
+		writeError(w, http.StatusForbidden, "USER_ACCOUNT_REQUIRED")
+		return
+	}
+
 	var req RegisterMerchantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.ID == "" || req.RFC == "" || req.Name == "" {
+	if req.RFC == "" || req.Name == "" {
 		http.Error(w, `{"error":"MISSING_REQUIRED_FIELDS"}`, http.StatusBadRequest)
 		return
 	}
+	merchantID, err := newMerchantID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ID_GENERATION_FAILED")
+		return
+	}
 
-	if err := s.RegisterMerchant(req.ID, req.RFC, req.Name, req.IsRESICO); err != nil {
+	if err := s.RegisterMerchant(merchantID, req.RFC, req.Name, req.IsRESICO); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"REGISTRATION_FAILED","detail":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
+	if err := authSvc.AddMembership(r.Context(), userID, merchantID, auth.RoleOwner); err != nil {
+		slog.Error("owner membership failed", "merchant_id", merchantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "OWNER_MEMBERSHIP_FAILED")
+		return
+	}
+
 	if req.VirtualCLABE != "" {
-		if err := s.RegisterMerchantCLABE(req.VirtualCLABE, req.ID, req.RFC); err != nil {
+		if err := s.RegisterMerchantCLABE(req.VirtualCLABE, merchantID, req.RFC); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"CLABE_ASSIGNMENT_FAILED","detail":%q}`, err.Error()), http.StatusConflict)
 			return
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, http.StatusCreated, map[string]any{
 		"status":      "CREATED",
-		"merchant_id": req.ID,
+		"merchant_id": merchantID,
+		"role":        auth.RoleOwner,
 	})
 }
 
@@ -407,6 +469,10 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/auth/otp/verify", s.HandleOTPVerify)
 	s.router.HandleFunc("POST /api/v1/auth/refresh", s.HandleRefresh)
 	s.router.HandleFunc("POST /api/v1/auth/logout", s.HandleLogout)
+	s.router.HandleFunc("GET /api/v1/auth/attestation-nonce", s.HandleAttestationNonce)
+	s.router.HandleFunc("POST /api/v1/auth/attestation-nonce", s.HandleAttestationNonce)
+	s.router.HandleFunc("POST /api/v1/auth/attestation/verify", s.HandleAttestationVerify)
+	s.router.HandleFunc("POST /api/v1/auth/dev-session", s.HandleDevSession)
 
 	// Merchant Catalog
 	s.router.HandleFunc("GET /api/v1/merchants/{id}", s.HandleGetMerchant)
@@ -453,6 +519,8 @@ func (s *Server) routes() {
 	})
 }
 
+// Router returns the HTTP handler: recovery -> logging -> auth gate (JWT on
+// every route outside the public allowlist, per-IP limit on /api/v1/auth/*).
 func (s *Server) Router() http.Handler {
-	return RecoveryMiddleware(LoggingMiddleware(s.router))
+	return RecoveryMiddleware(LoggingMiddleware(s.authGate(s.router)))
 }

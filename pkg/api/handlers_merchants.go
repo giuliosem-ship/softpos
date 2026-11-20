@@ -15,9 +15,8 @@ type MerchantBalancesResponse struct {
 }
 
 func (s *Server) HandleGetMerchantBalances(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.PathValue("id")
-	if merchantID == "" {
-		http.Error(w, `{"error":"MISSING_MERCHANT_ID"}`, http.StatusBadRequest)
+	merchantID, ok := requireTenant(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
 

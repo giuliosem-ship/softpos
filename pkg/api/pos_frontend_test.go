@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"softpos/pkg/auth"
 )
 
 func TestPOSFrontendStaticAndHealthEndpoints(t *testing.T) {
@@ -71,10 +73,18 @@ func TestPOSFrontendStaticAndHealthEndpoints(t *testing.T) {
 
 func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	server, _ := setupTestServer(t)
+	sender := withTestAuth(t, server)
 
-	// 1. Create merchant via POST /api/v1/merchants
+	// 0. Unauthenticated calls are rejected once auth is mounted.
+	recAnon := httptest.NewRecorder()
+	server.Router().ServeHTTP(recAnon, httptest.NewRequest(http.MethodPost, "/api/v1/merchants", strings.NewReader(`{}`)))
+	if recAnon.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", recAnon.Code)
+	}
+
+	// 1. OTP login (new user, no merchant yet), then create merchant via POST /api/v1/merchants
+	session := httpLogin(t, server, sender, "+525512340001", "")
 	regPayload := RegisterMerchantRequest{
-		ID:           "merch_new_pos_01",
 		RFC:          "TAQ850101XYZ",
 		Name:         "Taqueria El Pastor Central",
 		IsRESICO:     true,
@@ -82,33 +92,55 @@ func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	}
 	body, _ := json.Marshal(regPayload)
 	recReg := httptest.NewRecorder()
-	server.Router().ServeHTTP(recReg, httptest.NewRequest(http.MethodPost, "/api/v1/merchants", bytes.NewReader(body)))
-
+	server.Router().ServeHTTP(recReg, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/merchants", bytes.NewReader(body)), session.AccessToken))
 	if recReg.Code != http.StatusCreated {
 		t.Fatalf("expected 201 on merchant creation, got %d: %s", recReg.Code, recReg.Body.String())
 	}
+	var created struct {
+		MerchantID string `json:"merchant_id"`
+	}
+	_ = json.Unmarshal(recReg.Body.Bytes(), &created)
+	merchantID := created.MerchantID
+
+	// A merchant-less token cannot operate on the new merchant yet.
+	recNoScope := httptest.NewRecorder()
+	server.Router().ServeHTTP(recNoScope, withBearer(httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID, nil), session.AccessToken))
+	if recNoScope.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for unscoped token, got %d", recNoScope.Code)
+	}
+
+	// 1b. Re-scope the session to the new merchant (caller became owner).
+	recRef := postJSON(t, server.Router(), "/api/v1/auth/refresh", map[string]string{"refresh_token": session.RefreshToken, "merchant_id": merchantID})
+	if recRef.Code != http.StatusOK {
+		t.Fatalf("refresh with merchant_id: %d %s", recRef.Code, recRef.Body.String())
+	}
+	var scoped auth.TokenPair
+	_ = json.Unmarshal(recRef.Body.Bytes(), &scoped)
+	if scoped.MerchantID != merchantID || scoped.Role != auth.RoleOwner {
+		t.Fatalf("scoped session = %+v", scoped)
+	}
+	token := scoped.AccessToken
 
 	// 2. Fetch merchant profile via GET /api/v1/merchants/{id}
 	recGet := httptest.NewRecorder()
-	server.Router().ServeHTTP(recGet, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_new_pos_01", nil))
+	server.Router().ServeHTTP(recGet, withBearer(httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID, nil), token))
 	if recGet.Code != http.StatusOK {
 		t.Fatalf("expected 200 on get merchant, got %d", recGet.Code)
 	}
 	var merchResp Merchant
 	_ = json.Unmarshal(recGet.Body.Bytes(), &merchResp)
-	if merchResp.ID != "merch_new_pos_01" || merchResp.CLABE != "646180123400000007" {
+	if merchResp.ID != merchantID || merchResp.CLABE != "646180123400000007" {
 		t.Errorf("unexpected merchant response: %+v", merchResp)
 	}
 
-	// 3. Perform Tap-to-Phone EMV Authorize + Settle flow for POS
+	// 3. Perform Tap-to-Phone EMV Authorize + Settle flow for POS (tenant from token)
 	validTLVHex := "9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"
 	authBody, _ := json.Marshal(EMVAuthorizeRequest{
-		PaymentID:  "pos_emv_001",
-		MerchantID: "merch_new_pos_01",
-		TLVHex:     validTLVHex,
+		PaymentID: "pos_emv_001",
+		TLVHex:    validTLVHex,
 	})
 	recAuth := httptest.NewRecorder()
-	server.Router().ServeHTTP(recAuth, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(authBody)))
+	server.Router().ServeHTTP(recAuth, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewReader(authBody)), token))
 	if recAuth.Code != http.StatusOK {
 		t.Fatalf("expected 200 on EMV authorize, got %d: %s", recAuth.Code, recAuth.Body.String())
 	}
@@ -116,19 +148,18 @@ func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	// Settle sale of $250.00 MXN (25,000 cents)
 	settleBody, _ := json.Marshal(SettlePaymentRequest{
 		PaymentID:        "pos_emv_001",
-		MerchantID:       "merch_new_pos_01",
 		GrossAmountCents: 25000,
 		PlatformFeeCents: 500, // 2%
 	})
 	recSettle := httptest.NewRecorder()
-	server.Router().ServeHTTP(recSettle, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody)))
+	server.Router().ServeHTTP(recSettle, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody)), token))
 	if recSettle.Code != http.StatusOK {
 		t.Fatalf("expected 200 on settle, got %d: %s", recSettle.Code, recSettle.Body.String())
 	}
 
 	// Query balances to ensure Available has net proceeds
 	recBal := httptest.NewRecorder()
-	server.Router().ServeHTTP(recBal, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_new_pos_01/balances", nil))
+	server.Router().ServeHTTP(recBal, withBearer(httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil), token))
 	var balResp MerchantBalancesResponse
 	_ = json.Unmarshal(recBal.Body.Bytes(), &balResp)
 

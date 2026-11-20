@@ -359,5 +359,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initial Load
   updateDisplay();
+  // Backend routes require a JWT: in DEV_MODE the demo gets an owner session.
+  try {
+    await client.startDevSession(currentMerchantId);
+  } catch (e) {
+    console.warn('Demo session unavailable (DEV_MODE off?):', e);
+  }
   await refreshBalances();
 });

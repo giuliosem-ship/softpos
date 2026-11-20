@@ -29,7 +29,7 @@ func TestPGIntegration_BuildServerTwiceOnRealPostgres(t *testing.T) {
 			t.Fatalf("boot %d: BuildServer: %v", boot, err)
 		}
 		rec := httptest.NewRecorder()
-		srv.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_demo_01", nil))
+		srv.Router().ServeHTTP(rec, asMerchant(t, srv, "merch_demo_01", httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_demo_01", nil)))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("boot %d: expected demo merchant 200, got %d: %s", boot, rec.Code, rec.Body.String())
 		}

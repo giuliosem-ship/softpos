@@ -6,9 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"softpos/pkg/api"
+	"softpos/pkg/auth"
 	_ "softpos/pkg/store" // register mockpostgres driver
 )
 
@@ -86,7 +89,7 @@ func TestBuildServer_InMemoryAndMockDB(t *testing.T) {
 	}()
 
 	recGet := httptest.NewRecorder()
-	srvSQL.Router().ServeHTTP(recGet, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_demo_01", nil))
+	srvSQL.Router().ServeHTTP(recGet, asMerchant(t, srvSQL, "merch_demo_01", httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_demo_01", nil)))
 	if recGet.Code != http.StatusOK {
 		t.Fatalf("expected 200 on get demo merchant, got %d", recGet.Code)
 	}
@@ -148,5 +151,52 @@ func TestLoadConfigFromEnv_AuthSettings(t *testing.T) {
 	cfg := LoadConfigFromEnv()
 	if !cfg.DevMode || cfg.JWTSecret != testJWTSecret || cfg.AuthAccessTTL != 5*time.Minute || cfg.AuthRefreshTTL != 0 {
 		t.Fatalf("unexpected auth config: %+v", cfg)
+	}
+}
+
+// asMerchant signs req with an owner access token for merchantID.
+func asMerchant(t *testing.T, srv *api.Server, merchantID string, req *http.Request) *http.Request {
+	t.Helper()
+	tok, err := srv.AuthService().MintAccessToken("usr_cmd_test", merchantID, auth.RoleOwner)
+	if err != nil {
+		t.Fatalf("MintAccessToken: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return req
+}
+
+func TestBuildServer_MountsAuthAndDevSession(t *testing.T) {
+	srv, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/merch_demo_01/balances", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("balances without token: want 401, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev-session", strings.NewReader(`{"merchant_id":"merch_demo_01"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("dev-session without DEV_MODE: want 404, got %d", rec.Code)
+	}
+
+	dev, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", DevMode: true, SeedDemoMerchant: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	dev.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev-session", strings.NewReader(`{"merchant_id":"merch_demo_01"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dev-session in DEV_MODE: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoadConfigFromEnv_AttestationAndRateLimit(t *testing.T) {
+	t.Setenv("AUTH_RATE_LIMIT_PER_MINUTE", "7")
+	t.Setenv("PLAY_INTEGRITY_SECRET", "pi_secret")
+	cfg := LoadConfigFromEnv()
+	if cfg.AuthRateLimitPerMinute != 7 || cfg.PlayIntegritySecret != "pi_secret" || cfg.PlayIntegrityPackage != "mx.softpos.app" {
+		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }

@@ -49,7 +49,12 @@ func (s *Server) HandleStampIndividualCFDI(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.MerchantID == "" || req.ReceptorRFC == "" || req.GrossAmountCents <= 0 {
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	req.MerchantID = tenant
+	if req.ReceptorRFC == "" || req.GrossAmountCents <= 0 {
 		http.Error(w, `{"error":"MISSING_REQUIRED_FIELDS"}`, http.StatusBadRequest)
 		return
 	}
@@ -188,7 +193,12 @@ func (s *Server) HandleStampFacturaGlobal(w http.ResponseWriter, r *http.Request
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.MerchantID == "" || req.TotalGrossCents <= 0 {
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	req.MerchantID = tenant
+	if req.TotalGrossCents <= 0 {
 		http.Error(w, `{"error":"MISSING_REQUIRED_FIELDS"}`, http.StatusBadRequest)
 		return
 	}

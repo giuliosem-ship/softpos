@@ -16,6 +16,12 @@ type MemoryRepository struct {
 	otps        map[string]OTPChallenge
 	refresh     map[string]RefreshToken // id -> token
 	refreshHash map[string]string       // hash -> id
+	nonces      map[string]memNonce
+}
+
+type memNonce struct {
+	expiresAt time.Time
+	used      bool
 }
 
 var _ Repository = (*MemoryRepository)(nil)
@@ -28,6 +34,7 @@ func NewMemoryRepository() *MemoryRepository {
 		otps:        map[string]OTPChallenge{},
 		refresh:     map[string]RefreshToken{},
 		refreshHash: map[string]string{},
+		nonces:      map[string]memNonce{},
 	}
 }
 
@@ -192,4 +199,32 @@ func (r *MemoryRepository) RevokeRefreshFamily(_ context.Context, familyID strin
 		}
 	}
 	return nil
+}
+
+func (r *MemoryRepository) SaveAttestationNonce(_ context.Context, n AttestationNonce) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.nonces[n.NonceHash]; ok {
+		return ErrConflict
+	}
+	now := time.Now()
+	for k, v := range r.nonces { // bounded memory: drop expired nonces
+		if now.After(v.expiresAt) {
+			delete(r.nonces, k)
+		}
+	}
+	r.nonces[n.NonceHash] = memNonce{expiresAt: n.ExpiresAt}
+	return nil
+}
+
+func (r *MemoryRepository) ConsumeAttestationNonce(_ context.Context, hash string, now time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n, ok := r.nonces[hash]
+	if !ok || n.used || !now.Before(n.expiresAt) {
+		return false, nil
+	}
+	n.used = true
+	r.nonces[hash] = n
+	return true, nil
 }

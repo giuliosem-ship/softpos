@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"softpos/pkg/auth"
 	"softpos/pkg/ledger"
 	"softpos/pkg/stp"
 )
@@ -35,6 +36,15 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
+
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	if !requireRole(w, r, auth.RoleOwner) { // cashiers cannot move money out
+		return
+	}
+	req.MerchantID = tenant
 
 	if req.AmountCents <= 0 {
 		http.Error(w, `{"error":"INVALID_AMOUNT"}`, http.StatusBadRequest)
@@ -177,8 +187,12 @@ func (s *Server) HandleGetDisbursement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenant, ok := requireTenant(w, r, "")
+	if !ok {
+		return
+	}
 	rec, err := s.cepReconciler.GetDisbursement(clave)
-	if err != nil {
+	if err != nil || rec.MerchantID != tenant { // foreign records look nonexistent
 		http.Error(w, `{"error":"DISBURSEMENT_NOT_FOUND"}`, http.StatusNotFound)
 		return
 	}
@@ -192,6 +206,15 @@ func (s *Server) HandleReconcileCEP(w http.ResponseWriter, r *http.Request) {
 	clave := r.PathValue("clave")
 	if clave == "" {
 		http.Error(w, `{"error":"MISSING_CLAVE_RASTREO"}`, http.StatusBadRequest)
+		return
+	}
+
+	tenant, ok := requireTenant(w, r, "")
+	if !ok {
+		return
+	}
+	if owned, err := s.cepReconciler.GetDisbursement(clave); err != nil || owned.MerchantID != tenant {
+		http.Error(w, `{"error":"DISBURSEMENT_NOT_FOUND"}`, http.StatusNotFound)
 		return
 	}
 

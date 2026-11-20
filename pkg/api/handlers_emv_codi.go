@@ -39,7 +39,12 @@ func (s *Server) HandleEMVAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.PaymentID == "" || req.MerchantID == "" || req.TLVHex == "" {
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	req.MerchantID = tenant
+	if req.PaymentID == "" || req.TLVHex == "" {
 		http.Error(w, `{"error":"MISSING_REQUIRED_FIELDS"}`, http.StatusBadRequest)
 		return
 	}
@@ -48,6 +53,7 @@ func (s *Server) HandleEMVAuthorize(w http.ResponseWriter, r *http.Request) {
 	if idempKey == "" {
 		idempKey = "emv:auth:" + req.PaymentID
 	}
+	idempKey = tenantIdempotencyKey(tenant, idempKey)
 	if rec, exists := s.idempotency.Get(idempKey); exists {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(rec.StatusCode)
@@ -133,8 +139,12 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenant, ok := requireTenant(w, r, "")
+	if !ok {
+		return
+	}
 	existing, err := s.paymentEngine.GetPayment(req.PaymentID)
-	if err != nil {
+	if err != nil || existing.MerchantID != tenant { // foreign payments look nonexistent
 		http.Error(w, `{"error":"PAYMENT_NOT_FOUND"}`, http.StatusNotFound)
 		return
 	}
@@ -216,9 +226,21 @@ func (s *Server) HandleCoDiCreateQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clabe := req.SellerCLABE
-	if clabe == "" && req.MerchantID != "" {
-		clabe, _ = s.GetMerchantCLABE(req.MerchantID)
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	req.MerchantID = tenant
+
+	// The QR always pays into the tenant's own registered CLABE.
+	clabe, found := s.GetMerchantCLABE(tenant)
+	if !found || clabe == "" {
+		writeError(w, http.StatusConflict, "MERCHANT_CLABE_NOT_ASSIGNED")
+		return
+	}
+	if req.SellerCLABE != "" && req.SellerCLABE != clabe {
+		writeError(w, http.StatusForbidden, "SELLER_CLABE_NOT_OWNED")
+		return
 	}
 
 	ttl := 15 * time.Minute

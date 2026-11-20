@@ -9,13 +9,14 @@ import (
 	"testing"
 
 	"softpos/pkg/api"
+	"softpos/pkg/auth"
 	"softpos/pkg/store/pgtest"
 )
 
 // validEMVTLVHex: $250.00 MXN, currency 0484, ARQC, PAN 4152313333339012, exp 2812.
 const validEMVTLVHex = "9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"
 
-func doJSON(t *testing.T, srv *api.Server, method, path string, body any) *httptest.ResponseRecorder {
+func doJSON(t *testing.T, srv *api.Server, token, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -24,7 +25,11 @@ func doJSON(t *testing.T, srv *api.Server, method, path string, body any) *httpt
 		}
 	}
 	rec := httptest.NewRecorder()
-	srv.Router().ServeHTTP(rec, httptest.NewRequest(method, path, &buf))
+	req := httptest.NewRequest(method, path, &buf)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	srv.Router().ServeHTTP(rec, req)
 	return rec
 }
 
@@ -38,21 +43,32 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		STPHMACSecret: "test_secret",
 		JWTSecret:     testJWTSecret,
 	}
-	const (
-		merchantID = "merch_restart_01"
-		clabe      = "646180123400000007"
-	)
+	const clabe = "646180123400000007"
 
 	// ---- Boot 1: create state ----
 	srv1, db1, _, err := BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("boot 1: %v", err)
 	}
-	if rec := doJSON(t, srv1, http.MethodPost, "/api/v1/merchants", map[string]any{
-		"id": merchantID, "rfc": "GARM850101ABC", "name": "Taqueria Persistente", "is_resico": true, "virtual_clabe": clabe,
-	}); rec.Code != http.StatusCreated {
-		t.Fatalf("register merchant: %d %s", rec.Code, rec.Body.String())
+	// Merchant registration needs a real user; the server generates the id and
+	// makes the caller owner (membership persisted in merchant_memberships).
+	owner, err := srv1.AuthService().EnsureUser(context.Background(), "+525512300001")
+	if err != nil {
+		t.Fatalf("EnsureUser: %v", err)
 	}
+	userTok, _ := srv1.AuthService().MintAccessToken(owner.ID, "", "")
+	regRec := doJSON(t, srv1, userTok, http.MethodPost, "/api/v1/merchants", map[string]any{
+		"rfc": "GARM850101ABC", "name": "Taqueria Persistente", "is_resico": true, "virtual_clabe": clabe,
+	})
+	if regRec.Code != http.StatusCreated {
+		t.Fatalf("register merchant: %d %s", regRec.Code, regRec.Body.String())
+	}
+	var created struct {
+		MerchantID string `json:"merchant_id"`
+	}
+	_ = json.Unmarshal(regRec.Body.Bytes(), &created)
+	merchantID := created.MerchantID
+	tok, _ := srv1.AuthService().MintAccessToken(owner.ID, merchantID, auth.RoleOwner)
 	privDER, certDER, err := generateSelfSignedCSD()
 	if err != nil {
 		t.Fatalf("csd: %v", err)
@@ -61,30 +77,30 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		t.Fatalf("RegisterMerchantCSD: %v", err)
 	}
 	for _, id := range []string{"pay_settled", "pay_authorized"} {
-		if rec := doJSON(t, srv1, http.MethodPost, "/api/v1/payments/emv/authorize", map[string]any{
+		if rec := doJSON(t, srv1, tok, http.MethodPost, "/api/v1/payments/emv/authorize", map[string]any{
 			"payment_id": id, "merchant_id": merchantID, "tlv_hex": validEMVTLVHex,
 		}); rec.Code != http.StatusOK {
 			t.Fatalf("authorize %s: %d %s", id, rec.Code, rec.Body.String())
 		}
 	}
-	if rec := doJSON(t, srv1, http.MethodPost, "/api/v1/payments/settle", map[string]any{
+	if rec := doJSON(t, srv1, tok, http.MethodPost, "/api/v1/payments/settle", map[string]any{
 		"payment_id": "pay_settled", "merchant_id": merchantID, "gross_amount_cents": 25000,
 	}); rec.Code != http.StatusOK {
 		t.Fatalf("settle: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doJSON(t, srv1, http.MethodPost, "/api/v1/payments/codi/qr", map[string]any{
+	if rec := doJSON(t, srv1, tok, http.MethodPost, "/api/v1/payments/codi/qr", map[string]any{
 		"merchant_id": merchantID, "amount_cents": 11600, "concept": "Tacos", "reference": "REFRESTART1",
 	}); rec.Code != http.StatusOK {
 		t.Fatalf("codi qr: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doJSON(t, srv1, http.MethodPost, "/api/v1/webhooks/codi/confirm", map[string]any{
+	if rec := doJSON(t, srv1, "", http.MethodPost, "/api/v1/webhooks/codi/confirm", map[string]any{
 		"tracking_key": "BNXRESTART0001", "seller_clabe": clabe, "buyer_clabe": "012180000118359719",
 		"amount_cents": 11600, "timestamp": "2026-11-19T12:00:00Z", "status": "APROBADO", "banxico_approval_code": "AUT9",
 	}); rec.Code != http.StatusOK {
 		t.Fatalf("codi confirm: %d %s", rec.Code, rec.Body.String())
 	}
 	salesBefore := srv1.GetMerchantMonthlySalesCents(merchantID)
-	balRec := doJSON(t, srv1, http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil)
+	balRec := doJSON(t, srv1, tok, http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil)
 	if balRec.Code != http.StatusOK {
 		t.Fatalf("balances boot 1: %d %s", balRec.Code, balRec.Body.String())
 	}
@@ -97,6 +113,10 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		t.Fatalf("boot 2: %v", err)
 	}
 	defer func() { _ = db2.Close() }()
+
+	if mem, found, err := srv2.AuthService().Repository().GetMembership(context.Background(), owner.ID, merchantID); err != nil || !found || mem.Role != auth.RoleOwner {
+		t.Fatalf("owner membership not persisted: %+v found=%v err=%v", mem, found, err)
+	}
 
 	m, ok := srv2.GetMerchant(merchantID)
 	if !ok || m.Name != "Taqueria Persistente" || m.CLABE != clabe {
@@ -111,22 +131,23 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	if got := srv2.GetMerchantMonthlySalesCents(merchantID); got != salesBefore {
 		t.Fatalf("monthly sales: want %d after restart, got %d", salesBefore, got)
 	}
-	if rec := doJSON(t, srv2, http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil); rec.Body.String() != balancesBefore {
+	if rec := doJSON(t, srv2, tok, http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil); rec.Body.String() != balancesBefore {
 		t.Fatalf("balances changed across restart:\nbefore %s\nafter  %s", balancesBefore, rec.Body.String())
 	}
 
 	// Payment state machine: settled payment refunds, authorized one voids, duplicate ID rejected.
-	rec := doJSON(t, srv2, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_settled"})
+	rec := doJSON(t, srv2, tok, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_settled"})
 	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"REFUNDED"`)) {
 		t.Fatalf("refund after restart: %d %s", rec.Code, rec.Body.String())
 	}
-	rec = doJSON(t, srv2, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_authorized"})
+	rec = doJSON(t, srv2, tok, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_authorized"})
 	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"VOIDED"`)) {
 		t.Fatalf("void after restart: %d %s", rec.Code, rec.Body.String())
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", bytes.NewBufferString(
 		`{"payment_id":"pay_settled","merchant_id":"`+merchantID+`","tlv_hex":"`+validEMVTLVHex+`"}`))
 	req.Header.Set("Idempotency-Key", "fresh-key-dup-check")
+	req.Header.Set("Authorization", "Bearer "+tok) // boot-1 token still valid: same JWT_SECRET
 	dup := httptest.NewRecorder()
 	srv2.Router().ServeHTTP(dup, req)
 	if dup.Code != http.StatusConflict {
@@ -143,7 +164,7 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	}
 
 	// Encrypted CSD survives: stamping works without re-registering the CSD.
-	rec = doJSON(t, srv2, http.MethodPost, "/api/v1/invoices/cfdi", map[string]any{
+	rec = doJSON(t, srv2, tok, http.MethodPost, "/api/v1/invoices/cfdi", map[string]any{
 		"merchant_id": merchantID, "receptor_rfc": "B2B850101XYZ", "receptor_nombre": "EMPRESA CLIENTE SA DE CV",
 		"receptor_cp": "06600", "receptor_regimen": "601", "uso_cfdi": "G03", "gross_amount_cents": 116000,
 	})

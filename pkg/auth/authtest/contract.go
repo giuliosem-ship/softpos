@@ -140,4 +140,25 @@ func RunRepositoryContract(t *testing.T, h Harness) {
 			t.Fatal("family revocation must revoke the current token")
 		}
 	})
+
+	t.Run("attestation nonce single use", func(t *testing.T) {
+		r, _ := newRepo(t)
+		n := auth.AttestationNonce{NonceHash: "nh1", ExpiresAt: now.Add(time.Minute), CreatedAt: now}
+		if err := r.SaveAttestationNonce(ctx, n); err != nil {
+			t.Fatalf("SaveAttestationNonce: %v", err)
+		}
+		if ok, err := r.ConsumeAttestationNonce(ctx, "nh1", now); err != nil || !ok {
+			t.Fatalf("first consume = %v %v", ok, err)
+		}
+		if ok, _ := r.ConsumeAttestationNonce(ctx, "nh1", now); ok {
+			t.Fatal("nonce consumed twice")
+		}
+		if ok, _ := r.ConsumeAttestationNonce(ctx, "unknown", now); ok {
+			t.Fatal("unknown nonce consumed")
+		}
+		_ = r.SaveAttestationNonce(ctx, auth.AttestationNonce{NonceHash: "nh2", ExpiresAt: now.Add(time.Minute), CreatedAt: now})
+		if ok, _ := r.ConsumeAttestationNonce(ctx, "nh2", now.Add(2*time.Minute)); ok {
+			t.Fatal("expired nonce consumed")
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"softpos/pkg/auth"
 	"softpos/pkg/rbf"
 )
 
@@ -50,6 +51,15 @@ func (s *Server) HandleOriginateRBFLoan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	tenant, ok := requireTenant(w, r, req.MerchantID)
+	if !ok {
+		return
+	}
+	if !requireRole(w, r, auth.RoleOwner, auth.RoleOperator) {
+		return
+	}
+	req.MerchantID = tenant
+
 	if _, exists := s.GetMerchant(req.MerchantID); !exists {
 		http.Error(w, `{"error":"MERCHANT_NOT_FOUND"}`, http.StatusNotFound)
 		return
@@ -71,9 +81,8 @@ func (s *Server) HandleOriginateRBFLoan(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) HandleGetMerchantRBFLoan(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.PathValue("id")
-	if merchantID == "" {
-		http.Error(w, `{"error":"MISSING_MERCHANT_ID"}`, http.StatusBadRequest)
+	merchantID, ok := requireTenant(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
 

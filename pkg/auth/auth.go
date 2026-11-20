@@ -33,17 +33,18 @@ func (r Role) Valid() bool {
 }
 
 var (
-	ErrInvalidPhone        = errors.New("auth: phone must be E.164 (e.g. +525512345678)")
-	ErrOTPRateLimited      = errors.New("auth: OTP requested too recently")
-	ErrOTPInvalid          = errors.New("auth: invalid or expired OTP")
-	ErrOTPLocked           = errors.New("auth: too many OTP attempts")
-	ErrOTPDelivery         = errors.New("auth: OTP delivery failed")
-	ErrRefreshTokenInvalid = errors.New("auth: invalid or expired refresh token")
-	ErrRefreshTokenReused  = errors.New("auth: refresh token reuse detected; session family revoked")
-	ErrNotMember           = errors.New("auth: user is not a member of the merchant")
-	ErrUserNotFound        = errors.New("auth: user not found")
-	ErrConflict            = errors.New("auth: record already exists")
-	ErrWeakSecret          = errors.New("auth: JWT secret must be at least 32 bytes")
+	ErrInvalidPhone            = errors.New("auth: phone must be E.164 (e.g. +525512345678)")
+	ErrOTPRateLimited          = errors.New("auth: OTP requested too recently")
+	ErrOTPInvalid              = errors.New("auth: invalid or expired OTP")
+	ErrOTPLocked               = errors.New("auth: too many OTP attempts")
+	ErrOTPDelivery             = errors.New("auth: OTP delivery failed")
+	ErrRefreshTokenInvalid     = errors.New("auth: invalid or expired refresh token")
+	ErrRefreshTokenReused      = errors.New("auth: refresh token reuse detected; session family revoked")
+	ErrNotMember               = errors.New("auth: user is not a member of the merchant")
+	ErrUserNotFound            = errors.New("auth: user not found")
+	ErrConflict                = errors.New("auth: record already exists")
+	ErrWeakSecret              = errors.New("auth: JWT secret must be at least 32 bytes")
+	ErrAttestationNonceInvalid = errors.New("auth: attestation nonce unknown, expired or already used")
 )
 
 // User is a person that can log in (identified by phone).
@@ -110,4 +111,16 @@ type Repository interface {
 	// next. Returns ErrRefreshTokenReused if oldID was already revoked.
 	RotateRefreshToken(ctx context.Context, oldID string, next RefreshToken, now time.Time) error
 	RevokeRefreshFamily(ctx context.Context, familyID string, now time.Time) error
+
+	SaveAttestationNonce(ctx context.Context, n AttestationNonce) error
+	// ConsumeAttestationNonce atomically marks the nonce used; ok=false if it is
+	// unknown, expired or already consumed.
+	ConsumeAttestationNonce(ctx context.Context, nonceHash string, now time.Time) (ok bool, err error)
+}
+
+// AttestationNonce is a single-use Play Integrity nonce (stored hashed).
+type AttestationNonce struct {
+	NonceHash string
+	ExpiresAt time.Time
+	CreatedAt time.Time
 }

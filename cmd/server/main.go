@@ -66,6 +66,9 @@ type Config struct {
 	// (DEFAULT_PLATFORM_FEE_BPS, 0..10000; unset keeps api.DefaultPlatformFeeBps).
 	DefaultPlatformFeeBps int64
 	HasDefaultFeeBps      bool
+	// AllowCashierRefunds (ALLOW_CASHIER_REFUNDS=true) lets cashiers refund
+	// settled payments; by default refunds are owner-only.
+	AllowCashierRefunds bool
 
 	// Outbox dispatcher (only runs when DatabaseURL is set).
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
@@ -149,7 +152,13 @@ func LoadConfigFromEnv() Config {
 		integrityPkg = "mx.softpos.app"
 	}
 
+	cashierRefunds := false
+	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
+		cashierRefunds = true
+	}
+
 	return Config{
+		AllowCashierRefunds:    cashierRefunds,
 		DefaultPlatformFeeBps:  feeBps,
 		HasDefaultFeeBps:       hasFee,
 		AuthRateLimitPerMinute: authRate,
@@ -189,6 +198,9 @@ func parseDurationEnv(name string) time.Duration {
 	}
 	return d
 }
+
+// demoSettlementCLABE is the demo merchant's (fake) bank account for payouts.
+const demoSettlementCLABE = "032180000118359719"
 
 // ErrMissingJWTSecret is returned when JWT_SECRET is unset outside DEV_MODE.
 var ErrMissingJWTSecret = errors.New("JWT_SECRET is required (>= 32 bytes) unless DEV_MODE=true")
@@ -320,6 +332,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
+	server.SetCashierRefundsAllowed(cfg.AllowCashierRefunds)
 	if codiSecret != "" {
 		server.SetCoDiWebhookSecret(codiSecret)
 	}
@@ -378,6 +391,13 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		demoCLABE := "646180123400000007"
 		if err := server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC); err != nil {
 			slog.Warn("demo merchant seeding failed", "error", err)
+		}
+		// DEV_MODE only: a pre-verified settlement account so the demo can
+		// exercise payouts (ownership verification has no real provider yet).
+		if cfg.DevMode {
+			if err := server.SeedVerifiedSettlementAccount(ctx, demoID, demoSettlementCLABE); err != nil {
+				slog.Warn("demo settlement account seeding failed", "error", err)
+			}
 		}
 
 		// Generate and register demo CSD for instant CFDI 4.0 stamping

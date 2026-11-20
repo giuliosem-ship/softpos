@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -56,6 +57,8 @@ type Server struct {
 	codiWebhookSecret []byte
 	staticDir         string
 	money             store.MoneyStore
+	accountVerifier   SettlementAccountVerifier
+	cashierRefunds    bool
 	defaultFeeBps     int64
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
@@ -87,6 +90,7 @@ func NewServer(
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
+	s.accountVerifier = PendingAccountVerifier{}
 	s.defaultFeeBps = DefaultPlatformFeeBps
 	s.auth = newEphemeralAuthService()
 	s.authLimiter = NewRateLimiter(DefaultAuthRateLimitPerMinute, time.Minute)
@@ -297,6 +301,39 @@ func (s *Server) RegisterMerchantCLABE(clabe string, merchantID string, rfc stri
 	return s.merchantRepo.SetMerchantCLABE(context.Background(), merchantID, clabe)
 }
 
+// Virtual CLABE layout: STP bank code 646 + plaza 180 + 11-digit account
+// (STP assigns real ranges per participant; set VirtualCLABEPrefix-like config
+// when the STP contract defines it).
+const (
+	virtualCLABEBank  = "646"
+	virtualCLABEPlaza = "180"
+)
+
+// AssignVirtualCLABE generates a random, checksum-valid STP CLABE and assigns
+// it to the merchant, retrying on collisions.
+func (s *Server) AssignVirtualCLABE(ctx context.Context, merchantID string) (string, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return "", err
+		}
+		seq := int64(binary.BigEndian.Uint64(b[:]) % 100_000_000_000)
+		clabe, err := stp.GenerateCLABE(seq, virtualCLABEPlaza, virtualCLABEBank)
+		if err != nil {
+			return "", err
+		}
+		err = s.merchantRepo.SetMerchantCLABE(ctx, merchantID, clabe)
+		if errors.Is(err, store.ErrDuplicateCLABE) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return clabe, nil
+	}
+	return "", errors.New("could not allocate a unique virtual CLABE")
+}
+
 func merchantFromRecord(rec store.MerchantRecord) Merchant {
 	return Merchant{
 		ID:       rec.ID,
@@ -401,7 +438,8 @@ func (s *Server) HandleGetMerchant(w http.ResponseWriter, r *http.Request) {
 
 type RegisterMerchantRequest struct {
 	// ID is ignored: the server generates merchant ids (F1 "el id lo manda el cliente").
-	ID           string `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
+	// VirtualCLABE is ignored: the server assigns the collection CLABE.
 	RFC          string `json:"rfc"`
 	Name         string `json:"name"`
 	IsRESICO     bool   `json:"is_resico"`
@@ -460,17 +498,23 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// The virtual collection CLABE is always assigned by the server (a
+	// client-chosen CLABE allowed squatting other merchants' deposits).
 	if req.VirtualCLABE != "" {
-		if err := s.RegisterMerchantCLABE(req.VirtualCLABE, merchantID, req.RFC); err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"CLABE_ASSIGNMENT_FAILED","detail":%q}`, err.Error()), http.StatusConflict)
-			return
-		}
+		slog.Warn("client-supplied virtual_clabe ignored", "merchant_id", merchantID)
+	}
+	clabe, err := s.AssignVirtualCLABE(r.Context(), merchantID)
+	if err != nil {
+		slog.Error("virtual CLABE assignment failed", "merchant_id", merchantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "CLABE_ASSIGNMENT_FAILED")
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"status":      "CREATED",
-		"merchant_id": merchantID,
-		"role":        auth.RoleOwner,
+		"status":        "CREATED",
+		"merchant_id":   merchantID,
+		"role":          auth.RoleOwner,
+		"virtual_clabe": clabe,
 	})
 }
 
@@ -491,6 +535,9 @@ func (s *Server) routes() {
 	// Merchant Catalog
 	s.router.HandleFunc("GET /api/v1/merchants/{id}", s.HandleGetMerchant)
 	s.router.HandleFunc("POST /api/v1/merchants", s.HandleRegisterMerchant)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/settlement-account", s.HandleGetSettlementAccount)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/settlement-account", s.HandlePutSettlementAccount)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/settlement-account/verify", s.HandleReviewSettlementAccount)
 
 	// STP Inbound & Outbound Disbursements + Banxico CEP Reconciliation
 	s.router.HandleFunc("POST /api/v1/webhooks/stp/abono", s.HandleSTPAbono)

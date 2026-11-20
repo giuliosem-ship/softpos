@@ -219,6 +219,9 @@ func TestDisbursement_Success(t *testing.T) {
 
 	merchantID := "merch_taqueria_02"
 	server.RegisterMerchant(merchantID, "GARM850101ABC", "Taqueria 2", true)
+	if err := server.SeedVerifiedSettlementAccount(context.Background(), merchantID, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Seed available funds in merchant account ($2,000.00 MXN)
 	entries := []ledger.Entry{
@@ -271,6 +274,9 @@ func TestDisbursement_SAT69BBlacklistBlocked(t *testing.T) {
 	merchantID := "merch_blacklisted"
 	blacklistedRFC := "EFO110101XYZ"
 	server.RegisterMerchant(merchantID, blacklistedRFC, "Simulated Company", false)
+	if err := server.SeedVerifiedSettlementAccount(context.Background(), merchantID, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Mark in blacklist as DEFINITIVO
 	server.blacklist.AddEntry(blacklistedRFC, identity.BlacklistDefinitivo, "500-05-2023-1234")
@@ -305,6 +311,9 @@ func TestDisbursement_InsufficientFundsFails(t *testing.T) {
 
 	merchantID := "merch_broke"
 	server.RegisterMerchant(merchantID, "GARM850101ABC", "Broke Merchant", true)
+	if err := server.SeedVerifiedSettlementAccount(context.Background(), merchantID, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	payload := DisbursementRequest{
 		MerchantID:       merchantID,
@@ -330,11 +339,14 @@ func TestDisbursement_InvalidCLABEFails(t *testing.T) {
 
 	merchantID := "merch_clabe_bad"
 	server.RegisterMerchant(merchantID, "GARM850101ABC", "Bad CLABE Merchant", true)
+	if err := server.SeedVerifiedSettlementAccount(context.Background(), merchantID, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	payload := DisbursementRequest{
 		MerchantID:       merchantID,
 		AmountCents:      10000,
-		DestinationCLABE: "032180000118359710", // Bad check digit (valid is 9)
+		DestinationCLABE: "032180000118359710", // not the registered settlement CLABE
 		BeneficiaryName:  "Juan",
 		Concept:          "Retiro",
 	}
@@ -345,8 +357,8 @@ func TestDisbursement_InvalidCLABEFails(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	server.Router().ServeHTTP(rec, asTenant(t, server, merchantID, req))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected HTTP 400 for invalid CLABE, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "DESTINATION_CLABE_NOT_ALLOWED") {
+		t.Errorf("expected 403 DESTINATION_CLABE_NOT_ALLOWED for a CLABE other than the registered one, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -766,6 +778,9 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 	server, signer := setupTestServer(t)
 	merchantID := "merch_stp_cep"
 	_ = server.RegisterMerchant(merchantID, "GARM850101ABC", "Comercio SPEI", true)
+	if err := server.SeedVerifiedSettlementAccount(context.Background(), merchantID, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Seed $1,000.00 MXN (100,000 cents)
 	entries := []ledger.Entry{
@@ -833,18 +848,28 @@ func TestRegisterMerchantWithCLABE_KeepsProfileAndRejectsDuplicateCLABE(t *testi
 		t.Fatalf("register: %d %s", rec.Code, rec.Body.String())
 	}
 	var created struct {
-		MerchantID string `json:"merchant_id"`
+		MerchantID   string `json:"merchant_id"`
+		VirtualCLABE string `json:"virtual_clabe"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
 	if created.MerchantID == "" || created.MerchantID == "m_clabe_1" {
 		t.Fatalf("server must generate the merchant id (client id ignored), got %q", created.MerchantID)
 	}
 	m, ok := server.GetMerchant(created.MerchantID)
-	if !ok || m.Name != "Fonda Real" || m.IsRESICO || m.CLABE != "646180123400000007" {
+	if !ok || m.Name != "Fonda Real" || m.IsRESICO {
 		t.Fatalf("CLABE assignment must not overwrite the merchant profile: %+v", m)
 	}
-	if rec := post(`{"rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409 for a CLABE owned by another merchant, got %d %s", rec.Code, rec.Body.String())
+	// The collection CLABE is server-assigned (client value ignored: no squatting).
+	if m.CLABE == "646180123400000007" || m.CLABE != created.VirtualCLABE || !stp.ValidateCLABE(m.CLABE) || !strings.HasPrefix(m.CLABE, "646180") {
+		t.Fatalf("expected a server-assigned STP CLABE, got %q (response %q)", m.CLABE, created.VirtualCLABE)
+	}
+	rec2 := post(`{"rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"` + m.CLABE + `"}`)
+	var created2 struct {
+		VirtualCLABE string `json:"virtual_clabe"`
+	}
+	_ = json.Unmarshal(rec2.Body.Bytes(), &created2)
+	if rec2.Code != http.StatusCreated || created2.VirtualCLABE == m.CLABE || !stp.ValidateCLABE(created2.VirtualCLABE) {
+		t.Fatalf("second merchant must get its own CLABE even when asking for another's: %d %s", rec2.Code, rec2.Body.String())
 	}
 	if err := server.RegisterMerchantCSD("ghost_merchant", []byte("k"), []byte("c")); err == nil {
 		t.Fatalf("expected error registering a CSD for an unknown merchant")

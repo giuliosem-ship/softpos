@@ -24,6 +24,8 @@ var (
 	ErrDuplicateCLABE      = errors.New("clabe already assigned to another merchant")
 	ErrDuplicateJournal    = errors.New("ledger journal already posted")
 	ErrInvalidFeeBps       = errors.New("platform fee must be between 0 and 10000 bps")
+	ErrSettlementCLABEChanged  = errors.New("settlement CLABE changed or not registered")
+	ErrInvalidSettlementStatus = errors.New("invalid settlement account status")
 )
 
 // MerchantRecord represents persisted merchant profile data.
@@ -36,6 +38,33 @@ type MerchantRecord struct {
 	EncryptedCSDJSON []byte
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// SettlementAccountStatus is the ownership-verification state of a merchant's
+// settlement (payout) CLABE.
+type SettlementAccountStatus string
+
+const (
+	SettlementNone     SettlementAccountStatus = "NONE"
+	SettlementPending  SettlementAccountStatus = "PENDING"
+	SettlementVerified SettlementAccountStatus = "VERIFIED"
+	SettlementRejected SettlementAccountStatus = "REJECTED"
+)
+
+func (s SettlementAccountStatus) Valid() bool {
+	switch s {
+	case SettlementNone, SettlementPending, SettlementVerified, SettlementRejected:
+		return true
+	}
+	return false
+}
+
+// SettlementAccount is the merchant's own bank account for payouts (distinct
+// from the virtual collection CLABE).
+type SettlementAccount struct {
+	CLABE     string
+	Status    SettlementAccountStatus
+	UpdatedAt time.Time
 }
 
 // ----------------------------------------------------------------------------
@@ -557,6 +586,57 @@ func (r *SQLMerchantRepository) SetMerchantPlatformFeeBps(ctx context.Context, m
 		return fmt.Errorf("failed to set merchant platform fee: %w", err)
 	}
 	return requireRowAffected(res, ErrMerchantNotFound)
+}
+
+func (r *SQLMerchantRepository) GetSettlementAccount(ctx context.Context, merchantID string) (SettlementAccount, bool, error) {
+	var clabe sql.NullString
+	var status string
+	var updated sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		SELECT settlement_clabe, settlement_clabe_status, settlement_clabe_updated_at FROM merchants WHERE id = $1
+	`, merchantID).Scan(&clabe, &status, &updated)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SettlementAccount{}, false, nil
+		}
+		return SettlementAccount{}, false, fmt.Errorf("failed to get settlement account: %w", err)
+	}
+	if !clabe.Valid || clabe.String == "" {
+		return SettlementAccount{}, false, nil
+	}
+	return SettlementAccount{CLABE: clabe.String, Status: SettlementAccountStatus(status), UpdatedAt: updated.Time}, true, nil
+}
+
+func (r *SQLMerchantRepository) SetSettlementAccount(ctx context.Context, merchantID, clabe string, status SettlementAccountStatus) error {
+	if !status.Valid() {
+		return ErrInvalidSettlementStatus
+	}
+	now := time.Now().UTC()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE merchants
+		SET settlement_clabe = $1, settlement_clabe_status = $2, settlement_clabe_updated_at = $3, updated_at = $3
+		WHERE id = $4
+	`, clabe, string(status), now, merchantID)
+	if err != nil {
+		return fmt.Errorf("failed to set settlement account: %w", err)
+	}
+	return requireRowAffected(res, ErrMerchantNotFound)
+}
+
+func (r *SQLMerchantRepository) SetSettlementAccountStatus(ctx context.Context, merchantID, clabe string, status SettlementAccountStatus) error {
+	if !status.Valid() {
+		return ErrInvalidSettlementStatus
+	}
+	now := time.Now().UTC()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE merchants
+		SET settlement_clabe_status = $1, settlement_clabe_updated_at = $2, updated_at = $2
+		WHERE id = $3 AND settlement_clabe = $4
+	`, string(status), now, merchantID, clabe)
+	if err != nil {
+		return fmt.Errorf("failed to set settlement account status: %w", err)
+	}
+	return requireRowAffected(res, ErrSettlementCLABEChanged)
 }
 
 // ----------------------------------------------------------------------------

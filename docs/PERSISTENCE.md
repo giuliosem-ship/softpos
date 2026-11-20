@@ -40,7 +40,7 @@ same interfaces use in-memory implementations.
 | State | Interface | SQL implementation | In-memory implementation |
 |---|---|---|---|
 | Ledger accounts / journals / balances | `ledger.Repository` | `store.SQLLedgerRepository` | `ledger.LedgerEngine` maps |
-| Merchants, virtual CLABEs, encrypted CSDs, RESICO monthly sales | `store.MerchantRepository` | `store.SQLMerchantRepository` | `store.MemoryMerchantRepository` |
+| Merchants, virtual CLABEs, settlement (payout) accounts (migration 008), platform tariff, encrypted CSDs, RESICO monthly sales | `store.MerchantRepository` | `store.SQLMerchantRepository` | `store.MemoryMerchantRepository` |
 | Card payment state machine | `payments.PaymentProcessor` | `store.SQLPaymentEngine` (`emv_payments`) | `payments.PaymentEngine` |
 | CoDi requests / confirmations | `payments.CoDiRepository` | `store.SQLCoDiRepository` (`codi_requests`, `codi_confirmations`) | maps inside `payments.CoDiService` |
 | Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |

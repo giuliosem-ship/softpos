@@ -24,6 +24,13 @@ type MerchantRepository interface {
 	// "use the server default".
 	GetMerchantPlatformFeeBps(ctx context.Context, merchantID string) (bps int64, set bool, err error)
 	SetMerchantPlatformFeeBps(ctx context.Context, merchantID string, bps int64) error
+	// Settlement (payout) account: the merchant's own bank CLABE.
+	GetSettlementAccount(ctx context.Context, merchantID string) (SettlementAccount, bool, error)
+	// SetSettlementAccount registers/replaces the CLABE with the given status.
+	SetSettlementAccount(ctx context.Context, merchantID, clabe string, status SettlementAccountStatus) error
+	// SetSettlementAccountStatus changes the status only while the registered
+	// CLABE still equals clabe (ErrSettlementCLABEChanged otherwise).
+	SetSettlementAccountStatus(ctx context.Context, merchantID, clabe string, status SettlementAccountStatus) error
 }
 
 var (
@@ -39,6 +46,7 @@ type MemoryMerchantRepository struct {
 	clabeOwner   map[string]string
 	monthlySales map[string]int64 // merchantID + "|" + yearMonth
 	feeBps       map[string]int64
+	settlement   map[string]SettlementAccount
 }
 
 func NewMemoryMerchantRepository() *MemoryMerchantRepository {
@@ -47,6 +55,7 @@ func NewMemoryMerchantRepository() *MemoryMerchantRepository {
 		clabeOwner:   make(map[string]string),
 		monthlySales: make(map[string]int64),
 		feeBps:       make(map[string]int64),
+		settlement:   make(map[string]SettlementAccount),
 	}
 }
 
@@ -216,5 +225,40 @@ func (r *MemoryMerchantRepository) SetMerchantPlatformFeeBps(_ context.Context, 
 		return ErrMerchantNotFound
 	}
 	r.feeBps[merchantID] = bps
+	return nil
+}
+
+func (r *MemoryMerchantRepository) GetSettlementAccount(_ context.Context, merchantID string) (SettlementAccount, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	a, ok := r.settlement[merchantID]
+	return a, ok, nil
+}
+
+func (r *MemoryMerchantRepository) SetSettlementAccount(_ context.Context, merchantID, clabe string, status SettlementAccountStatus) error {
+	if !status.Valid() {
+		return ErrInvalidSettlementStatus
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.merchants[merchantID]; !ok {
+		return ErrMerchantNotFound
+	}
+	r.settlement[merchantID] = SettlementAccount{CLABE: clabe, Status: status, UpdatedAt: time.Now().UTC()}
+	return nil
+}
+
+func (r *MemoryMerchantRepository) SetSettlementAccountStatus(_ context.Context, merchantID, clabe string, status SettlementAccountStatus) error {
+	if !status.Valid() {
+		return ErrInvalidSettlementStatus
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a, ok := r.settlement[merchantID]
+	if !ok || a.CLABE != clabe {
+		return ErrSettlementCLABEChanged
+	}
+	a.Status, a.UpdatedAt = status, time.Now().UTC()
+	r.settlement[merchantID] = a
 	return nil
 }

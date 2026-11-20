@@ -1066,6 +1066,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 19/19 PASS incl. 10 concurrent settles + 10 duplicate STP abonos + 10 re-signed CoDi retries credited exactly once and SQLMoneyStore rollback/commit; node --test web/pos/softpos_sdk.test.js 8/8.",
       "audit_notes": "RBF loans still in process memory (repayment applied after commit; serialized in-process only for merchants with an active loan). is_persona_moral is still client-declared (affects ISR escrow, not the merchant's credited total beyond the ISR share). Hot global ledger rows serialize all postings.",
       "priority": 68
+    },
+    {
+      "id": "MVP-08",
+      "component": "payouts",
+      "title": "Disbursement only to the verified CLABE + full refund reversal",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/payouts_refunds_test.go, pkg/api/money_flows_test.go, pkg/api/server_test.go, pkg/api/tenant_auth_test.go, pkg/api/pos_frontend_test.go, cmd/server/money_integration_test.go, cmd/server/restart_integration_test.go",
+        "implementation": "migrations/008_settlement_accounts.*.sql, pkg/store/postgres.go, pkg/store/merchant_memory.go, pkg/api/handlers_settlement_account.go, pkg/api/handlers_disbursements.go, pkg/api/handlers_emv_codi.go, pkg/api/server.go, cmd/server/main.go, docs/MONEY_FLOWS.md, docs/AUTH.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Settlement (payout) CLABE per merchant with status NONE/PENDING/VERIFIED/REJECTED: PUT /api/v1/merchants/{id}/settlement-account (owner; checksum; not a collection CLABE; every change resets via SettlementAccountVerifier stub -> PENDING), POST .../verify (operator, or owner in DEV_MODE; only if the CLABE still matches), GET. Disbursements go only to the VERIFIED account (destination_clabe optional, must match -> 403), balance check + debit in one transaction under the ledger row lock, STP dispatch after commit with compensating journal + disbursement.failed on error (502). Refund of SETTLED payments: owner-only unless ALLOW_CASHIER_REFUNDS, partial/full bounded by remaining refundable, proportional reversal (cumulative half-up targets) of available, tax escrow, platform fee and the RESICO accumulator of the settlement month in one transaction; REFUNDED when fully refunded; optional Idempotency-Key replay. Virtual collection CLABE server-assigned on merchant creation (random checksum-valid 646180..., retry on collision); client virtual_clabe ignored. DEV_MODE seeds a verified settlement account for the demo merchant.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 20/20 PASS (new: settlement gate, 10 concurrent payouts -> exactly 3 of 30000 on 100000, partial+full refund zeroing escrow/fees/receivable/accumulator); node --test web/pos/softpos_sdk.test.js 8/8.",
+      "audit_notes": "Ownership verification is a stub (PENDING until an operator marks it); no 2FA on settlement-account changes; operator role is per-merchant membership (no global backoffice role). Refunds do not reverse the RBF holdback and may drive the available balance negative. Virtual CLABEs are not registered in STP yet and use a fixed 646/180 prefix.",
+      "priority": 69
     }
   ]
 }

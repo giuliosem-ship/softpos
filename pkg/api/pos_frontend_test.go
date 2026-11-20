@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"softpos/pkg/auth"
+	"softpos/pkg/stp"
 )
 
 func TestPOSFrontendStaticAndHealthEndpoints(t *testing.T) {
@@ -129,7 +130,7 @@ func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	}
 	var merchResp Merchant
 	_ = json.Unmarshal(recGet.Body.Bytes(), &merchResp)
-	if merchResp.ID != merchantID || merchResp.CLABE != "646180123400000007" {
+	if merchResp.ID != merchantID || merchResp.CLABE == "646180123400000007" || !stp.ValidateCLABE(merchResp.CLABE) {
 		t.Errorf("unexpected merchant response: %+v", merchResp)
 	}
 

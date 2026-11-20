@@ -100,10 +100,18 @@ Rules for protected handlers:
   `seller_clabe` → `403 SELLER_CLABE_NOT_OWNED`, none registered → `409`.
 - Idempotency keys (client `Idempotency-Key` or derived) are prefixed with the
   tenant, so one merchant can never replay another's cached response.
-- Roles: `POST /api/v1/disbursements` requires `owner`; `POST /api/v1/rbf/loans`
-  requires `owner` or `operator`; other tenant routes accept any member.
+- Roles: `POST /api/v1/disbursements` and `PUT
+  /api/v1/merchants/{id}/settlement-account` require `owner`; refunds of
+  settled payments (`POST /api/v1/payments/emv/reverse` on a `SETTLED` payment)
+  require `owner` unless `ALLOW_CASHIER_REFUNDS=true` (voids of not-yet-settled
+  payments stay open to cashiers); `POST
+  /api/v1/merchants/{id}/settlement-account/verify` requires `operator` (or the
+  owner in `DEV_MODE`, for the demo); `POST /api/v1/rbf/loans` requires `owner`
+  or `operator`; other tenant routes accept any member. See
+  `docs/MONEY_FLOWS.md`.
 - `POST /api/v1/merchants` requires a token of an existing user; the **server
-  generates the id** (`mer_…`; a client `id` is ignored) and the caller becomes
+  generates the id** (`mer_…`; a client `id` is ignored) and the virtual
+  collection CLABE (a client `virtual_clabe` is ignored) and the caller becomes
   `owner`. Then `POST /api/v1/auth/refresh {"refresh_token","merchant_id"}`
   returns a token scoped to the new merchant.
 
@@ -177,6 +185,7 @@ can simulate a CoDi payment without holding the secret.
 | `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
 | `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
 | `STP_HMAC_SECRET` | STP HMAC secret. No default; the dev default is accepted only with `DEV_MODE`. Required in production. |
+| `ALLOW_CASHIER_REFUNDS` | `true` lets cashiers refund settled payments (default: owner-only). |
 
 Production guard (`APP_ENV=production`) refuses to start with `DEV_MODE`,
 `JWT_SECRET` < 32 bytes, `CODI_WEBHOOK_SECRET` < 32 bytes, or a missing/default

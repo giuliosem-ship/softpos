@@ -75,12 +75,70 @@ Signed by STP (RSA or HMAC). Exactly-once key: `stp:abono:<claveRastreo>`
 
 ## Refund / void — `POST /api/v1/payments/emv/reverse`
 
-- `AUTHORIZED` → `VOIDED` (nothing was posted); outbox `payment.voided`.
-- `SETTLED` → reversal journal and `REFUNDED`, in one transaction; a posting
-  failure answers 500 and the payment stays `SETTLED`.
+Body: `payment_id`, optional `refund_cents` (0 = whole remaining amount);
+optional `Idempotency-Key` header (key `m:<tenant>:reverse:<payment>:<key>` in
+`money_operations`; a retry replays the first response).
+
+- `AUTHORIZED` → `VOIDED` (nothing was posted; partial voids → 400). Any member
+  may void. Outbox `payment.voided`.
+- `SETTLED` → refund, **owner only** unless `ALLOW_CASHIER_REFUNDS=true`
+  (decision: refunds move money out of the merchant balance, so they follow
+  the payout rule; voids of an un-settled sale stay open to cashiers).
+  `refund_cents` must be ≤ `gross − refunded_gross` (`400
+  REFUND_EXCEEDS_REMAINING`). The settlement record is reversed
+  **proportionally with cumulative targets**: for each component *x* (base,
+  tax escrow, fee) `target = x × refunded_total / gross` (half-up; exact *x*
+  on the last refund) and the delta to the already refunded value is posted,
+  so partial refunds always add up to the full reversal. Journal
+  `refund_<payment>_<refunded_total>`:
+
+  | Account | Dr | Cr |
+  |---|---|---|
+  | `AVAILABLE` | refund − Δtax − Δfee | |
+  | `TAX_ESCROW` | Δtax (IVA + ISR set-aside) | |
+  | `REVENUE:FEES` | Δfee | |
+  | `ASSET:ACQUIRER_RECEIVABLE` | | refund |
+
+  The RESICO accumulator of the **settlement month** decreases by Δbase
+  (floored at 0); the settlement's refund columns are updated; the payment
+  becomes `REFUNDED` when fully refunded (stays `SETTLED` while partially
+  refunded). Outbox `payment.refunded`. The RBF holdback is not reversed (the
+  loan repayment stands, the merchant's available balance bears it). The
+  available balance may go negative if the merchant already withdrew the
+  funds (blocks further payouts).
+
+## Settlement account and payouts
+
+The merchant's own bank account (settlement CLABE, `merchants.settlement_clabe`
++ `settlement_clabe_status` NONE/PENDING/VERIFIED/REJECTED, migration 008) is
+distinct from the server-assigned virtual collection CLABE.
+
+- `PUT /api/v1/merchants/{id}/settlement-account {"clabe"}` (owner): valid
+  checksum, not any merchant's collection CLABE. Every change resets the
+  status through `SettlementAccountVerifier` (stub `PendingAccountVerifier` →
+  `PENDING`; a real ownership check holder-RFC = merchant RFC is pending).
+- `POST …/settlement-account/verify {"clabe","status":"VERIFIED|REJECTED"}`
+  (operator; owner in `DEV_MODE`): applies only if `clabe` is still the
+  registered one. `GET …/settlement-account` shows it. With `DEV_MODE` the
+  demo merchant is seeded with a verified account.
+
+`POST /api/v1/disbursements {"amount_cents","concept"}` (owner): destination is
+always the registered account; `destination_clabe`, if sent, must equal it
+(`403 DESTINATION_CLABE_NOT_ALLOWED`); not registered / not `VERIFIED` → `409`.
+
+1. One transaction: lock `AVAILABLE` and `ASSET:STP_CONCENTRATOR` (sorted),
+   check balance ≥ amount (`400 INSUFFICIENT_FUNDS`), post `disb_<clave>` (Dr
+   `AVAILABLE`, Cr `ASSET:STP_CONCENTRATOR`), outbox `disbursement.requested`.
+   Concurrent payouts serialize on the account lock and cannot overdraw.
+2. `registraOrden` to STP outside the transaction.
+3. Dispatch error → compensating journal `disb_rev_<clave>` (reverse
+   entries) + outbox `disbursement.failed` in a new transaction, `502`. If the
+   compensation itself fails it is logged for manual reconciliation.
 
 ## Not covered yet
 
 - Real processor/STP confirmations of payouts and refunds (webhooks), daily
   reconciliation, STP returns.
 - RBF loans persisted in the database (and reversed on refunds).
+- Real settlement-account ownership verification (STP/bank titularidad or KYB
+  provider) and 2FA on account changes.

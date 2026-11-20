@@ -47,7 +47,6 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		CoDiWebhookSecret: "restart_codi_webhook_secret_32_bytes!",
 		JWTSecret:         testJWTSecret,
 	}
-	const clabe = "646180123400000007"
 
 	// ---- Boot 1: create state ----
 	srv1, db1, _, err := BuildServer(context.Background(), cfg)
@@ -62,16 +61,18 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	}
 	userTok, _ := srv1.AuthService().MintAccessToken(owner.ID, "", "")
 	regRec := doJSON(t, srv1, userTok, http.MethodPost, "/api/v1/merchants", map[string]any{
-		"rfc": "GARM850101ABC", "name": "Taqueria Persistente", "is_resico": true, "virtual_clabe": clabe,
+		"rfc": "GARM850101ABC", "name": "Taqueria Persistente", "is_resico": true,
 	})
 	if regRec.Code != http.StatusCreated {
 		t.Fatalf("register merchant: %d %s", regRec.Code, regRec.Body.String())
 	}
 	var created struct {
-		MerchantID string `json:"merchant_id"`
+		MerchantID   string `json:"merchant_id"`
+		VirtualCLABE string `json:"virtual_clabe"`
 	}
 	_ = json.Unmarshal(regRec.Body.Bytes(), &created)
 	merchantID := created.MerchantID
+	clabe := created.VirtualCLABE // server-assigned collection CLABE
 	tok, _ := srv1.AuthService().MintAccessToken(owner.ID, merchantID, auth.RoleOwner)
 	privDER, certDER, err := generateSelfSignedCSD()
 	if err != nil {

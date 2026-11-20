@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -238,11 +239,8 @@ func TestRefund_PostingFailureReturns5xxAndKeepsPaymentSettled(t *testing.T) {
 	if rec := serve(s, asTenant(t, s, m, jsonReq("POST", "/api/v1/payments/settle", map[string]any{"payment_id": "pay_rf"}))); rec.Code != http.StatusOK {
 		t.Fatalf("settle: %d %s", rec.Code, rec.Body.String())
 	}
-	// Swap in a ledger that lacks the acquirer receivable: the reversal cannot post.
-	broken := ledger.NewLedgerEngine()
-	_, _ = broken.CreateAccount("LIABILITY:MERCHANT:"+m+":AVAILABLE", ledger.AccountLiability, "x")
-	s.ledger = broken
-	s.SetMoneyStore(s.newMemoryMoneyStore())
+	// The ledger refuses the reversal journal: the whole refund must roll back.
+	s.SetMoneyStore(failingPostStore{inner: s.moneyStore()})
 	rec := serve(s, asTenant(t, s, m, jsonReq("POST", "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_rf"})))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500 when the reversal cannot post, got %d %s", rec.Code, rec.Body.String())
@@ -251,4 +249,17 @@ func TestRefund_PostingFailureReturns5xxAndKeepsPaymentSettled(t *testing.T) {
 	if p.Status != payments.PaymentSettled {
 		t.Fatalf("payment must stay SETTLED after a failed refund, got %s", p.Status)
 	}
+}
+
+// failingPostStore wraps a MoneyStore so every PostJournal fails.
+type failingPostStore struct{ inner store.MoneyStore }
+
+type failingPostTx struct{ store.MoneyTx }
+
+func (f failingPostStore) InTx(ctx context.Context, fn func(tx store.MoneyTx) error) error {
+	return f.inner.InTx(ctx, func(tx store.MoneyTx) error { return fn(failingPostTx{tx}) })
+}
+
+func (failingPostTx) PostJournal(context.Context, *ledger.JournalEntry) error {
+	return errors.New("simulated ledger failure")
 }

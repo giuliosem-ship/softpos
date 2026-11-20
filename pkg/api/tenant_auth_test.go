@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -138,6 +139,9 @@ func TestTenantFromToken_DisbursementLookupAndRoles(t *testing.T) {
 	_ = s.RegisterMerchant(a, "GARM850101ABC", "A", true)
 	_ = s.RegisterMerchant(b, "GARM850101ABC", "B", true)
 	_, _ = s.ledger.RecordSplitPayment(500000, b, 0, 0, 0)
+	if err := s.SeedVerifiedSettlementAccount(context.Background(), b, "032180000118359719"); err != nil {
+		t.Fatal(err)
+	}
 
 	body := map[string]any{"amount_cents": 1000, "destination_clabe": "032180000118359719", "beneficiary_name": "B Owner", "concept": "payout"}
 	// Cashier of B cannot move money out.

@@ -169,3 +169,87 @@ func TestPGIntegration_ConcurrentMoneyPostingIsExactlyOnce(t *testing.T) {
 		t.Fatalf("money_operations rows = %d, want 2", n)
 	}
 }
+
+// TestPGIntegration_PayoutsAndRefunds: settlement-account gate, concurrent
+// payouts that cannot overdraw, and proportional partial/full refunds on real
+// PostgreSQL.
+func TestPGIntegration_PayoutsAndRefunds(t *testing.T) {
+	cfg := Config{SQLDriver: "pgx", DatabaseURL: pgtest.URL(t), STPHMACSecret: "test_secret", JWTSecret: testJWTSecret}
+	srv, db, _, err := BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("BuildServer: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	const m, payoutCLABE = "merch_pg_payout", "032180000118359719"
+	if err := srv.RegisterMerchantCLABE("646180123400000007", m, "GARM850101ABC"); err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := srv.AuthService().MintAccessToken("usr_pg_owner", m, auth.RoleOwner)
+	operator, _ := srv.AuthService().MintAccessToken("usr_pg_operator", m, auth.RoleOperator)
+
+	// Fund the merchant with a settled card sale and an SPEI abono-equivalent.
+	if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/authorize", map[string]any{"payment_id": "pay_pg_ref", "tlv_hex": validEMVTLVHex}); rec.Code != http.StatusOK {
+		t.Fatalf("authorize: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/settle", map[string]any{"payment_id": "pay_pg_ref"}); rec.Code != http.StatusOK {
+		t.Fatalf("settle: %d %s", rec.Code, rec.Body.String())
+	}
+	// 25000 gross: fee 500, IVA 3448, base 21552, ISR 216 -> escrow 3664, available 20836.
+	if got := availableBalance(t, srv, owner, m); got != 20836 {
+		t.Fatalf("available after settle = %d", got)
+	}
+
+	// Partial refund then the rest: everything reverses exactly.
+	rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_pg_ref", "refund_cents": 10000})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"remaining_refundable_cents":15000`) {
+		t.Fatalf("partial refund: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_pg_ref", "refund_cents": 15001}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("over-refund: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/payments/emv/reverse", map[string]any{"payment_id": "pay_pg_ref"}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"REFUNDED"`) {
+		t.Fatalf("final refund: %d %s", rec.Code, rec.Body.String())
+	}
+	var escrow, fees, recv int64
+	_ = db.QueryRow(`SELECT balance_cents FROM ledger_accounts WHERE code = $1`, "LIABILITY:MERCHANT:"+m+":TAX_ESCROW").Scan(&escrow)
+	_ = db.QueryRow(`SELECT balance_cents FROM ledger_accounts WHERE code = 'REVENUE:FEES'`).Scan(&fees)
+	_ = db.QueryRow(`SELECT balance_cents FROM ledger_accounts WHERE code = 'ASSET:ACQUIRER_RECEIVABLE'`).Scan(&recv)
+	if availableBalance(t, srv, owner, m) != 0 || escrow != 0 || fees != 0 || recv != 0 || srv.GetMerchantMonthlySalesCents(m) != 0 {
+		t.Fatalf("full refund must reverse everything: escrow=%d fees=%d recv=%d sales=%d", escrow, fees, recv, srv.GetMerchantMonthlySalesCents(m))
+	}
+
+	// Payouts: only to the registered + verified settlement CLABE.
+	signer := stp.NewSTPSigner(nil, nil, cfg.STPHMACSecret)
+	canonical := signer.BuildAbonoCanonicalString("646180123400000007", 100000, "SPEIPGPAY01", "40012", "012180001234567890")
+	if rec := doJSON(t, srv, "", http.MethodPost, "/api/v1/webhooks/stp/abono", map[string]any{
+		"id": 1, "claveRastreo": "SPEIPGPAY01", "monto": json.Number("1000.00"), "institucionOrdenante": "40012",
+		"cuentaOrdenante": "012180001234567890", "cuentaBeneficiario": "646180123400000007", "firma": signer.SignHMAC(canonical),
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("abono: %d %s", rec.Code, rec.Body.String())
+	}
+	acctPath := "/api/v1/merchants/" + m + "/settlement-account"
+	if rec := doJSON(t, srv, owner, http.MethodPut, acctPath, map[string]any{"clabe": payoutCLABE}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "PENDING") {
+		t.Fatalf("register settlement account: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, owner, http.MethodPost, "/api/v1/disbursements", map[string]any{"amount_cents": 1000}); rec.Code != http.StatusConflict {
+		t.Fatalf("payout to unverified account: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, operator, http.MethodPost, acctPath+"/verify", map[string]any{"clabe": payoutCLABE, "status": "VERIFIED"}); rec.Code != http.StatusOK {
+		t.Fatalf("operator verify: %d %s", rec.Code, rec.Body.String())
+	}
+	codes := runConcurrently(10, func(int) int {
+		return doJSON(t, srv, owner, http.MethodPost, "/api/v1/disbursements", map[string]any{"amount_cents": 30000}).Code
+	})
+	ok := 0
+	for _, c := range codes {
+		if c == http.StatusOK {
+			ok++
+		}
+	}
+	if ok != 3 || availableBalance(t, srv, owner, m) != 10000 {
+		t.Fatalf("concurrent payouts: %d succeeded, available %d (want 3 and 10000)", ok, availableBalance(t, srv, owner, m))
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM outbox_events WHERE event_type = 'disbursement.requested'`); n != 3 {
+		t.Fatalf("disbursement.requested events = %d", n)
+	}
+}

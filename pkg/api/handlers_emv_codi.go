@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"softpos/pkg/auth"
 	"softpos/pkg/fiscal"
 	"softpos/pkg/ledger"
 	"softpos/pkg/payments"
@@ -121,97 +122,230 @@ func (s *Server) HandleEMVAuthorize(w http.ResponseWriter, r *http.Request) {
 
 type EMVReverseRequest struct {
 	PaymentID   string `json:"payment_id"`
-	RefundCents int64  `json:"refund_cents,omitempty"`
+	RefundCents int64  `json:"refund_cents,omitempty"` // 0 = the whole remaining amount
 }
 
 type EMVReverseResponse struct {
-	PaymentID   string                 `json:"payment_id"`
-	MerchantID  string                 `json:"merchant_id"`
-	AmountCents int64                  `json:"amount_cents"`
-	Status      payments.PaymentStatus `json:"status"`
-	UpdatedAt   string                 `json:"updated_at"`
+	PaymentID                string                 `json:"payment_id"`
+	MerchantID               string                 `json:"merchant_id"`
+	AmountCents              int64                  `json:"amount_cents"`
+	Status                   payments.PaymentStatus `json:"status"`
+	RefundCents              int64                  `json:"refund_cents,omitempty"`
+	RefundedTotalCents       int64                  `json:"refunded_total_cents,omitempty"`
+	RemainingRefundableCents int64                  `json:"remaining_refundable_cents"`
+	ReversedTaxEscrowCents   int64                  `json:"reversed_tax_escrow_cents,omitempty"`
+	ReversedPlatformFeeCents int64                  `json:"reversed_platform_fee_cents,omitempty"`
+	UpdatedAt                string                 `json:"updated_at"`
 }
 
+// SetCashierRefundsAllowed lets cashiers refund settled payments
+// (ALLOW_CASHIER_REFUNDS). Default: refunds are owner-only; voids of
+// not-yet-settled payments stay open to cashiers.
+func (s *Server) SetCashierRefundsAllowed(allowed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cashierRefunds = allowed
+}
+
+// refundSplit is the proportional reversal of a settlement for one refund.
+type refundSplit struct {
+	amount, base, taxEscrow, fee, available int64
+}
+
+// proportionalRefund computes the reversal of refundCents against rec using
+// cumulative targets (target_x = x * refunded_total / gross, half-up), so the
+// sum of partial reversals equals the full reversal exactly.
+func proportionalRefund(rec store.SettlementRecord, refundCents int64) refundSplit {
+	total := rec.RefundedGrossCents + refundCents
+	target := func(x int64) int64 {
+		if total == rec.GrossCents {
+			return x
+		}
+		return ratioHalfUp(x, total, rec.GrossCents)
+	}
+	sp := refundSplit{
+		amount:    refundCents,
+		base:      target(rec.BaseCents) - rec.RefundedBaseCents,
+		taxEscrow: target(rec.TaxEscrowCents) - rec.RefundedTaxEscrowCents,
+		fee:       target(rec.PlatformFeeCents) - rec.RefundedFeeCents,
+	}
+	sp.available = refundCents - sp.taxEscrow - sp.fee
+	if sp.available < 0 { // rounding guard on near-total deductions
+		sp.taxEscrow += sp.available
+		sp.available = 0
+	}
+	return sp
+}
+
+// HandleEMVReverse: POST /api/v1/payments/emv/reverse. AUTHORIZED -> VOIDED
+// (nothing was posted). SETTLED -> full or partial refund that reverses,
+// proportionally and in one transaction, the merchant available balance, the
+// tax set-aside (IVA/ISR), the platform fee and the RESICO accumulator of the
+// settlement month. Refunds can never exceed the remaining refundable amount;
+// the RBF holdback is not reversed (the loan repayment stands). An optional
+// Idempotency-Key makes retries replay the first result.
 func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 	var req EMVReverseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "INVALID_JSON")
 		return
 	}
 	if req.PaymentID == "" {
-		http.Error(w, `{"error":"MISSING_PAYMENT_ID"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "MISSING_PAYMENT_ID")
 		return
 	}
-
+	if req.RefundCents < 0 {
+		writeError(w, http.StatusBadRequest, "INVALID_AMOUNT")
+		return
+	}
 	tenant, ok := requireTenant(w, r, "")
 	if !ok {
 		return
 	}
+	s.mu.RLock()
+	cashierRefunds := s.cashierRefunds
+	s.mu.RUnlock()
+	role := RoleFromContext(r.Context())
+
 	ctx := r.Context()
-	var updated *payments.Payment
+	opKey := ""
+	if k := r.Header.Get("Idempotency-Key"); k != "" {
+		opKey = tenantIdempotencyKey(tenant, "reverse:"+req.PaymentID+":"+k)
+	}
+	var respBytes []byte
 	err := s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
 		p, err := tx.GetPaymentForUpdate(ctx, req.PaymentID)
 		if err != nil {
 			return err
 		}
-		if p.MerchantID != tenant {
+		if p.MerchantID != tenant { // foreign payments look nonexistent
 			return payments.ErrPaymentNotFound
 		}
+		if p.Status == payments.PaymentSettled && role != auth.RoleOwner && !(cashierRefunds && role == auth.RoleCashier) {
+			return errRefundRoleForbidden
+		}
+		if opKey != "" {
+			claimed, _, prior, err := tx.ClaimOperation(ctx, opKey)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				respBytes = prior
+				return nil
+			}
+		}
+		resp := EMVReverseResponse{PaymentID: p.ID, MerchantID: tenant, AmountCents: p.AmountCents, UpdatedAt: nowUTC().Format(time.RFC3339)}
+
 		switch p.Status {
 		case payments.PaymentAuthorized:
+			if req.RefundCents != 0 && req.RefundCents != p.AmountCents {
+				return errPartialVoid
+			}
 			if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentAuthorized, payments.PaymentVoided); err != nil {
 				return err
 			}
-			p.Status = payments.PaymentVoided
-			updated = p
-			return tx.EnqueueEvent(ctx, "payment.voided", p.ID, map[string]any{"payment_id": p.ID, "merchant_id": tenant})
-		case payments.PaymentSettled:
-			refundAmt := req.RefundCents
-			if refundAmt == 0 {
-				refundAmt = p.AmountCents
+			resp.Status = payments.PaymentVoided
+			if err := tx.EnqueueEvent(ctx, "payment.voided", p.ID, resp); err != nil {
+				return err
 			}
-			if refundAmt <= 0 || refundAmt > p.AmountCents {
+		case payments.PaymentSettled:
+			rec, found, err := tx.GetSettlementForUpdate(ctx, p.ID)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return errSettlementMissing
+			}
+			remaining := rec.GrossCents - rec.RefundedGrossCents
+			amount := req.RefundCents
+			if amount == 0 {
+				amount = remaining
+			}
+			if amount <= 0 || amount > remaining {
 				return errRefundExceedsBalance
 			}
-			availCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant)
-			jnl, err := ledger.NewJournalEntry("refund_"+p.ID, nowUTC(), "EMV Refund "+p.ID, []ledger.Entry{
-				{AccountID: availCode, Direction: ledger.Debit, Money: ledger.NewMoney(refundAmt, "MXN")},
-				{AccountID: "ASSET:ACQUIRER_RECEIVABLE", Direction: ledger.Credit, Money: ledger.NewMoney(refundAmt, "MXN")},
-			}, map[string]string{"payment_id": p.ID})
+			sp := proportionalRefund(rec, amount)
+			rec.RefundedGrossCents += sp.amount
+			rec.RefundedBaseCents += sp.base
+			rec.RefundedTaxEscrowCents += sp.taxEscrow
+			rec.RefundedFeeCents += sp.fee
+
+			var entries []ledger.Entry
+			add := func(account string, dir ledger.Direction, cents int64) {
+				if cents > 0 {
+					entries = append(entries, ledger.Entry{AccountID: account, Direction: dir, Money: ledger.NewMoney(cents, "MXN")})
+				}
+			}
+			add(fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant), ledger.Debit, sp.available)
+			add(fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", tenant), ledger.Debit, sp.taxEscrow)
+			add("REVENUE:FEES", ledger.Debit, sp.fee)
+			add("ASSET:ACQUIRER_RECEIVABLE", ledger.Credit, sp.amount)
+			jnl, err := ledger.NewJournalEntry(fmt.Sprintf("refund_%s_%d", p.ID, rec.RefundedGrossCents), nowUTC(), "EMV refund "+p.ID, entries,
+				map[string]string{"payment_id": p.ID, "merchant_id": tenant})
 			if err != nil {
 				return err
 			}
 			if err := tx.PostJournal(ctx, jnl); err != nil {
 				return err
 			}
-			if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentSettled, payments.PaymentRefunded); err != nil {
+			if err := tx.AddMonthlySales(ctx, tenant, rec.YearMonth, -sp.base); err != nil {
 				return err
 			}
-			p.Status = payments.PaymentRefunded
-			updated = p
-			return tx.EnqueueEvent(ctx, "payment.refunded", p.ID, map[string]any{"payment_id": p.ID, "merchant_id": tenant, "refund_cents": refundAmt})
+			if err := tx.UpdateSettlementRefunds(ctx, rec); err != nil {
+				return err
+			}
+			resp.Status = payments.PaymentSettled
+			if rec.RefundedGrossCents == rec.GrossCents {
+				if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentSettled, payments.PaymentRefunded); err != nil {
+					return err
+				}
+				resp.Status = payments.PaymentRefunded
+			}
+			resp.RefundCents = sp.amount
+			resp.RefundedTotalCents = rec.RefundedGrossCents
+			resp.RemainingRefundableCents = rec.GrossCents - rec.RefundedGrossCents
+			resp.ReversedTaxEscrowCents = sp.taxEscrow
+			resp.ReversedPlatformFeeCents = sp.fee
+			if err := tx.EnqueueEvent(ctx, "payment.refunded", p.ID, resp); err != nil {
+				return err
+			}
 		default:
 			return payments.ErrInvalidStateTransition
 		}
+		if respBytes, err = json.Marshal(resp); err != nil {
+			return err
+		}
+		if opKey != "" {
+			return tx.CompleteOperation(ctx, opKey, http.StatusOK, respBytes)
+		}
+		return nil
 	})
+	if errors.Is(err, errRefundRoleForbidden) {
+		writeError(w, http.StatusForbidden, "ROLE_FORBIDDEN")
+		return
+	}
+	if errors.Is(err, errPartialVoid) {
+		writeError(w, http.StatusBadRequest, "PARTIAL_VOID_NOT_SUPPORTED")
+		return
+	}
+	if errors.Is(err, errSettlementMissing) {
+		writeError(w, http.StatusConflict, "SETTLEMENT_RECORD_MISSING")
+		return
+	}
 	if err != nil {
 		writeMoneyError(w, "reverse", err)
 		return
 	}
-	updated.UpdatedAt = nowUTC()
-
-	resp := EMVReverseResponse{
-		PaymentID:   updated.ID,
-		MerchantID:  updated.MerchantID,
-		AmountCents: updated.AmountCents,
-		Status:      updated.Status,
-		UpdatedAt:   updated.UpdatedAt.Format(time.RFC3339),
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write(respBytes)
 }
+
+var (
+	errRefundRoleForbidden = errors.New("refunds are owner-only")
+	errPartialVoid         = errors.New("an authorized payment can only be voided in full")
+	errSettlementMissing   = errors.New("settled payment has no settlement record")
+)
 
 type CoDiCreateQRRequest struct {
 	MerchantID  string `json:"merchant_id"`

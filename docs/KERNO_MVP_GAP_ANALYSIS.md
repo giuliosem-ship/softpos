@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote A (MVP-01..03) aplicado: driver PostgreSQL, migraciones versionadas, estado del servidor en repositorios SQL y dispatcher de outbox.
+**Última actualización:** 2026-11-20 — Lote B (MVP-04..06) aplicado: usuarios y login OTP con JWT + refresh rotativo, auth montada con tenant desde el token, nonce de atestación y webhooks firmados (antes, Lote A: PostgreSQL, migraciones, repositorios SQL y outbox).
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -16,7 +16,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | Lógica de dominio (ledger, RESICO, CLABE, CFDI XML, ISO 8583, DUKPT, STEC, MIF, disputas) | 🟢 Avanzado | Librerías puras con tests unitarios sólidos. |
 | Integración en el servidor HTTP | 🟡 Parcial | Solo ledger, pagos EMV/CoDi, CFDI, STP, RBF están ruteados. ISO 8583, HSM/DUKPT, clearing y disputas **no están conectados** a ninguna ruta. |
 | Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Falta: pago + asiento + acumulado en una sola transacción y que algún flujo encole eventos en el outbox. Sin DB todo sigue en memoria (modo dev). |
-| Seguridad perimetral | 🔴 Bloqueante | El middleware JWT existe y tiene tests, pero **no está montado**: todas las rutas (incluidas liquidación y dispersión SPEI) son públicas. |
+| Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Falta: proveedor OTP real, CORS/TLS/gateway y que `settle`/`disbursements` dejen de confiar en montos y CLABE del cliente (Lote C). |
 | Cobro con tarjeta real | 🔴 Bloqueante | No hay kernel EMV ni autorización contra emisor; el backend "aprueba" al parsear TLV. |
 | App Android | 🔴 Bloqueante | Es un **módulo Kotlin/JVM** (sin Android Gradle Plugin, sin Activity/Compose, sin `android.nfc`). No genera APK. |
 | Integraciones externas | 🔴 Bloqueante | PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
@@ -35,7 +35,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | `node --test web/pos/softpos_sdk.test.js` | ✅ 7/7 |
 | Tests Android | Último reporte en `build/test-results` (1-nov): 78 tests, 0 fallos. No se re-ejecutó (no hay `gradlew` ni Gradle en el entorno); el HANDOFF reporta 79 tras AND-22. |
 | Arranque con `DATABASE_URL` | ✅ (Lote A, 2026-11-20) arranca, aplica migraciones 001–004 y conserva el estado tras reiniciar contra PostgreSQL 16 real (`embedded-postgres`, `TEST_DATABASE_URL=… go test -run PGIntegration ./...`). Si la DB no responde o una migración falla, aborta con error explícito. `docker compose up` no se re-ejecutó (sin Docker en el entorno). |
-| `POST /api/v1/disbursements` y `GET /api/v1/merchants/{id}/balances` sin token | ❌ Responden sin autenticación (400 por validación de monto / 200 con saldo). |
+| `POST /api/v1/disbursements` y `GET /api/v1/merchants/{id}/balances` sin token | ✅ (Lote B, 2026-11-20) `401` sin token y `403` con token de otro comercio; una dispersión exige rol `owner`. |
 
 ---
 
@@ -51,7 +51,8 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 - `iso8583`, `crypto` (DUKPT, traducción PIN, HSM simulado), `clearing` (STEC, MIF), `disputes` (contracargos, reserva dinámica), `rbf`: implementados y testeados, **no integrados**.
 - `store`: driver `pgx`, repos SQL (ledger, comercios, RBF, pagos EMV, CoDi, outbox, idempotencia) con implementaciones en memoria equivalentes para modo sin DB, runner de migraciones versionadas (`schema_migrations`, embebidas en el binario), tests de integración contra Postgres real (`pkg/store/pgtest`), cliente Redis RESP propio.
 - `outbox`: dispatcher con `FOR UPDATE SKIP LOCKED`, backoff exponencial, lease y apagado ordenado; arranca desde `cmd/server`.
-- `api`: 16 rutas REST + servidor estático del Web POS; idempotencia; middleware JWT (no montado).
+- `api`: rutas REST + servidor estático del Web POS; idempotencia con clave por tenant; middleware JWT montado con lista pública, rate limit por IP en `/auth/*`, webhook CoDi con firma HMAC.
+- `auth`: usuarios por teléfono, membresías usuario↔comercio con rol, OTP (hash, expiración, intentos, reenvío), access JWT HS256 y refresh opaco rotativo con detección de reuso; repos SQL y en memoria.
 
 **Android (`mobile/android`)** — 25 clases Kotlin con lógica pura y descriptores de UI (calculadora de splits, CVM, teclado aleatorio, ISO 9564, TLV, orquestador de tap, cliente API, SAF cifrada, guard de ventana). Ninguna depende del SDK de Android; los puntos de contacto con el SO son interfaces (`IsoDepTransceiver`, `SecureWindow`, `AccessibilityScanner`).
 
@@ -105,26 +106,23 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| El alta no valida nada | P0 | S | `HandleRegisterMerchant` solo exige `id`, `rfc`, `name`; no llama al validador RFC ni consulta 69-B (`pkg/api/server.go:396`). El `id` lo manda el cliente. |
-| Sin modelo de usuario/propietario | P0 | M | No existe entidad usuario, ni relación usuario↔comercio, ni datos de contacto/representante. |
+| El alta no valida nada | P0 | S | `HandleRegisterMerchant` solo exige `id`, `rfc`, `name`; no llama al validador RFC ni consulta 69-B (`HandleRegisterMerchant` en `pkg/api/server.go`). (El `id` ya lo genera el servidor desde el Lote B.) |
+| Datos del propietario/representante | P0 | S | El Lote B creó usuario (teléfono) y membresía `owner` al dar de alta; faltan datos de contacto, representante legal y su vínculo con el expediente KYC. |
 | Sin captura documental KYC | P0 | M | INE/selfie/prueba de vida, comprobante de domicilio, estado de cuenta (CLABE de liquidación), giro/MCC. Normalmente vía proveedor de identidad (Truora, Metamap, etc.) + requisitos del adquirente. |
 | Sin alta en el adquirente | P0 | M | Con camino A, el comercio debe crearse como sub-afiliado/cuenta en el proveedor (API de onboarding del procesador). |
 | Sin flujo de estado del alta | P1 | S | `PENDING → IN_REVIEW → APPROVED/REJECTED`, con motivo; revisión manual en backoffice. |
 | Asignación de CLABE virtual | P1 | S | Generador existe; falta asignarla automáticamente al aprobar y registrar la cuenta en STP. |
 
 ### F2 — Autenticación, sesiones y multi-tenant
-**Existe:** `middleware_auth.go` (JWT HS256, `merchant_id` en contexto, anti-IDOR) con tests; verificador Play Integrity en Go; config guard de producción.
+**Existe (Lote B, ver `docs/AUTH.md`):** usuarios y membresías con rol, login OTP (`/api/v1/auth/otp/*`), access JWT HS256 de 15 min + refresh opaco rotativo con detección de reuso y logout, JWT montado en todas las rutas salvo lista pública, tenant derivado del token (body/path ajeno → 403, recursos ajenos → 404, idempotencia por tenant), dispersiones solo `owner`, alta de comercio con id generado por el servidor, nonce de atestación de un solo uso + verificación Play Integrity, rate limit por IP en `/auth/*`, webhook CoDi firmado (HMAC + timestamp + anti-replay), config guard que exige `JWT_SECRET`/`CODI_WEBHOOK_SECRET` y rechaza `DEV_MODE` en producción.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Middleware JWT no montado | P0 | S | `Router()` solo envuelve `Recovery` + `Logging` (`pkg/api/server.go:474`). Todas las rutas son públicas. |
-| No hay emisión de tokens | P0 | M | No existe login, registro, OTP por SMS/WhatsApp, refresh tokens, revocación ni logout. |
-| Rutas no derivan el tenant del token | P0 | S | Handlers como `settle` y `disbursements` toman `merchant_id` del body; deben tomarlo del contexto autenticado. |
-| Webhooks sin autenticación | P0 | S | `POST /webhooks/codi/confirm` no verifica firma. El de STP sí verifica (RSA/HMAC), pero acepta HMAC con secreto por defecto en dev. |
-| Endpoint de nonce de atestación inexistente | P1 | S | Android (`PlayIntegrityClient`) pide `/api/v1/auth/attestation-nonce`; el backend no lo expone. |
-| Bóveda CSD con llave fija | P0 | S | `NewServer` crea la bóveda con `defaultVaultMasterKeyHex` hardcodeada e **ignora** `VAULT_MASTER_KEY_HEX` (`pkg/api/server.go:63`); el config guard valida una variable que no se usa. Mover a KMS. |
-| Rate limiting / CORS / TLS | P1 | S | Ausentes en el servidor; normalmente en API gateway. |
-| Roles | P2 | S | Dueño vs. cajero vs. operador interno (backoffice). |
+| Proveedor OTP real | P0 | S | Solo existe `auth.LogSender` (no entrega el código fuera de `DEV_MODE`). Implementar `auth.OTPSender` con SMS/WhatsApp y límites por número/día. |
+| Bóveda CSD con llave fija | P0 | S | `NewServer` crea la bóveda con `defaultVaultMasterKeyHex` hardcodeada e **ignora** `VAULT_MASTER_KEY_HEX` (`pkg/api/server.go`); el config guard valida una variable que no se usa. Mover a KMS. |
+| Atestación no exigida | P1 | S | El endpoint de nonce y la verificación existen, pero el veredicto no se exige ni se liga a la sesión (login o cobro). |
+| CORS / TLS / rate limit distribuido | P1 | S | El rate limit actual es en memoria por proceso y usa la IP TCP; CORS y TLS ausentes. Normalmente en API gateway. |
+| Gestión de miembros y permisos | P2 | S | Roles `owner`/`cashier`/`operator` en el modelo, pero no hay endpoints para invitar cajeros ni permisos finos ni rol de backoffice en uso. Los access tokens no se pueden revocar antes de expirar. |
 
 ### F3 — Cobro con tarjeta contactless (Tap to Phone)
 **Existe:** parser TLV, motor de estados de pago, reglas CVM, orquestador de tap con auto-reversa, adaptador multi-riel (`WhiteLabelTapProvider`), simulador en Web POS.
@@ -154,7 +152,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| `settle` confía en el cliente | P0 | S | `HandlePaymentSettle` toma `gross_amount_cents`, `platform_fee_cents` y `rbf_sweep_cents` del body, y si el `payment_id` **no existe** igual acredita al comercio (`pkg/api/handlers_payments.go:60–100`). Combinado con F2 sin auth y `disbursements` abierto, es una vía directa de fraude. El monto debe salir del pago autorizado y la comisión de la tarifa del comercio. |
+| `settle` confía en el cliente | P0 | S | `HandlePaymentSettle` toma `gross_amount_cents`, `platform_fee_cents` y `rbf_sweep_cents` del body, y si el `payment_id` **no existe** igual acredita al comercio (`pkg/api/handlers_payments.go:60–100`). Desde el Lote B el tenant sale del token (un comercio ya no puede acreditar a otro), pero un comercio o una sesión robada aún puede inflar su propio saldo y dispersarlo. El monto debe salir del pago autorizado y la comisión de la tarifa del comercio. |
 | Ningún flujo encola eventos en outbox | P1 | S | El dispatcher (`pkg/outbox`) ya corre desde `cmd/server`, pero ningún handler llama a `SaveEventTx` y solo hay publicadores `log`/`noop`. Falta encolar (en la misma transacción del negocio) los eventos de pago/abono/payout y un publicador real (webhook/broker/PAC). |
 | Errores de posteo ignorados | P1 | S | Ej. refund: `_ = s.ledger.PostTransaction(jnl)` (`handlers_emv_codi.go`); `settle` y el webhook CoDi ignoran el error de `AddMerchantMonthlySalesCents`. Estado del pago, asiento contable y acumulado mensual RESICO se escriben en transacciones separadas: un fallo parcial deja pago, ledger y tramo fiscal inconsistentes. Deben ir en una sola transacción DB. |
 | Conciliación diaria | P1 | M | `cmd/reconciler/main.go` es un stub (crea un ledger vacío y sale). Falta: ledger vs. reporte del procesador, ledger vs. estado de cuenta STP, reporte de diferencias. |
@@ -203,7 +201,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | No es una app Android | P0 | M | `app/build.gradle.kts` aplica `kotlin.jvm`, no `com.android.application`. El manifest está vacío (sin Activity). Migrar a módulo Android (AGP 8.x ya está en el catálogo), con `MainActivity`, Compose, DI, navegación. Sin `gradlew` en el repo. |
 | Sin UI real | P0 | L | Pantallas Compose: login/OTP, onboarding KYB, cobrar (teclado de monto → tap / QR SPEI), historial de ventas, detalle y devolución, saldo y apartado fiscal, facturar, perfil/CLABE. |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
-| Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google y el endpoint de nonce (F2). |
+| Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
 | Almacenamiento seguro de sesión | P1 | S | Tokens en Android Keystore / EncryptedSharedPreferences. La SAF usa una llave AES en memoria, no Keystore (fase 2 de todos modos). |
 | Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. |
 | Telemetría y crash reporting | P1 | S | Crashlytics/Sentry sin datos sensibles. |
@@ -242,7 +240,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 ## 6. Hallazgos críticos (corregir antes de cualquier demo con dinero real)
 
-1. **Cadena de fraude abierta:** `settle` sin auth acredita montos arbitrarios aunque el pago no exista + `disbursements` sin auth con CLABE libre. Con STP real conectado, esto permite sacar dinero. → Montar JWT, derivar tenant del token, eliminar montos del body, CLABE de destino fija y verificada.
+1. **Cadena de fraude abierta (parcial):** JWT y tenant desde el token quedaron resueltos en el Lote B, pero `settle` sigue acreditando al comercio autenticado montos arbitrarios del body aunque el pago no exista, y `disbursements` acepta cualquier CLABE de destino. Con STP real conectado, una sesión de comercio (o robada) permite sacar dinero. → Eliminar montos del body (salir del pago autorizado y la tarifa), CLABE de destino fija y verificada, reversa completa en refunds.
 2. **La persistencia no es atómica** (el driver y el cableado a PostgreSQL quedaron resueltos en el Lote A): estado del pago, asiento y acumulado mensual RESICO van en transacciones separadas y varios errores se ignoran (ver F5 "Errores de posteo ignorados").
 3. **La bóveda CSD usa una llave maestra hardcodeada** e ignora la variable de entorno que el config guard valida.
 4. **La app Android no es una app**: hay que migrar el módulo a Android y construir toda la UI.
@@ -259,7 +257,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 **Fase 1 — Cimientos seguros (≈3–4 semanas)**
 - ~~Driver Postgres + tests de integración reales; todo el estado a DB; outbox worker activo.~~ ✅ Lote A (2026-11-20). Pendiente: transacción única pago+asiento+acumulado y encolar eventos en el outbox.
-- Usuarios, login OTP, JWT montado, tenant desde token, webhooks firmados, KMS para la bóveda.
+- ~~Usuarios, login OTP, JWT montado, tenant desde token, webhooks firmados~~ ✅ Lote B (2026-11-20). Pendiente: proveedor OTP real y KMS para la bóveda.
 - Corregir `settle`/`disbursements`/refund (montos desde el servidor, transacción única pago+asiento).
 - CI con `go test -race`, tests Kotlin y build de imagen; secretos fuera del repo.
 

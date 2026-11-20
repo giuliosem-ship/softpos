@@ -30,8 +30,11 @@ enum class LoadError { NO_MERCHANT, NETWORK, NOT_AVAILABLE, UNKNOWN }
  * 403 because the merchant's KYB is not APPROVED (charging/disbursing is
  * blocked until it is). The exact backend code is matched loosely on purpose.
  */
-internal fun ApiResult.Error.isKybBlocked(): Boolean =
-    statusCode == 403 && (errorCode.contains("KYB") || errorCode.contains("NOT_APPROVED"))
+/** Money operations are gated until onboarding is APPROVED (backend requireActiveMerchant). */
+internal fun ApiResult.Error.isKybBlocked(): Boolean = statusCode == 403 && errorCode == "MERCHANT_NOT_APPROVED"
+
+/** Approved merchant blocked by an operator (backoffice): no onboarding step can fix it. */
+internal fun ApiResult.Error.isMerchantBlocked(): Boolean = statusCode == 403 && errorCode == "MERCHANT_BLOCKED"
 
 internal fun ApiResult.Error.toLoadError(): LoadError = when {
     statusCode == NETWORK_ERROR_STATUS -> LoadError.NETWORK

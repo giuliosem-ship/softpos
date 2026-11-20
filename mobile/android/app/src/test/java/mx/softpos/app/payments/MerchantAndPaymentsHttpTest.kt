@@ -128,7 +128,7 @@ class MerchantAndPaymentsHttpTest {
         server.enqueue(
             MockResponse().setBody(
                 """{"items":[{"id":"s1","kind":"card","status":"CAPTURED","amount_cents":100,"created_at":"t","card_payment_id":"cp_1"},
-                   {"id":"s2","kind":"spei","status":"SETTLED","amount_cents":200,"created_at":"t"}],"next_cursor":"c2"}"""
+                   {"id":"s2","kind":"spei","status":"RECEIVED","amount_cents":200,"created_at":"t"}],"next_cursor":"c2"}"""
             )
         )
         server.enqueue(MockResponse().setBody("""{"items":[],"next_cursor":null}"""))

@@ -110,7 +110,7 @@ class SaleDetailViewModelTest {
         assertEquals(CardPaymentStatus.CHARGEBACK, vm.state.value.payment?.status)
         assertFalse(vm.state.value.canRefund)
 
-        val spei = vm(sale = Sale("s2", "spei", "SETTLED", 100))
+        val spei = vm(sale = Sale("s2", "spei", "RECEIVED", 100))
         assertNull(spei.state.value.payment)
         assertFalse(spei.state.value.canRefund)
     }

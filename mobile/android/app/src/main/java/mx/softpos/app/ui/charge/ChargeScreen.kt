@@ -180,6 +180,7 @@ private fun ChargeError.messageRes(): Int = when (this) {
     ChargeError.CARD_NOT_CONFIGURED -> R.string.charge_error_card_not_configured
     ChargeError.IDEMPOTENCY_CONFLICT -> R.string.charge_error_idempotency
     ChargeError.NOT_APPROVED -> R.string.charge_error_not_approved
+    ChargeError.MERCHANT_BLOCKED -> R.string.charge_error_merchant_blocked
     ChargeError.TAP_FAILED -> R.string.charge_error_tap_failed
     ChargeError.NOT_AVAILABLE -> R.string.error_not_available
     ChargeError.UNKNOWN -> R.string.error_unknown

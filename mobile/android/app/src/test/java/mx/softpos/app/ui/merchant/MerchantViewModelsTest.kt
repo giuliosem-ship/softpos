@@ -59,7 +59,7 @@ class MerchantViewModelsTest {
     @Test
     fun salesListPaginatesWithCursorAndDedupes() {
         val s1 = Sale("s1", "card", "CAPTURED", 100, cardPaymentId = "cp_1")
-        val s2 = Sale("s2", "spei", "SETTLED", 500)
+        val s2 = Sale("s2", "spei", "RECEIVED", 500)
         val s3 = Sale("s3", "codi", "CONFIRMED", 700)
         val api = PagedSales(mapOf(null to SalesPage(listOf(s1, s2), "c1"), "c1" to SalesPage(listOf(s2, s3), null)))
         val vm = SalesViewModel(api, { "mer_1" }, dispatcher)

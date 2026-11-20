@@ -71,6 +71,7 @@
     <string name="charge_error_card_not_configured">El cobro con tarjeta aún no está habilitado para tu comercio.</string>
     <string name="charge_error_idempotency">Este cobro cambió. Revisa el monto e inténtalo de nuevo.</string>
     <string name="charge_error_not_approved">Termina tu alta para poder cobrar.</string>
+    <string name="charge_error_merchant_blocked">Tu cuenta está bloqueada. Contacta a soporte de Kerno.</string>
     <string name="charge_error_tap_failed">No se pudo leer la tarjeta. Inténtalo de nuevo.</string>
     <string name="charge_cancel">Cancelar cobro</string>
 

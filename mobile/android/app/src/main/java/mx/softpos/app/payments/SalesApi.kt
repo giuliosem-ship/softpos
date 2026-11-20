@@ -35,12 +35,17 @@ object SaleKind {
 enum class SaleStatusGroup { APPROVED, PENDING, FAILED, PARTIALLY_REFUNDED, REFUNDED, CHARGEBACK }
 
 object SaleStatus {
+    /**
+     * Card: card_payments.status. SPEI and CoDi come from merchant_sales, which
+     * only holds money already credited: spei `RECEIVED`, codi `CONFIRMED`.
+     */
     private val approved = setOf(
-        CardPaymentStatus.CAPTURED, CardPaymentStatus.CHARGEBACK_REVERSED,
-        "SETTLED", "CONFIRMED", "COMPLETED", "CREDITED", "PAID", "SUCCEEDED"
+        CardPaymentStatus.CAPTURED, CardPaymentStatus.CHARGEBACK_REVERSED, SPEI_RECEIVED, CODI_CONFIRMED
     )
+    const val SPEI_RECEIVED = "RECEIVED"
+    const val CODI_CONFIRMED = "CONFIRMED"
     private val failed = setOf(
-        CardPaymentStatus.DECLINED, CardPaymentStatus.CANCELED, "CANCELLED", "FAILED", "REJECTED", "EXPIRED"
+        CardPaymentStatus.DECLINED, CardPaymentStatus.CANCELED
     )
 
     fun group(status: String): SaleStatusGroup = when (status.uppercase()) {

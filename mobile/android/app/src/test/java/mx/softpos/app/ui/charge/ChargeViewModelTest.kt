@@ -148,6 +148,7 @@ class ChargeViewModelTest {
         backend.intentErrors += ApiResult.Error(503, "ACQUIRER_NOT_CONFIGURED", "")
         backend.intentErrors += ApiResult.Error(409, "IDEMPOTENCY_KEY_REUSED", "")
         backend.intentErrors += ApiResult.Error(403, "MERCHANT_NOT_APPROVED", "")
+        backend.intentErrors += ApiResult.Error(403, "MERCHANT_BLOCKED", "")
         val vm = vm()
         vm.type(1, 0, 0)
         vm.chargeWithCard(); advanceUntilIdle()
@@ -156,7 +157,9 @@ class ChargeViewModelTest {
         assertEquals(ChargeError.IDEMPOTENCY_CONFLICT, vm.state.value.error)
         vm.chargeWithCard(); advanceUntilIdle()
         assertEquals(ChargeError.NOT_APPROVED, vm.state.value.error)
-        assertEquals(listOf("key_1", "key_2", "key_3"), backend.intentKeys)
+        vm.chargeWithCard(); advanceUntilIdle()
+        assertEquals(ChargeError.MERCHANT_BLOCKED, vm.state.value.error)
+        assertEquals(listOf("key_1", "key_2", "key_3", "key_4"), backend.intentKeys)
     }
 
     @Test

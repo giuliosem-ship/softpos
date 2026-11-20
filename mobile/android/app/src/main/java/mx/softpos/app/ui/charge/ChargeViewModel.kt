@@ -29,6 +29,7 @@ import mx.softpos.app.ui.codi.CodiQrGenerator
 import mx.softpos.app.ui.codi.CodiQrMatrix
 import mx.softpos.app.ui.merchant.MerchantIdProvider
 import mx.softpos.app.ui.merchant.isKybBlocked
+import mx.softpos.app.ui.merchant.isMerchantBlocked
 import mx.softpos.app.ui.pos.PaymentMethod
 import mx.softpos.app.ui.pos.PosTerminalViewModel
 import java.security.SecureRandom
@@ -38,7 +39,7 @@ enum class CardStage { CREATING_INTENT, WAITING_FOR_CARD, CONFIRMING }
 
 enum class ChargeError {
     NO_AMOUNT, NO_MERCHANT, TAP_UNAVAILABLE, NO_CLABE, DECLINED, CANCELLED, NETWORK,
-    ACQUIRER_UNAVAILABLE, CARD_NOT_CONFIGURED, IDEMPOTENCY_CONFLICT, NOT_APPROVED, TAP_FAILED,
+    ACQUIRER_UNAVAILABLE, CARD_NOT_CONFIGURED, IDEMPOTENCY_CONFLICT, NOT_APPROVED, MERCHANT_BLOCKED, TAP_FAILED,
     NOT_AVAILABLE, UNKNOWN
 }
 
@@ -283,6 +284,7 @@ class ChargeViewModel(
         errorCode == "IDEMPOTENCY_KEY_REUSED" -> ChargeError.IDEMPOTENCY_CONFLICT
         statusCode == 403 && errorCode == "MERCHANT_SCOPE_REQUIRED" -> ChargeError.NO_MERCHANT
         isKybBlocked() -> ChargeError.NOT_APPROVED
+        isMerchantBlocked() -> ChargeError.MERCHANT_BLOCKED
         statusCode == 404 || statusCode == 405 || statusCode == 501 -> ChargeError.NOT_AVAILABLE
         else -> ChargeError.UNKNOWN
     }

@@ -157,14 +157,14 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Conciliación diaria | P1 | M | `cmd/reconciler/main.go` es un stub (crea un ledger vacío y sale). Falta: ledger vs. reporte del procesador, ledger vs. estado de cuenta STP, reporte de diferencias. |
 
 ### F6 — Liquidación (payout) al comercio
-**Existe:** `POST /api/v1/disbursements` (solo `owner`, solo a la CLABE de liquidación registrada y `VERIFIED`; saldo y débito en una transacción con bloqueo; asiento compensatorio si STP falla), alta de la CLABE de liquidación (`PUT /api/v1/merchants/{id}/settlement-account`) con revisión de operador, reconciliación CEP.
+**Existe:** `POST /api/v1/disbursements` (solo `owner`, solo a la CLABE de liquidación registrada y `VERIFIED`; saldo y débito en una transacción con bloqueo; asiento compensatorio solo si STP rechaza la orden; si el resultado es desconocido —timeout, 5xx— los fondos quedan reservados, `202 PENDING_RECONCILIATION`), alta de la CLABE de liquidación (`PUT /api/v1/merchants/{id}/settlement-account`) con revisión de operador, reconciliación CEP.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
 | Verificación real de titularidad de la CLABE | P0 | S | El verificador es un stub (`PendingAccountVerifier`): la cuenta queda `PENDING` hasta que un `operator` la marca. Falta consulta de titularidad (RFC del titular = RFC del comercio) vía STP/banco o proveedor KYB, 2FA al cambiarla y rol de backoffice global (hoy `operator` es por comercio). |
 | STP real no cableado | P0 | S | `STP_BASE_URL` se lee pero nunca se usa; el servidor siempre instancia `MockSTPClient` y `MockCEPProvider`. |
 | Payout automático programado | P1 | M | Barrido diario/T+0 del saldo disponible (neto de apartado fiscal) en vez de dispersión manual por API. |
-| Devoluciones SPEI y estados finales | P1 | M | Manejar órdenes devueltas/rechazadas por STP (webhook de estado), revertir asiento y reintentar. |
+| Devoluciones SPEI y estados finales | P1 | M | Manejar órdenes devueltas/rechazadas por STP (webhook de estado), revertir asiento y reintentar. Incluye resolver las dispersiones con resultado desconocido (`disbursement.dispatch_unknown`, fondos reservados) y las que quedan debitadas si el proceso cae entre el débito y `registraOrden` (solo queda `disbursement.requested`); y `Idempotency-Key` en `POST /disbursements` (un doble envío hoy dispersa dos veces). |
 | Fondos de terceros | P1 | — | Definir con asesoría legal dónde y bajo qué figura se custodia el saldo del comercio entre cobro y payout. |
 
 ### F7 — Apartado fiscal RESICO / IVA

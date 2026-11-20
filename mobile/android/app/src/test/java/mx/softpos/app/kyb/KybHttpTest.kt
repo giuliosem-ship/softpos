@@ -39,7 +39,7 @@ class KybHttpTest {
     fun putSendsApplicationShape() {
         server.enqueue(MockResponse().setBody("""{"status":"DRAFT"}"""))
         val app = KybApplication(
-            legalName = "Tacos SA de CV", rfc = "TAC010101AB1", taxRegime = "601", mcc = "5812",
+            legalName = "Tacos SA de CV", rfc = "TAC010101AB1", taxRegime = "GENERAL_PM", mcc = "5812",
             address = KybAddress("Reforma", "10", null, "Juárez", "CDMX", "CDMX", "06600"),
             contactEmail = "a@b.mx", contactPhone = "+525512345678"
         )

@@ -19,6 +19,8 @@ import mx.softpos.app.kyb.KybDocumentType
 import mx.softpos.app.kyb.KybStatus
 import mx.softpos.app.kyb.KybStatusValue
 import mx.softpos.app.kyb.PickedDocument
+import mx.softpos.app.kyb.invalidKybFields
+import mx.softpos.app.kyb.kybChecksFailed
 import mx.softpos.app.ui.login.PhoneNumbers
 import mx.softpos.app.ui.merchant.MerchantIdProvider
 
@@ -28,7 +30,7 @@ enum class KybField {
     LEGAL_NAME, RFC, CURP, TAX_REGIME, MCC, STREET, EXT_NUMBER, NEIGHBORHOOD, CITY, STATE, POSTAL_CODE, EMAIL, PHONE
 }
 
-enum class KybError { NO_MERCHANT, NOT_OWNER, NETWORK, TOO_LARGE, INCOMPLETE, NOT_AVAILABLE, UNKNOWN }
+enum class KybError { NO_MERCHANT, NOT_OWNER, NETWORK, TOO_LARGE, INCOMPLETE, INVALID_DATA, CHECKS_FAILED, NOT_AVAILABLE, UNKNOWN }
 
 enum class UploadStatus { UPLOADING, RECEIVED, FAILED }
 
@@ -97,7 +99,7 @@ class KybViewModel(
             val r = withContext(io) { kybApi.getKyb(id) }
             _state.update { s ->
                 when {
-                    r is ApiResult.Success -> s.copy(isBusy = false, status = r.data, step = stepFor(r.data, s))
+                    r is ApiResult.Success -> resume(s.copy(isBusy = false, status = r.data, step = stepFor(r.data, s)), r.data)
                     // No application yet: start one.
                     r is ApiResult.Error && r.statusCode == 404 && r.errorCode != "HTTP_404" -> {
                         val draft = KybStatus(KybStatusValue.DRAFT)
@@ -107,6 +109,28 @@ class KybViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Resumes an onboarding started earlier: the owner's saved application
+     * fills an untouched form and documents the backend already holds count
+     * as received (`uploaded_documents`).
+     */
+    private fun resume(s: KybUiState, status: KybStatus): KybUiState {
+        val app = status.application
+        val form = if (app != null && s.form == KybForm()) {
+            KybForm(
+                legalName = app.legalName, rfc = app.rfc, curp = app.curp.orEmpty(),
+                taxRegime = app.taxRegime.ifBlank { KybValidators.RESICO_PF }, mcc = app.mcc,
+                street = app.address.street, extNumber = app.address.extNumber, intNumber = app.address.intNumber.orEmpty(),
+                neighborhood = app.address.neighborhood, city = app.address.city, state = app.address.state,
+                postalCode = app.address.postalCode, email = app.contactEmail,
+                phone = app.contactPhone.removePrefix("+52")
+            )
+        } else s.form
+        val received = status.uploadedDocuments.filter { s.uploads[it] == null }
+            .associateWith { DocUpload(UploadStatus.RECEIVED, 100) }
+        return s.copy(form = form, uploads = s.uploads + received)
     }
 
     private fun stepFor(status: KybStatus, s: KybUiState): KybStep =
@@ -170,7 +194,10 @@ class KybViewModel(
             _state.update {
                 when (r) {
                     is ApiResult.Success -> it.copy(isBusy = false, step = KybStep.DOCUMENTS)
-                    is ApiResult.Error -> it.copy(isBusy = false, error = r.toKybError())
+                    is ApiResult.Error -> {
+                        val fields = r.invalidKybFields().mapNotNull(::fieldFor).toSet()
+                        it.copy(isBusy = false, fieldErrors = fields, error = if (fields.isEmpty()) r.toKybError() else KybError.INVALID_DATA)
+                    }
                 }
             }
         }
@@ -223,12 +250,23 @@ class KybViewModel(
         _state.update { it.copy(isBusy = true, error = null) }
         viewModelScope.launch {
             when (val r = withContext(io) { kybApi.submit(id) }) {
-                is ApiResult.Success -> {
-                    val status = (withContext(io) { kybApi.getKyb(id) } as? ApiResult.Success)?.data
-                        ?: KybStatus(KybStatusValue.SUBMITTED)
-                    _state.update { it.copy(isBusy = false, status = status, step = KybStep.STATUS) }
+                // IN_REVIEW, or REJECTED (RFC in SAT 69-B): never SUBMITTED in practice.
+                is ApiResult.Success -> _state.update { it.copy(isBusy = false, status = r.data, step = KybStep.STATUS) }
+                is ApiResult.Error -> {
+                    val failed = r.kybChecksFailed()
+                    when {
+                        // Automatic checks failed: still DRAFT, show why and let the owner fix it.
+                        failed != null -> _state.update {
+                            it.copy(isBusy = false, status = failed, step = KybStep.STATUS, error = KybError.CHECKS_FAILED)
+                        }
+                        // Submitted meanwhile (another device): show the real status.
+                        r.statusCode == 409 && r.errorCode == "KYB_ALREADY_SUBMITTED" -> {
+                            _state.update { it.copy(isBusy = false) }
+                            load()
+                        }
+                        else -> _state.update { it.copy(isBusy = false, error = r.toKybError()) }
+                    }
                 }
-                is ApiResult.Error -> _state.update { it.copy(isBusy = false, error = r.toKybError()) }
             }
         }
     }
@@ -249,7 +287,25 @@ class KybViewModel(
     }
 
     companion object {
-        /** Client cap per document after compression (photos are ~0.3–1 MB). */
-        const val MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+        /** Backend cap per document (pkg/kyb MaxDocumentBytes); photos are ~0.3–1 MB after compression. */
+        const val MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+
+        /** Backend `INVALID_KYB_DATA` field names → form fields. */
+        internal fun fieldFor(name: String): KybField? = when (name) {
+            "legal_name" -> KybField.LEGAL_NAME
+            "rfc" -> KybField.RFC
+            "curp" -> KybField.CURP
+            "tax_regime" -> KybField.TAX_REGIME
+            "mcc" -> KybField.MCC
+            "address.street" -> KybField.STREET
+            "address.ext_number" -> KybField.EXT_NUMBER
+            "address.neighborhood" -> KybField.NEIGHBORHOOD
+            "address.city" -> KybField.CITY
+            "address.state" -> KybField.STATE
+            "address.postal_code" -> KybField.POSTAL_CODE
+            "contact_email" -> KybField.EMAIL
+            "contact_phone" -> KybField.PHONE
+            else -> null
+        }
     }
 }

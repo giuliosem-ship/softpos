@@ -115,6 +115,6 @@ class DocumentReader(private val context: Context) {
         private const val CAPTURE_FILE = "capture.jpg"
         private const val JPEG = "image/jpeg"
         private const val PDF = "application/pdf"
-        private const val MAX_BYTES = 10 * 1024 * 1024
+        private const val MAX_BYTES = KybViewModel.MAX_DOCUMENT_BYTES
     }
 }

@@ -39,10 +39,11 @@ class FakeKybApi(var status: ApiResult<KybStatus> = ApiResult.Success(KybStatus(
         uploaded += type
         return ApiResult.Success(KybDocumentReceipt("doc_$type", type), 201)
     }
-    override fun submit(merchantId: String): ApiResult<Unit> {
+    override fun submit(merchantId: String): ApiResult<KybStatus> {
         submitted++
-        status = ApiResult.Success(KybStatus(KybStatusValue.SUBMITTED), 200)
-        return ApiResult.Success(Unit, 200)
+        val next = KybStatus(KybStatusValue.IN_REVIEW)
+        status = ApiResult.Success(next, 200)
+        return ApiResult.Success(next, 200)
     }
 }
 
@@ -89,7 +90,7 @@ class KybViewModelTest {
         assertTrue(vm.state.value.canSubmit)
         vm.submit()
         assertEquals(KybStep.STATUS, vm.state.value.step)
-        assertEquals(KybStatusValue.SUBMITTED, vm.state.value.status?.status)
+        assertEquals(KybStatusValue.IN_REVIEW, vm.state.value.status?.status)
     }
 
     @Test

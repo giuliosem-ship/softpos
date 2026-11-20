@@ -218,8 +218,9 @@ private fun KybStatusView(state: KybUiState, vm: KybViewModel) {
     val status = state.status ?: return
     Text(stringResource(statusLabel(status.status)), style = MaterialTheme.typography.titleLarge)
     Text(stringResource(statusExplanation(status.status)))
-    if (status.status == KybStatusValue.REJECTED && !status.reason.isNullOrBlank()) {
-        Text(stringResource(R.string.kyb_reason, status.reason), color = MaterialTheme.colorScheme.error)
+    if ((status.status == KybStatusValue.REJECTED || status.status == KybStatusValue.DRAFT) && !status.reason.isNullOrBlank()) {
+        val reason = reasonRes(status.reason)?.let { stringResource(it) } ?: status.reason
+        Text(stringResource(R.string.kyb_reason, reason), color = MaterialTheme.colorScheme.error)
     }
     if (status.checks.list69b == "LISTED") Text(stringResource(R.string.kyb_69b_listed), color = MaterialTheme.colorScheme.error)
     if (!state.isOwner && !status.isApproved) Text(stringResource(R.string.kyb_owner_only))
@@ -244,6 +245,18 @@ private fun documentLabel(type: String): Int = when (type) {
     else -> R.string.kyb_doc_other
 }
 
+/** Automatic check codes (pkg/kyb Reason*); an operator's free-text reason is shown as is. */
+internal fun reasonRes(reason: String): Int? = when (reason) {
+    "RFC_INVALID" -> R.string.kyb_reason_rfc_invalid
+    "PERSONA_MORAL_NOT_SUPPORTED" -> R.string.kyb_reason_persona_moral
+    "UNSUPPORTED_TAX_REGIME" -> R.string.kyb_reason_regime
+    "CURP_RFC_MISMATCH" -> R.string.kyb_reason_curp_mismatch
+    "DOCUMENTS_INCOMPLETE" -> R.string.kyb_reason_documents
+    "APPLICATION_INCOMPLETE" -> R.string.kyb_reason_application
+    "RFC_LISTED_69B" -> R.string.kyb_reason_69b
+    else -> null
+}
+
 internal fun statusLabel(status: String): Int = when (status) {
     KybStatusValue.DRAFT -> R.string.kyb_status_draft
     KybStatusValue.SUBMITTED -> R.string.kyb_status_submitted
@@ -266,6 +279,8 @@ private fun KybError.messageRes(): Int = when (this) {
     KybError.NETWORK -> R.string.error_network
     KybError.TOO_LARGE -> R.string.kyb_too_large
     KybError.INCOMPLETE -> R.string.kyb_incomplete
+    KybError.INVALID_DATA -> R.string.kyb_invalid_data
+    KybError.CHECKS_FAILED -> R.string.kyb_checks_failed
     KybError.NOT_AVAILABLE -> R.string.error_not_available
     KybError.UNKNOWN -> R.string.error_unknown
 }

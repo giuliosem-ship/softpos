@@ -198,6 +198,15 @@
     <string name="kyb_status_approved_text">Ya puedes cobrar y retirar tu dinero.</string>
     <string name="kyb_status_rejected_text">Corrige lo indicado y vuelve a enviar.</string>
     <string name="kyb_reason">Motivo: %1$s</string>
+    <string name="kyb_invalid_data">Revisa los campos marcados.</string>
+    <string name="kyb_checks_failed">Tu solicitud no pasó las validaciones automáticas.</string>
+    <string name="kyb_reason_rfc_invalid">el RFC no es válido</string>
+    <string name="kyb_reason_persona_moral">por ahora solo aceptamos personas físicas</string>
+    <string name="kyb_reason_regime">por ahora solo aceptamos el régimen RESICO persona física</string>
+    <string name="kyb_reason_curp_mismatch">la CURP no corresponde al RFC</string>
+    <string name="kyb_reason_documents">faltan documentos</string>
+    <string name="kyb_reason_application">faltan datos de la solicitud</string>
+    <string name="kyb_reason_69b">el RFC aparece en la lista 69-B del SAT</string>
     <string name="kyb_69b_listed">Tu RFC aparece en la lista 69-B del SAT.</string>
     <string name="kyb_fix_and_resubmit">Completar o corregir datos</string>
     <string name="home_kyb_cta">Completar alta</string>

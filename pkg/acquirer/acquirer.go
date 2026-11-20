@@ -89,6 +89,9 @@ type RefundRequest struct {
 	IdempotencyKey    string // "kerno_refund_<refund_id>"
 	ProviderPaymentID string
 	AmountCents       int64
+	// KernoRefundID is Kerno's refund id; adapters send it as metadata and
+	// echo it in refund webhooks as Event.KernoRefundID.
+	KernoRefundID string
 }
 
 // RefundResult is the provider's acknowledgement of a refund request. The
@@ -199,12 +202,16 @@ type Event struct {
 	// FeeCents is the provider's processing fee (captured).
 	FeeCents int64 `json:"fee_cents,omitempty"`
 	// SettlementDate is the expected payout date of a capture (YYYY-MM-DD).
-	SettlementDate string    `json:"settlement_date,omitempty"`
-	RefundID       string    `json:"refund_id,omitempty"`
-	ChargebackID   string    `json:"chargeback_id,omitempty"`
-	DeclineCode    string    `json:"decline_code,omitempty"`
-	Payout         *Payout   `json:"payout,omitempty"`
-	OccurredAt     time.Time `json:"occurred_at,omitempty"`
+	SettlementDate string `json:"settlement_date,omitempty"`
+	RefundID       string `json:"refund_id,omitempty"`
+	// KernoRefundID echoes RefundRequest.KernoRefundID (metadata); used to
+	// match a refund webhook that arrives before the provider refund id was
+	// stored (provider call timed out or still in flight).
+	KernoRefundID string    `json:"kerno_refund_id,omitempty"`
+	ChargebackID  string    `json:"chargeback_id,omitempty"`
+	DeclineCode   string    `json:"decline_code,omitempty"`
+	Payout        *Payout   `json:"payout,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at,omitempty"`
 }
 
 var (
@@ -259,7 +266,8 @@ func (e Event) Validate() error {
 			return bad("settlement_date")
 		}
 	case EventRefunded, EventRefundFailed:
-		if !idRe.MatchString(e.RefundID) || (e.Type == EventRefunded && e.AmountCents <= 0) {
+		if !idRe.MatchString(e.RefundID) || (e.Type == EventRefunded && e.AmountCents <= 0) ||
+			(e.KernoRefundID != "" && !idRe.MatchString(e.KernoRefundID)) {
 			return bad("refund")
 		}
 	case EventChargebackOpened, EventChargebackReversed:

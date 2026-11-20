@@ -142,10 +142,10 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 				cp.Status = store.CardRefunded
 			}
 		}
-		if req, ok, err := tx.GetCardRefundByProviderForUpdate(ctx, cp.ID, e.RefundID); err != nil {
+		if req, ok, err := refundRequestOf(ctx, tx, cp, e); err != nil {
 			return false, err
 		} else if ok && req.Status != store.RefundSucceeded {
-			req.Status = store.RefundSucceeded
+			req.Status, req.ProviderRefundID = store.RefundSucceeded, e.RefundID
 			if err := tx.UpdateCardRefund(ctx, req); err != nil {
 				return false, err
 			}
@@ -157,7 +157,7 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		})
 
 	case acquirer.EventRefundFailed:
-		req, ok, err := tx.GetCardRefundByProviderForUpdate(ctx, cp.ID, e.RefundID)
+		req, ok, err := refundRequestOf(ctx, tx, cp, e)
 		if err != nil {
 			return false, err
 		}
@@ -167,7 +167,7 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		if req.Status != store.RefundRequested && req.Status != store.RefundPending {
 			return false, nil
 		}
-		req.Status, req.LastError = store.RefundFailed, "provider reported refund.failed"
+		req.Status, req.LastError, req.ProviderRefundID = store.RefundFailed, "provider reported refund.failed", e.RefundID
 		if err := tx.UpdateCardRefund(ctx, req); err != nil {
 			return false, err
 		}
@@ -227,6 +227,24 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		})
 	}
 	return false, errUnsupportedEvent
+}
+
+// refundRequestOf locks the refund request a refund event refers to: by the
+// provider refund id, or, when that id was not stored yet (provider call timed
+// out or its answer is still being written), by the echoed Kerno refund id.
+func refundRequestOf(ctx context.Context, tx store.MoneyTx, cp *store.CardPaymentRecord, e acquirer.Event) (store.CardRefundRecord, bool, error) {
+	req, ok, err := tx.GetCardRefundByProviderForUpdate(ctx, cp.ID, e.RefundID)
+	if err != nil || ok || e.KernoRefundID == "" {
+		return req, ok, err
+	}
+	req, ok, err = tx.GetCardRefundForUpdate(ctx, e.KernoRefundID)
+	if err != nil || !ok {
+		return store.CardRefundRecord{}, false, err
+	}
+	if req.CardPaymentID != cp.ID || (req.ProviderRefundID != "" && req.ProviderRefundID != e.RefundID) {
+		return store.CardRefundRecord{}, false, nil
+	}
+	return req, true, nil
 }
 
 func merchantAvailable(merchantID string) string {
@@ -378,7 +396,7 @@ func (s *Server) HandleCreateCardRefund(w http.ResponseWriter, r *http.Request) 
 
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	res, perr := prov.Refund(pctx, acquirer.RefundRequest{IdempotencyKey: "kerno_refund_" + rf.ID, ProviderPaymentID: cp.ProviderPaymentID, AmountCents: rf.AmountCents})
+	res, perr := prov.Refund(pctx, acquirer.RefundRequest{IdempotencyKey: "kerno_refund_" + rf.ID, ProviderPaymentID: cp.ProviderPaymentID, AmountCents: rf.AmountCents, KernoRefundID: rf.ID})
 	if perr != nil && !errors.Is(perr, acquirer.ErrProviderRejected) {
 		// Unknown outcome: stays REQUESTED (amount held); a retry with the
 		// same Idempotency-Key re-sends the same provider request.
@@ -481,7 +499,7 @@ func (s *Server) HandleDevCardSimulate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		events = []acquirer.Event{{ID: "evt_refund_" + rf.ProviderRefundID, Type: acquirer.EventRefunded,
-			ProviderPaymentID: cp.ProviderPaymentID, RefundID: rf.ProviderRefundID, AmountCents: rf.AmountCents}}
+			ProviderPaymentID: cp.ProviderPaymentID, RefundID: rf.ProviderRefundID, KernoRefundID: rf.ID, AmountCents: rf.AmountCents}}
 	default:
 		writeError(w, http.StatusBadRequest, "INVALID_OUTCOME")
 		return

@@ -151,8 +151,8 @@ instead. The body is translated by `ParseWebhookEvent` into the normalized
 | `payment.declined` | `decline_code` | `CREATED`/`AUTHORIZED` → `DECLINED` | `card_payment.declined` |
 | `payment.canceled` | — | → `CANCELED` (ignored + `ALERT` if captured) | `card_payment.canceled` |
 | `payment.captured` | `amount_cents`, `fee_cents`, `settlement_date` | settle split + processor fee (§2), → `CAPTURED` | `card_payment.captured` |
-| `payment.refunded` | `refund_id`, `amount_cents` | proportional refund reversal (same as the EMV refund: available, tax escrow, fee, RESICO month), → `PARTIALLY_REFUNDED`/`REFUNDED`, refund request `SUCCEEDED` | `card_payment.refunded` |
-| `refund.failed` | `refund_id` | refund request `FAILED` (hold released) | `card_payment.refund_failed` |
+| `payment.refunded` | `refund_id`, `amount_cents` (`kerno_refund_id` optional) | bounded by captured − refunded − chargebacks (else `EVENT_CONFLICT`); proportional refund reversal (same as the EMV refund: available, tax escrow, fee, RESICO month), → `PARTIALLY_REFUNDED`/`REFUNDED`, refund request `SUCCEEDED` | `card_payment.refunded` |
+| `refund.failed` | `refund_id` (`kerno_refund_id` optional) | refund request `FAILED` (hold released) | `card_payment.refund_failed` |
 | `chargeback.opened` | `chargeback_id`, `amount_cents` | journal `chargeback_<cp>_<cb>`: Dr merchant `AVAILABLE` (may go negative → payouts blocked), Cr `ASSET:ACQUIRER_RECEIVABLE`; → `CHARGEBACK` | `card_payment.chargeback_opened` (notifies the merchant, includes `available_after_cents`) |
 | `chargeback.reversed` | `chargeback_id`, `amount_cents` | reverse journal `chargeback_rev_…`; → `CHARGEBACK_REVERSED` | `card_payment.chargeback_reversed` |
 | `payout.settled` | `payout` | processor payout reconciliation (§5) | `acquirer.payout_settled` |
@@ -252,7 +252,10 @@ stub; needs `DATABASE_URL`). Settlement dates are Mexico City calendar days.
    if it signs webhooks with its own scheme) and register it in
    `acquirer.New`. Map its statuses to `Status` and its webhook types to the
    normalized `EventType`s (§3); put Kerno's `card_payment_id` in the intent
-   metadata so webhooks can carry `kerno_payment_id`.
+   metadata so webhooks can carry `kerno_payment_id`, and the refund's
+   `RefundRequest.KernoRefundID` in the refund metadata so refund webhooks can
+   carry `kerno_refund_id` (matches a refund whose provider id was never
+   stored because the call timed out, releasing its hold).
 3. Idempotency: pass Kerno's keys (`kerno_intent_…`, `kerno_refund_…`,
    `kerno_cancel_…`) as the provider's idempotency keys; return
    `ErrProviderUnavailable` only for unknown outcomes.

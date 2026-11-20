@@ -193,6 +193,87 @@ replays the stored request (`Idempotent-Replayed: true`; another amount →
 before the provider refund id was stored leaves the request `PENDING` (the
 refund itself is applied); an operator closes it.
 
+## 5. Processor settlement reconciliation (Kerno ← processor, T+n)
+
+**Payout lines** arrive in the `payout.settled` webhook:
+
+```json
+{"id":"evt_…","type":"payout.settled","payout":{"payout_id":"po_…","amount_cents":29250,
+ "settlement_date":"2026-11-21","items":[
+   {"provider_payment_id":"…","kind":"capture","amount_cents":10000,"fee_cents":250},
+   {"provider_payment_id":"…","kind":"refund","amount_cents":500}]}}
+```
+
+Item kinds and their contribution to the deposit: `capture` (+amount − fee),
+`refund` (−amount), `chargeback` (−amount), `chargeback_reversal` (+amount).
+One transaction (exactly-once by event id **and** by payout id):
+
+1. Each line is matched to its card payment (rows locked in provider-id
+   order). Differences become rows of `acquirer_reconciliation_items`
+   (dedupe key per payout/line/kind):
+
+   | Kind | When |
+   |---|---|
+   | `MISSING_PAYMENT` | line for a payment Kerno does not know or did not capture (or a chargeback line without a recorded chargeback) |
+   | `AMOUNT_MISMATCH` | capture amount ≠ `captured_cents`; refund line above the refunds recorded |
+   | `FEE_MISMATCH` | line fee ≠ the fee of the `payment.captured` event |
+   | `DUPLICATE_SETTLEMENT` | capture already settled in another payout (or twice in this one) |
+   | `PAYOUT_TOTAL_MISMATCH` | Σ line contributions ≠ deposited `amount_cents` |
+   | `NOT_SETTLED` | (watcher) captured payment with no payout one day after its `settlement_date` |
+
+2. Matched captures get `provider_payout_id` + `provider_settled_at`.
+3. Journal `acq_payout_<provider>_<payout_id>`: Dr `ASSET:BANK_OPERATING`,
+   Cr `ASSET:ACQUIRER_RECEIVABLE` for the **deposited** amount (what reached
+   the bank); any difference stays in the receivable and is explained by the
+   report items.
+4. Row in `acquirer_payouts` (`RECONCILED` / `DISCREPANCY`, expected vs
+   actual), outbox `acquirer.payout_settled`; every new item is logged as
+   `ERROR` `ALERT acquirer reconciliation discrepancy`.
+
+**Overdue settlements**: `pkg/payouts.AcquirerSettlementWatcher` runs in
+`cmd/server` every `ACQUIRER_RECONCILE_INTERVAL` (default 1h, with a
+database) and as a one-shot job (`go run ./cmd/reconciler`, replaces the old
+stub; needs `DATABASE_URL`). Settlement dates are Mexico City calendar days.
+
+**Operator report** (role `operator`; others `403 ROLE_FORBIDDEN`):
+
+- `GET /api/v1/acquirer/reconciliation?status=OPEN|RESOLVED|ALL&limit=N` →
+  `{"items":[{"id","kind","provider","payout_id","card_payment_id","provider_payment_id","expected_cents","actual_cents","detail","status","resolution_note","created_at","resolved_at"}],"payouts":[{"provider","payout_id","amount_cents","expected_cents","settlement_date","item_count","discrepancy_count","status","created_at"}]}`
+- `POST /api/v1/acquirer/reconciliation/{item}/resolve {"note":"…"}` → `RESOLVED`
+  (`404 OPEN_ITEM_NOT_FOUND` if not open). Correcting journals, if any, are
+  posted by backoffice tooling (next batch).
+
+## 6. Plugging a real processor (checklist)
+
+1. Contract the processor (certified Tap to Pay on Android in Mexico:
+   Adyen, Mercado Pago Point/Tap, Clip, Stripe Terminal if available) and get
+   sandbox credentials.
+2. Add `pkg/acquirer/<name>.go` implementing `Provider` (and `WebhookVerifier`
+   if it signs webhooks with its own scheme) and register it in
+   `acquirer.New`. Map its statuses to `Status` and its webhook types to the
+   normalized `EventType`s (§3); put Kerno's `card_payment_id` in the intent
+   metadata so webhooks can carry `kerno_payment_id`.
+3. Idempotency: pass Kerno's keys (`kerno_intent_…`, `kerno_refund_…`,
+   `kerno_cancel_…`) as the provider's idempotency keys; return
+   `ErrProviderUnavailable` only for unknown outcomes.
+4. Webhooks: configure the endpoint
+   `https://<host>/api/v1/webhooks/acquirer/<name>` and the secret in
+   `ACQUIRER_WEBHOOK_SECRET`; make sure the provider retries non-2xx
+   responses (out-of-order handling relies on it). Capture mode: automatic
+   (or call `Capture` after `payment.authorized` for manual-capture
+   providers). Fees and expected settlement date must come with the capture
+   (or a fee report) for `FEE_MISMATCH` to work.
+5. Payouts: translate the provider's settlement report / payout webhook
+   into `payout.settled` lines (capture, refund, chargeback, reversal).
+6. Android: replace the mock SDK step with the provider SDK (session =
+   `provider_payment_id` + `client_secret`), then poll `GET
+   /api/v1/card-payments/{id}` until `final=true`.
+7. Config: `ACQUIRER_PROVIDER=<name>` (the production guard rejects `mock`
+   and requires a ≥ 32-byte `ACQUIRER_WEBHOOK_SECRET`); keep `DEV_MODE` off
+   so the legacy EMV endpoints stay disabled.
+8. Tests: an adapter contract test against the provider sandbox (create /
+   refund / cancel idempotency, webhook parsing fixtures, signature).
+
 ## DEV_MODE simulation
 
 `POST /api/v1/dev/card-payments/{id}/simulate` (DEV_MODE + mock acquirer,

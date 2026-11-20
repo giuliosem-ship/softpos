@@ -57,6 +57,12 @@ Notes:
   silently using 0 (which would pick the wrong RESICO bracket).
 - Payouts: `payouts` table (migration 009) written in the money transaction;
   see `docs/MONEY_FLOWS.md` (idempotency and recovery).
+- Processor card payments (migration 010, `docs/ACQUIRER_INTEGRATION.md`):
+  `card_payments`, `card_payment_refunds`, `acquirer_payouts`,
+  `acquirer_reconciliation_items` through `store.CardPaymentTx` (part of
+  `MoneyTx`) and `store.AcquirerRepository` (implemented by both money
+  stores); `payment_settlements` no longer references `emv_payments` (card
+  payments share it).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements, SAT ingestion state.
 - Payment state change, ledger journal, RESICO monthly accumulator,
@@ -107,6 +113,7 @@ goroutine; on SIGTERM it is stopped after the HTTP server drains.
 | `OUTBOX_PUBLISH_TIMEOUT` | `30s` | per-event publish timeout (kept below the 5 min lease) |
 | `PAYOUT_RECONCILE_INTERVAL` | `1m` | payout recovery pass interval |
 | `PAYOUT_RECONCILE_AFTER` | `10m` | minimum payout age before recovery (≥ 1 min) |
+| `ACQUIRER_RECONCILE_INTERVAL` | `1h` | processor settlement watcher interval (captures not paid out → `NOT_SETTLED`) |
 | `DEFAULT_PLATFORM_FEE_BPS` | `200` | platform tariff for merchants without `platform_fee_bps` (0..10000) |
 | `TEST_DATABASE_URL` | empty | enables real-Postgres integration tests |
 

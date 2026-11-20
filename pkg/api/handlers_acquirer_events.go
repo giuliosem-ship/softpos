@@ -524,8 +524,3 @@ func (b *bufferedResponse) Write(p []byte) (int, error) {
 	}
 	return b.body.Write(p)
 }
-
-// applyAcquirerPayout reconciles a processor payout (MVP-16).
-func (s *Server) applyAcquirerPayout(_ context.Context, _ string, _ acquirer.Event) ([]byte, error) {
-	return nil, errUnsupportedEvent
-}

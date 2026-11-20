@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"softpos/pkg/acquirer"
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
+	"softpos/pkg/payouts"
 	"softpos/pkg/store"
 	"softpos/pkg/store/pgtest"
 )
@@ -33,6 +35,11 @@ func cardIntent(t *testing.T, srv *api.Server, tok, key string, amount int64) (i
 }
 
 func buildCardServer(t *testing.T, extra func(*Config)) (*api.Server, string, string) {
+	srv, m, tok, _ := buildCardServerDB(t, extra)
+	return srv, m, tok
+}
+
+func buildCardServerDB(t *testing.T, extra func(*Config)) (*api.Server, string, string, *sql.DB) {
 	t.Helper()
 	cfg := Config{
 		SQLDriver:         "pgx",
@@ -55,7 +62,7 @@ func buildCardServer(t *testing.T, extra func(*Config)) (*api.Server, string, st
 		t.Fatalf("register: %v", err)
 	}
 	tok, _ := srv.AuthService().MintAccessToken("usr_pg_card", merchantID, auth.RoleOwner)
-	return srv, merchantID, tok
+	return srv, merchantID, tok, db
 }
 
 // TestPGIntegration_CardIntentAndCaptureAreExactlyOnce: concurrent intents
@@ -239,4 +246,114 @@ func TestPGIntegration_AcquirerWebhooksConcurrentDuplicatesAndOutOfOrder(t *test
 	if got := availableBalance(t, srv, tok, merchantID); got != afterRefund-3000 {
 		t.Fatalf("chargeback must debit once: %d, want %d", got, afterRefund-3000)
 	}
+}
+
+// TestPGIntegration_AcquirerPayoutReconciliation: processor payouts on real
+// PostgreSQL. Concurrent deliveries of one payout (same and different event
+// ids) move ASSET:ACQUIRER_RECEIVABLE to the bank once; a mismatched payout
+// produces the discrepancy report the operator endpoint serves; the
+// settlement watcher flags overdue captures once even when passes overlap.
+func TestPGIntegration_AcquirerPayoutReconciliation(t *testing.T) {
+	srv, _, tok, db := buildCardServerDB(t, func(c *Config) { c.AcquirerWebhookSecret = pgAcquirerSecret })
+	mock := srv.AcquirerProvider().(*acquirer.MockProvider)
+	capture := func(key string, amount int64) api.CardPaymentIntentResponse {
+		_, intent := cardIntent(t, srv, tok, key, amount)
+		for _, e := range mock.SimulateTap(intent.ProviderPaymentID, intent.CardPaymentID, amount) {
+			if c := deliverSigned(t, srv, e); c != http.StatusOK {
+				t.Fatalf("tap %s: %d", e.Type, c)
+			}
+		}
+		return intent
+	}
+	a, b, c := capture("pg-po-a", 10000), capture("pg-po-b", 30000), capture("pg-po-c", 7000)
+	feeA, feeB := mock.FeeCents(10000), mock.FeeCents(30000)
+	payout := acquirer.Event{ID: "evt_pg_po1", Type: acquirer.EventPayoutSettled, Payout: &acquirer.Payout{
+		PayoutID: "pg_po_1", AmountCents: 40000 - feeA - feeB, SettlementDate: "2026-11-21",
+		Items: []acquirer.PayoutItem{
+			{ProviderPaymentID: b.ProviderPaymentID, Kind: acquirer.PayoutItemCapture, AmountCents: 30000, FeeCents: feeB},
+			{ProviderPaymentID: a.ProviderPaymentID, Kind: acquirer.PayoutItemCapture, AmountCents: 10000, FeeCents: feeA},
+		}}}
+	codes := runConcurrently(6, func(i int) int {
+		e := payout
+		if i%2 == 1 {
+			e.ID = "evt_pg_po1_resent"
+		}
+		return deliverSigned(t, srv, e)
+	})
+	for _, code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("payout deliveries: %v", codes)
+		}
+	}
+	balance := func(code string) int64 {
+		var v int64
+		if err := db.QueryRow(`SELECT balance_cents FROM ledger_accounts WHERE code = $1`, code).Scan(&v); err != nil {
+			t.Fatalf("balance %s: %v", code, err)
+		}
+		return v
+	}
+	if got := balance(api.AccountBankOperating); got != 40000-feeA-feeB {
+		t.Fatalf("bank must be credited once: %d", got)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM acquirer_payouts WHERE payout_id = 'pg_po_1' AND status = 'RECONCILED'`); n != 1 {
+		t.Fatalf("payout rows: %d", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM card_payments WHERE provider_payout_id = 'pg_po_1'`); n != 2 {
+		t.Fatalf("settled captures: %d", n)
+	}
+
+	// Mismatch: C with a different fee, an unknown line, wrong total.
+	bad := acquirer.Event{ID: "evt_pg_po2", Type: acquirer.EventPayoutSettled, Payout: &acquirer.Payout{
+		PayoutID: "pg_po_2", AmountCents: 1, SettlementDate: "2026-11-22",
+		Items: []acquirer.PayoutItem{
+			{ProviderPaymentID: c.ProviderPaymentID, Kind: acquirer.PayoutItemCapture, AmountCents: 7000, FeeCents: 999},
+			{ProviderPaymentID: "mock_pi_ghost", Kind: acquirer.PayoutItemCapture, AmountCents: 500},
+		}}}
+	if code := deliverSigned(t, srv, bad); code != http.StatusOK {
+		t.Fatalf("mismatched payout: %d", code)
+	}
+	opTok, _ := srv.AuthService().MintAccessToken("usr_ops", "merch_pg_card", auth.RoleOperator)
+	rec := doJSON(t, srv, opTok, http.MethodGet, "/api/v1/acquirer/reconciliation", nil)
+	var rep struct {
+		Items []api.ReconciliationItemResponse `json:"items"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &rep)
+	kinds := map[string]bool{}
+	for _, it := range rep.Items {
+		kinds[it.Kind] = true
+	}
+	if rec.Code != http.StatusOK || len(rep.Items) != 3 || !kinds[store.ReconFeeMismatch] || !kinds[store.ReconMissingPayment] || !kinds[store.ReconPayoutTotalMismatch] {
+		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv, tok, http.MethodGet, "/api/v1/acquirer/reconciliation", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("owner must not read the report: %d", rec.Code)
+	}
+
+	// Overdue capture: a fourth payment never paid out.
+	d := capture("pg-po-d", 4000)
+	if _, err := db.Exec(`UPDATE card_payments SET provider_settlement_date = '2026-01-02' WHERE id = $1`, d.CardPaymentID); err != nil {
+		t.Fatal(err)
+	}
+	w := payouts.NewAcquirerSettlementWatcher(store.NewSQLMoneyStore(db), payouts.AcquirerSettlementConfig{})
+	created := make([]int, 3)
+	runConcurrently(3, func(i int) int {
+		n, err := w.RunOnce(context.Background())
+		if err != nil {
+			t.Errorf("watcher: %v", err)
+		}
+		created[i] = n
+		return 0
+	})
+	if created[0]+created[1]+created[2] != 1 {
+		t.Fatalf("overdue capture flagged %v times", created)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM acquirer_reconciliation_items WHERE kind = 'NOT_SETTLED' AND card_payment_id = $1`, d.CardPaymentID); n != 1 {
+		t.Fatalf("NOT_SETTLED rows: %d", n)
+	}
+
+	// The worker wiring starts and stops with its context.
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := StartAcquirerSettlementWatcher(ctx, Config{AcquirerReconcileInterval: 10 * time.Millisecond}, db)
+	cancel()
+	wait()
 }

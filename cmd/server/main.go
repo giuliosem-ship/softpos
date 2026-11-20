@@ -92,6 +92,10 @@ type Config struct {
 	// (ACQUIRER_WEBHOOK_SECRET, >= 32 bytes in production). DEV_MODE uses an
 	// ephemeral random secret when unset; otherwise the webhook answers 503.
 	AcquirerWebhookSecret string
+	// AcquirerReconcileInterval is how often captures not settled by the
+	// processor are flagged (ACQUIRER_RECONCILE_INTERVAL, default 1h; runs
+	// only with DatabaseURL).
+	AcquirerReconcileInterval time.Duration
 
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
@@ -180,38 +184,39 @@ func LoadConfigFromEnv() Config {
 	}
 
 	return Config{
-		AllowCashierRefunds:     cashierRefunds,
-		AcquirerProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("ACQUIRER_PROVIDER"))),
-		AcquirerWebhookSecret:   os.Getenv("ACQUIRER_WEBHOOK_SECRET"),
-		DefaultPlatformFeeBps:   feeBps,
-		HasDefaultFeeBps:        hasFee,
-		AuthRateLimitPerMinute:  authRate,
-		PlayIntegritySecret:     os.Getenv("PLAY_INTEGRITY_SECRET"),
-		CoDiWebhookSecret:       os.Getenv("CODI_WEBHOOK_SECRET"),
-		PlayIntegrityPackage:    integrityPkg,
-		DevMode:                 devMode,
-		JWTSecret:               os.Getenv("JWT_SECRET"),
-		AuthAccessTTL:           parseDurationEnv("AUTH_ACCESS_TTL"),
-		AuthRefreshTTL:          parseDurationEnv("AUTH_REFRESH_TTL"),
-		OutboxPollInterval:      outboxPoll,
-		OutboxBatchSize:         outboxBatch,
-		OutboxPublisher:         os.Getenv("OUTBOX_PUBLISHER"),
-		OutboxPublishTimeout:    parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
-		PayoutReconcileInterval: parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
-		PayoutReconcileAfter:    parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
-		Port:                    port,
-		DatabaseURL:             os.Getenv("DATABASE_URL"),
-		SQLDriver:               sqlDriver,
-		MigrationsDir:           migrationsDir,
-		RedisAddr:               os.Getenv("REDIS_ADDR"),
-		RedisPassword:           os.Getenv("REDIS_PASSWORD"),
-		VaultMasterKeyHex:       os.Getenv("VAULT_MASTER_KEY_HEX"),
-		VaultKeyID:              os.Getenv("VAULT_MASTER_KEY_ID"),
-		VaultPreviousKeys:       os.Getenv("VAULT_PREVIOUS_KEYS"),
-		STPHMACSecret:           hmacSecret,
-		STPBaseURL:              os.Getenv("STP_BASE_URL"),
-		SeedDemoMerchant:        seedDemo,
-		StaticDir:               staticDir,
+		AllowCashierRefunds:       cashierRefunds,
+		AcquirerProvider:          strings.ToLower(strings.TrimSpace(os.Getenv("ACQUIRER_PROVIDER"))),
+		AcquirerWebhookSecret:     os.Getenv("ACQUIRER_WEBHOOK_SECRET"),
+		AcquirerReconcileInterval: parseDurationEnv("ACQUIRER_RECONCILE_INTERVAL"),
+		DefaultPlatformFeeBps:     feeBps,
+		HasDefaultFeeBps:          hasFee,
+		AuthRateLimitPerMinute:    authRate,
+		PlayIntegritySecret:       os.Getenv("PLAY_INTEGRITY_SECRET"),
+		CoDiWebhookSecret:         os.Getenv("CODI_WEBHOOK_SECRET"),
+		PlayIntegrityPackage:      integrityPkg,
+		DevMode:                   devMode,
+		JWTSecret:                 os.Getenv("JWT_SECRET"),
+		AuthAccessTTL:             parseDurationEnv("AUTH_ACCESS_TTL"),
+		AuthRefreshTTL:            parseDurationEnv("AUTH_REFRESH_TTL"),
+		OutboxPollInterval:        outboxPoll,
+		OutboxBatchSize:           outboxBatch,
+		OutboxPublisher:           os.Getenv("OUTBOX_PUBLISHER"),
+		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
+		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
+		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		Port:                      port,
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		SQLDriver:                 sqlDriver,
+		MigrationsDir:             migrationsDir,
+		RedisAddr:                 os.Getenv("REDIS_ADDR"),
+		RedisPassword:             os.Getenv("REDIS_PASSWORD"),
+		VaultMasterKeyHex:         os.Getenv("VAULT_MASTER_KEY_HEX"),
+		VaultKeyID:                os.Getenv("VAULT_MASTER_KEY_ID"),
+		VaultPreviousKeys:         os.Getenv("VAULT_PREVIOUS_KEYS"),
+		STPHMACSecret:             hmacSecret,
+		STPBaseURL:                os.Getenv("STP_BASE_URL"),
+		SeedDemoMerchant:          seedDemo,
+		StaticDir:                 staticDir,
 	}
 }
 
@@ -612,6 +617,26 @@ func StartPayoutReconciler(ctx context.Context, cfg Config, db *sql.DB, statuses
 	return func() { <-done }
 }
 
+// StartAcquirerSettlementWatcher launches the processor settlement watcher
+// (captures not paid out by their expected date -> NOT_SETTLED
+// reconciliation items + ERROR alerts) when a database is configured; with
+// db == nil it is a no-op. The returned wait function blocks until the loop
+// has exited after ctx is cancelled.
+func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB) (wait func()) {
+	if db == nil {
+		return func() {}
+	}
+	w := payouts.NewAcquirerSettlementWatcher(store.NewSQLMoneyStore(db), payouts.AcquirerSettlementConfig{
+		Interval: cfg.AcquirerReconcileInterval,
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = w.Run(ctx)
+	}()
+	return func() { <-done }
+}
+
 func generateSelfSignedCSD() ([]byte, []byte, error) {
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -681,6 +706,7 @@ func main() {
 		os.Exit(1)
 	}
 	waitPayouts := StartPayoutReconciler(dispatcherCtx, cfg, db, server)
+	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -719,7 +745,7 @@ func main() {
 		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
 		stopDispatcher()
 		dispatcherDone := make(chan struct{})
-		go func() { waitDispatcher(); waitPayouts(); close(dispatcherDone) }()
+		go func() { waitDispatcher(); waitPayouts(); waitAcquirer(); close(dispatcherDone) }()
 		select {
 		case <-dispatcherDone:
 		case <-shutdownCtx.Done():

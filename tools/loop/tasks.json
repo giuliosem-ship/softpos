@@ -1178,6 +1178,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 28/28 (new: concurrent duplicate/out-of-order signed webhooks: capture x4 + authorized x2 + refund x2 racing, duplicate chargebacks under two event ids -> posted once); node --test 8/8.",
       "audit_notes": "Known limit documented: a refund webhook arriving before provider_refund_id is stored leaves the request PENDING (refund itself applied). payout.settled answered 422 UNSUPPORTED_EVENT until MVP-16.",
       "priority": 76
+    },
+    {
+      "id": "MVP-16",
+      "component": "payouts",
+      "title": "Processor settlement reconciliation",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/acquirer_recon_test.go, pkg/payouts/acquirer_settlement_test.go, cmd/server/card_payments_integration_test.go",
+        "implementation": "pkg/api/handlers_acquirer_recon.go, pkg/api/handlers_acquirer_events.go, pkg/api/server.go, pkg/payouts/acquirer_settlement.go, cmd/server/main.go, cmd/server/config_guard.go, cmd/reconciler/main.go, .env.example, docs/ACQUIRER_INTEGRATION.md, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "payout.settled webhook (exactly-once by event id and payout id): payout lines (capture +amount-fee, refund -, chargeback -, chargeback_reversal +) matched to card payments locked in provider-id order; journal acq_payout_<provider>_<payout> Dr ASSET:BANK_OPERATING / Cr ASSET:ACQUIRER_RECEIVABLE for the deposited amount; matched captures get provider_payout_id/provider_settled_at; acquirer_payouts row RECONCILED|DISCREPANCY; differences MISSING_PAYMENT, AMOUNT_MISMATCH, FEE_MISMATCH, DUPLICATE_SETTLEMENT, PAYOUT_TOTAL_MISMATCH stored in acquirer_reconciliation_items (dedupe keys) + ERROR 'ALERT acquirer reconciliation discrepancy' + outbox acquirer.payout_settled. pkg/payouts.AcquirerSettlementWatcher flags captures not paid out one day after their settlement date (Mexico City calendar) as NOT_SETTLED once; runs in cmd/server every ACQUIRER_RECONCILE_INTERVAL (default 1h, new env var in ServerEnvVars/.env.example) and as the one-shot cmd/reconciler (replaces the stub). Operator endpoints (role operator): GET /api/v1/acquirer/reconciliation?status=OPEN|RESOLVED|ALL&limit, POST /api/v1/acquirer/reconciliation/{item}/resolve {note}.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (18 packages); PGIntegration 29/29 (new: concurrent payout deliveries under two event ids -> bank credited once, mismatch report via operator endpoint, overlapping watcher passes -> one NOT_SETTLED); node --test 8/8.",
+      "audit_notes": "NOT_SETTLED items are not auto-resolved when a late payout arrives (operator resolves). Correcting journals for discrepancies are backoffice work (next batch).",
+      "priority": 77
     }
   ]
 }

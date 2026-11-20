@@ -72,6 +72,7 @@ var ServerEnvVars = []EnvVar{
 	{Name: "ALLOW_CASHIER_REFUNDS"},
 	{Name: "ACQUIRER_PROVIDER"},
 	{Name: "ACQUIRER_WEBHOOK_SECRET", Secret: true},
+	{Name: "ACQUIRER_RECONCILE_INTERVAL"},
 	{Name: "OUTBOX_POLL_INTERVAL"},
 	{Name: "OUTBOX_BATCH_SIZE"},
 	{Name: "OUTBOX_PUBLISHER"},

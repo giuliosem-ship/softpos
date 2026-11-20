@@ -2,25 +2,50 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"time"
+	// Settlement calendar days are computed in America/Mexico_City.
+	_ "time/tzdata"
 
-	"softpos/pkg/ledger"
+	"softpos/pkg/payouts"
+	"softpos/pkg/store"
 )
 
-// main runs the nightly End-of-Day (EOD) reconciliation worker comparing internal
-// Double-Entry Ledger balances against external STP SPEI and Acquirer settlement records.
+// main runs one processor-settlement reconciliation pass (cron / CronJob):
+// captured card payments the processor has not paid out by their expected
+// settlement date (+1 day) become NOT_SETTLED reconciliation items with an
+// ERROR alert. The same check runs continuously inside cmd/server
+// (ACQUIRER_RECONCILE_INTERVAL); payout lines are reconciled when the
+// processor's payout.settled webhook arrives. Needs DATABASE_URL (SQL_DRIVER
+// optional, default pgx).
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	slog.Info("starting SoftPOS EOD Reconciliation Worker", "timestamp", time.Now().UTC().Format(time.RFC3339))
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		slog.Error("DATABASE_URL is required")
+		os.Exit(2)
+	}
+	db, err := sql.Open(store.NormalizeDriverName(os.Getenv("SQL_DRIVER")), dsn)
+	if err != nil {
+		slog.Error("open database", "error", err)
+		os.Exit(1)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		slog.Error("connect database", "error", err)
+		os.Exit(1)
+	}
 
-	engine := ledger.NewLedgerEngine()
-	_ = ctx
-	_ = engine
-
-	slog.Info("reconciliation check initialized successfully")
-	os.Exit(0)
+	w := payouts.NewAcquirerSettlementWatcher(store.NewSQLMoneyStore(db), payouts.AcquirerSettlementConfig{})
+	n, err := w.RunOnce(ctx)
+	_ = db.Close()
+	if err != nil {
+		slog.Error("acquirer settlement reconciliation failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("acquirer settlement reconciliation done", "new_discrepancies", n)
 }

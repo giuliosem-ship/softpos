@@ -23,7 +23,9 @@ Rules:
 
 Account codes: `LIABILITY:MERCHANT:<id>:AVAILABLE`, `LIABILITY:MERCHANT:<id>:TAX_ESCROW`,
 `ASSET:RBF_LOANS_RECEIVABLE:<id>` (per merchant, created at registration) and the
-global `ASSET:ACQUIRER_RECEIVABLE`, `ASSET:STP_CONCENTRATOR`, `REVENUE:FEES`.
+global `ASSET:ACQUIRER_RECEIVABLE`, `ASSET:STP_CONCENTRATOR`, `REVENUE:FEES`,
+`EXPENSE:ACQUIRER_FEES` (processor fees) and `ASSET:BANK_OPERATING` (processor
+payouts received).
 
 ## Processor card payments (`/api/v1/card-payments/*`)
 
@@ -47,6 +49,14 @@ tax escrow and fee are not reversed: a dispute is not a refund) and outbox
 Refund requests (`POST /api/v1/card-payments/{id}/refunds`) only call the
 processor; the ledger moves on the webhook. Out-of-order events are ignored
 (regressions) or answered `409 EVENT_OUT_OF_ORDER` so the processor retries.
+
+Processor payouts (`payout.settled`, exactly-once by event and payout id):
+journal `acq_payout_<provider>_<payout>` (Dr `ASSET:BANK_OPERATING`, Cr
+`ASSET:ACQUIRER_RECEIVABLE` for the deposited amount), matched captures marked
+settled, differences (missing payment, amount / fee mismatch, duplicate
+settlement, total mismatch, and — from the watcher — captures not settled by
+their date) stored in `acquirer_reconciliation_items`, logged as `ERROR
+ALERT` and served to operators by `GET /api/v1/acquirer/reconciliation`.
 
 ## Card settle (legacy, DEV_MODE only) — `POST /api/v1/payments/settle`
 
@@ -213,9 +223,9 @@ transaction, so one finalized meanwhile is skipped:
 
 ## Not covered yet
 
-- Real processor/STP confirmations of payouts and refunds (webhooks), the
-  real STP order-status client, daily reconciliation, STP returns after
-  liquidation.
+- A real processor adapter (only the mock exists), STP confirmations of
+  payouts (webhooks), the real STP order-status client, STP returns after
+  liquidation, correcting journals for reconciliation items (backoffice).
 - RBF loans persisted in the database (and reversed on refunds).
 - Real settlement-account ownership verification (STP/bank titularidad or KYB
   provider) and 2FA on account changes.

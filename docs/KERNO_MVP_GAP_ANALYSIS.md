@@ -2,6 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
+**Última actualización:** 2026-11-20 — Lote A (MVP-01..03) aplicado: driver PostgreSQL, migraciones versionadas, estado del servidor en repositorios SQL y dispatcher de outbox.
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -14,7 +15,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 |---|---|---|
 | Lógica de dominio (ledger, RESICO, CLABE, CFDI XML, ISO 8583, DUKPT, STEC, MIF, disputas) | 🟢 Avanzado | Librerías puras con tests unitarios sólidos. |
 | Integración en el servidor HTTP | 🟡 Parcial | Solo ledger, pagos EMV/CoDi, CFDI, STP, RBF están ruteados. ISO 8583, HSM/DUKPT, clearing y disputas **no están conectados** a ninguna ruta. |
-| Persistencia | 🔴 Bloqueante | `go.mod` no declara driver PostgreSQL → con `DATABASE_URL` el servidor **aborta al arrancar**. Sin DB todo vive en memoria. |
+| Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Falta: pago + asiento + acumulado en una sola transacción y que algún flujo encole eventos en el outbox. Sin DB todo sigue en memoria (modo dev). |
 | Seguridad perimetral | 🔴 Bloqueante | El middleware JWT existe y tiene tests, pero **no está montado**: todas las rutas (incluidas liquidación y dispersión SPEI) son públicas. |
 | Cobro con tarjeta real | 🔴 Bloqueante | No hay kernel EMV ni autorización contra emisor; el backend "aprueba" al parsear TLV. |
 | App Android | 🔴 Bloqueante | Es un **módulo Kotlin/JVM** (sin Android Gradle Plugin, sin Activity/Compose, sin `android.nfc`). No genera APK. |
@@ -33,7 +34,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | Cobertura (`go test -cover`) | api 62 %, stp 61 %, payments 67 %, rbf 71 %, fiscal 75 %, pac 79 %, store 79 %, ledger 80 %, identity 83 %, disputes 82 %, iso8583 84 %, clearing 88 %, crypto 89 %, cmd/server 60 % |
 | `node --test web/pos/softpos_sdk.test.js` | ✅ 7/7 |
 | Tests Android | Último reporte en `build/test-results` (1-nov): 78 tests, 0 fallos. No se re-ejecutó (no hay `gradlew` ni Gradle en el entorno); el HANDOFF reporta 79 tras AND-22. |
-| Arranque con `DATABASE_URL` | ❌ `sql: unknown driver "postgres" (forgotten import?)` → exit 1. `docker compose up` falla por lo mismo. |
+| Arranque con `DATABASE_URL` | ✅ (Lote A, 2026-11-20) arranca, aplica migraciones 001–004 y conserva el estado tras reiniciar contra PostgreSQL 16 real (`embedded-postgres`, `TEST_DATABASE_URL=… go test -run PGIntegration ./...`). Si la DB no responde o una migración falla, aborta con error explícito. `docker compose up` no se re-ejecutó (sin Docker en el entorno). |
 | `POST /api/v1/disbursements` y `GET /api/v1/merchants/{id}/balances` sin token | ❌ Responden sin autenticación (400 por validación de monto / 200 con saldo). |
 
 ---
@@ -48,7 +49,8 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 - `payments`: parser TLV EMV, motor de estados (authorize/settle/void/refund), CoDi QR (formato JSON propio).
 - `identity`: RFC/CURP, parser CSF, lista 69-B + worker de ingesta, bóveda CSD AES-GCM envolvente, verificador Play Integrity.
 - `iso8583`, `crypto` (DUKPT, traducción PIN, HSM simulado), `clearing` (STEC, MIF), `disputes` (contracargos, reserva dinámica), `rbf`: implementados y testeados, **no integrados**.
-- `store`: repos SQL (ledger, comercios, RBF, pagos EMV, outbox, idempotencia), runner de migraciones, cliente Redis RESP propio.
+- `store`: driver `pgx`, repos SQL (ledger, comercios, RBF, pagos EMV, CoDi, outbox, idempotencia) con implementaciones en memoria equivalentes para modo sin DB, runner de migraciones versionadas (`schema_migrations`, embebidas en el binario), tests de integración contra Postgres real (`pkg/store/pgtest`), cliente Redis RESP propio.
+- `outbox`: dispatcher con `FOR UPDATE SKIP LOCKED`, backoff exponencial, lease y apagado ordenado; arranca desde `cmd/server`.
 - `api`: 16 rutas REST + servidor estático del Web POS; idempotencia; middleware JWT (no montado).
 
 **Android (`mobile/android`)** — 25 clases Kotlin con lógica pura y descriptores de UI (calculadora de splits, CVM, teclado aleatorio, ISO 9564, TLV, orquestador de tap, cliente API, SAF cifrada, guard de ventana). Ninguna depende del SDK de Android; los puntos de contacto con el SO son interfaces (`IsoDepTransceiver`, `SecureWindow`, `AccessibilityScanner`).
@@ -109,7 +111,6 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Sin alta en el adquirente | P0 | M | Con camino A, el comercio debe crearse como sub-afiliado/cuenta en el proveedor (API de onboarding del procesador). |
 | Sin flujo de estado del alta | P1 | S | `PENDING → IN_REVIEW → APPROVED/REJECTED`, con motivo; revisión manual en backoffice. |
 | Asignación de CLABE virtual | P1 | S | Generador existe; falta asignarla automáticamente al aprobar y registrar la cuenta en STP. |
-| Persistencia | P0 | — | Depende de F5 (DB no arranca). |
 
 ### F2 — Autenticación, sesiones y multi-tenant
 **Existe:** `middleware_auth.go` (JWT HS256, `merchant_id` en contexto, anti-IDOR) con tests; verificador Play Integrity en Go; config guard de producción.
@@ -149,17 +150,14 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Expiración y montos no coincidentes | P2 | S | Qué pasa si pagan de más/menos o después de expirar. |
 
 ### F5 — Ledger persistente, saldos y conciliación
-**Existe:** motor de partida doble, repo SQL con bloqueo pesimista, migraciones 001/002, outbox con repo, idempotencia SQL/Redis.
+**Existe:** motor de partida doble, repo SQL con bloqueo pesimista, driver `pgx` y migraciones versionadas 001–004 embebidas (`schema_migrations`), estado de comercios/pagos EMV/CoDi/CSD/acumulado mensual en PostgreSQL (repos en memoria solo sin `DATABASE_URL`), tests de integración contra Postgres real, outbox con dispatcher activo, idempotencia SQL/Redis. (El estado RBF sigue en memoria, pero RBF queda fuera del MVP.)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Sin driver PostgreSQL | P0 | S | `go.mod` sin dependencias; `sql.Open("postgres")` falla. Agregar `pgx/v5/stdlib` (o `lib/pq`), `go.sum`, y test de integración contra Postgres real (testcontainers). Hoy los tests usan `sql_test_driver.go`, un driver falso de 824 líneas que no valida SQL real. |
 | `settle` confía en el cliente | P0 | S | `HandlePaymentSettle` toma `gross_amount_cents`, `platform_fee_cents` y `rbf_sweep_cents` del body, y si el `payment_id` **no existe** igual acredita al comercio (`pkg/api/handlers_payments.go:60–100`). Combinado con F2 sin auth y `disbursements` abierto, es una vía directa de fraude. El monto debe salir del pago autorizado y la comisión de la tarifa del comercio. |
-| Estado de pagos y comercios en memoria | P0 | M | `PaymentEngine`, `CoDiService`, `monthlySalesCents`, `encryptedCSDs`, `merchants` viven en mapas; los repos SQL existen pero no todos están cableados en los handlers. |
-| Outbox sin dispatcher | P1 | S | El repositorio y worker existen pero `main.go` no arranca ningún worker. |
-| Errores de posteo ignorados | P1 | S | Ej. refund: `_ = s.ledger.PostTransaction(jnl)` (`handlers_emv_codi.go`). Un fallo deja estado de pago y ledger inconsistentes. Pago + asiento deben ir en la misma transacción DB. |
+| Ningún flujo encola eventos en outbox | P1 | S | El dispatcher (`pkg/outbox`) ya corre desde `cmd/server`, pero ningún handler llama a `SaveEventTx` y solo hay publicadores `log`/`noop`. Falta encolar (en la misma transacción del negocio) los eventos de pago/abono/payout y un publicador real (webhook/broker/PAC). |
+| Errores de posteo ignorados | P1 | S | Ej. refund: `_ = s.ledger.PostTransaction(jnl)` (`handlers_emv_codi.go`); `settle` y el webhook CoDi ignoran el error de `AddMerchantMonthlySalesCents`. Estado del pago, asiento contable y acumulado mensual RESICO se escriben en transacciones separadas: un fallo parcial deja pago, ledger y tramo fiscal inconsistentes. Deben ir en una sola transacción DB. |
 | Conciliación diaria | P1 | M | `cmd/reconciler/main.go` es un stub (crea un ledger vacío y sale). Falta: ledger vs. reporte del procesador, ledger vs. estado de cuenta STP, reporte de diferencias. |
-| Migraciones | P2 | S | `docker-compose` solo monta la 001 en `initdb`; el runner aplica ambas, pero conviene una sola fuente y tabla de versiones. |
 
 ### F6 — Liquidación (payout) al comercio
 **Existe:** `POST /api/v1/disbursements` (valida CLABE, verifica saldo, postea débito, llama STP), reconciliación CEP.
@@ -177,7 +175,6 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Acumulado mensual en memoria | P0 | S | `monthlySalesCents` es un mapa; existe repo SQL (`AddMonthlySalesCents`) pero el handler usa el mapa. Al reiniciar se pierde el tramo. |
 | Validación fiscal por contador | P0 | S | Revisar con un contador: base de ISR RESICO (ingresos efectivamente cobrados), tratamiento de IVA trasladado vs. acreditable, retenciones de PM, cambio de tramo intra-mes, tope anual. Documentar supuestos. |
 | ¿Qué pasa con el dinero apartado? | P0 | M | Hoy es una subcuenta contable. Definir si se retiene en cuenta segregada, cuándo se libera y cómo el comercio paga al SAT (¿Kerno solo aparta o también paga?). Implica F6 y temas legales. |
 | Comercios no RESICO | P1 | M | Régimen general PF/PM sin soporte; al menos bloquearlos explícitamente en el alta o modo "sin apartado". |
@@ -246,7 +243,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 ## 6. Hallazgos críticos (corregir antes de cualquier demo con dinero real)
 
 1. **Cadena de fraude abierta:** `settle` sin auth acredita montos arbitrarios aunque el pago no exista + `disbursements` sin auth con CLABE libre. Con STP real conectado, esto permite sacar dinero. → Montar JWT, derivar tenant del token, eliminar montos del body, CLABE de destino fija y verificada.
-2. **El servidor no arranca con base de datos** (driver faltante). Todo lo "persistente" nunca se ha ejecutado contra Postgres real.
+2. **La persistencia no es atómica** (el driver y el cableado a PostgreSQL quedaron resueltos en el Lote A): estado del pago, asiento y acumulado mensual RESICO van en transacciones separadas y varios errores se ignoran (ver F5 "Errores de posteo ignorados").
 3. **La bóveda CSD usa una llave maestra hardcodeada** e ignora la variable de entorno que el config guard valida.
 4. **La app Android no es una app**: hay que migrar el módulo a Android y construir toda la UI.
 5. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks.
@@ -261,7 +258,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - Validación fiscal del modelo RESICO y del apartado; asesoría legal sobre custodia de fondos y PLD.
 
 **Fase 1 — Cimientos seguros (≈3–4 semanas)**
-- Driver Postgres + tests de integración reales; todo el estado a DB; outbox worker activo.
+- ~~Driver Postgres + tests de integración reales; todo el estado a DB; outbox worker activo.~~ ✅ Lote A (2026-11-20). Pendiente: transacción única pago+asiento+acumulado y encolar eventos en el outbox.
 - Usuarios, login OTP, JWT montado, tenant desde token, webhooks firmados, KMS para la bóveda.
 - Corregir `settle`/`disbursements`/refund (montos desde el servidor, transacción única pago+asiento).
 - CI con `go test -race`, tests Kotlin y build de imagen; secretos fuera del repo.
@@ -285,7 +282,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Reutilizar en MVP | Congelar para fase 2 (adquirencia propia / producto financiero) |
 |---|---|
-| `ledger`, `store` (tras agregar driver), idempotencia, outbox | `iso8583`, `crypto` (DUKPT, PIN translation, HSM) |
+| `ledger`, `store` (`pgx` + migraciones versionadas), idempotencia, outbox (dispatcher) | `iso8583`, `crypto` (DUKPT, PIN translation, HSM) |
 | `stp` (CLABE, firma, cliente, CEP) | `clearing` (STEC, MIF) |
 | `fiscal` (con validación contable y XSLT), `pac` (interfaz + failover) | `rbf` y endpoints RBF |
 | `identity` (RFC/CURP, CSF, 69-B, bóveda CSD con KMS) | `IsoDepEmvReader`, `ScrambledKeypadModel`, `PinBlockFormatter`, `CvmRulesEvaluator` (las CVM las resuelve el SDK del procesador) |

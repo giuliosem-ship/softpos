@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote E (MVP-14..16) aplicado
+**Última actualización:** 2026-11-20 — Lote E (MVP-14..16) aplicado y auditado; app Android del Lote F (AND-30..32) integrada
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -18,7 +18,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Lote C: pago + asiento + acumulado RESICO + evento de outbox en una sola transacción (`store.MoneyStore`, ver `docs/MONEY_FLOWS.md`). Lote D: payouts persistidos (`payouts`, migración 009) y outbox con leases por dueño. Falta: publicador real del outbox y RBF en DB. Sin DB todo sigue en memoria (modo dev). |
 | Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Lote C: montos de `settle` y CLABE de dispersión ya no vienen del cliente; llave de la bóveda desde el entorno. Falta: proveedor OTP real, CORS/TLS/gateway, KMS real y verificación real de titularidad de la CLABE de liquidación. |
 | Cobro con tarjeta real | 🔴 Bloqueante | Lote E (camino A): puerto `acquirer.Provider` con adaptador mock, modelo persistente `card_payments`, intents para el SDK Tap to Pay, webhooks firmados del procesador (captura → split en ledger, devoluciones, contracargos) y conciliación de sus liquidaciones; los endpoints EMV que "aprueban" al parsear TLV quedan solo con `DEV_MODE`. Falta elegir y contratar el procesador, su adaptador real y su SDK en la app. |
-| App Android | 🔴 Bloqueante | Es un **módulo Kotlin/JVM** (sin Android Gradle Plugin, sin Activity/Compose, sin `android.nfc`). No genera APK. |
+| App Android | 🟡 Parcial | Lote F (AND-30..32): módulo Android real (AGP, Compose Material 3, `MainActivity`, genera APK debug), login OTP con sesión cifrada bajo Android Keystore y pantallas de saldo/apartado, cobrar (teclado → tap mock / QR SPEI), ventas y perfil/CLABE (ver `docs/ANDROID_APP.md`). Falta: pasar del contrato de tarjeta provisional y del endpoint EMV legacy a `/api/v1/card-payments/*`, el SDK del procesador, Play Integrity real, pantallas de onboarding KYB/devoluciones/facturar y la distribución en Play. |
 | Integraciones externas | 🔴 Bloqueante | Procesador de tarjetas: solo `acquirer.MockProvider`. PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
 | Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Lote E: conciliación de liquidaciones del procesador (reporte de diferencias para operador, alertas `ERROR`, worker en `cmd/server` y `cmd/reconciler` de una pasada). Falta: despliegue (CD) e infraestructura, conciliación contra el estado de cuenta STP/bancario, métricas/alertas enrutadas y backoffice. |
 
@@ -33,7 +33,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | `go test -race -count=1 ./...` (Go 1.24 local, directiva bajada temporalmente desde 1.27.1 en una copia) | ✅ 14/14 paquetes OK, sin data races |
 | Cobertura (`go test -cover`) | api 62 %, stp 61 %, payments 67 %, rbf 71 %, fiscal 75 %, pac 79 %, store 79 %, ledger 80 %, identity 83 %, disputes 82 %, iso8583 84 %, clearing 88 %, crypto 89 %, cmd/server 60 % |
 | `node --test web/pos/softpos_sdk.test.js` | ✅ 7/7 |
-| Tests Android | ✅ (Lote D, 2026-11-20) 78/78 con `./gradlew :app:test` (wrapper Gradle 9.8.2 agregado, JDK 17); el build no requirió cambios para Gradle 9. |
+| Tests Android | ✅ (Lote F + auditoría del Lote E, 2026-11-20) 123/123 con `./gradlew :app:testDebugUnitTest :app:assembleDebug` (Gradle 8.14.3, AGP, JDK 17); genera `app-debug.apk`. |
 | CI (`.github/workflows/ci.yml`) | Workflow creado en el Lote D y validado sintácticamente (YAML); su primera corrida en GitHub y el `docker build` no se ejecutaron localmente (sin runner ni Docker). |
 | Arranque con `DATABASE_URL` | ✅ (Lote A, 2026-11-20; migraciones 005–008 en Lotes B y C, 009 en el Lote D) arranca, aplica migraciones 001–004 y conserva el estado tras reiniciar contra PostgreSQL 16 real (`embedded-postgres`, `TEST_DATABASE_URL=… go test -run PGIntegration ./...`). Si la DB no responde o una migración falla, aborta con error explícito. `docker compose up` no se re-ejecutó (sin Docker en el entorno). |
 | `POST /api/v1/disbursements` y `GET /api/v1/merchants/{id}/balances` sin token | ✅ (Lote B, 2026-11-20) `401` sin token y `403` con token de otro comercio; una dispersión exige rol `owner`. |
@@ -192,16 +192,16 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Catálogos SAT | P2 | S | Clave de producto/unidad por comercio, actualizables. |
 
 ### F9 — App Android del comercio
-**Existe:** lógica de presentación pura (ViewModel de terminal, presentadores de bóveda fiscal, onboarding y RBF; descriptores de pantallas y navegación), cliente API con idempotencia, generador QR.
+**Existe:** lógica de presentación pura (ViewModel de terminal, presentadores de bóveda fiscal, onboarding y RBF; descriptores de pantallas y navegación), cliente API con idempotencia, generador QR. Desde el Lote F (AND-30..32, `docs/ANDROID_APP.md`): módulo `com.android.application` con Compose Material 3, DI manual y `gradlew` (Gradle 8.14.3); login teléfono → OTP contra `docs/AUTH.md` con refresco single-flight y logout; sesión solo como cifrado AES-256-GCM bajo llave de Android Keystore; pantallas Inicio (disponible vs. apartado fiscal), Cobrar (teclado en centavos enteros → tap con proveedor mock en debug / QR SPEI), Ventas (lista y detalle) y Perfil (CLABE, salir). En release el cobro con tarjeta queda deshabilitado hasta tener SDK del procesador.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| No es una app Android | P0 | M | `app/build.gradle.kts` aplica `kotlin.jvm`, no `com.android.application`. El manifest está vacío (sin Activity). Migrar a módulo Android (AGP 8.x ya está en el catálogo), con `MainActivity`, Compose, DI, navegación. Sin `gradlew` en el repo. |
-| Sin UI real | P0 | L | Pantallas Compose: login/OTP, onboarding KYB, cobrar (teclado de monto → tap / QR SPEI), historial de ventas, detalle y devolución, saldo y apartado fiscal, facturar, perfil/CLABE. |
+| Sin UI real (pantallas restantes) | P0 | M | Desde el Lote F existen login/OTP, saldo/apartado, cobrar, ventas y perfil. Faltan: onboarding KYB, devoluciones (sobre `POST /api/v1/card-payments/{id}/refunds`), facturar y selector de comercio cuando el usuario tiene varias membresías. |
+| Contrato de cobro de la app desalineado con el backend | P0 | S | La app aún llama al endpoint legacy `/api/v1/payments/emv/authorize` (`SoftPosApiClient`, responde `410` sin `DEV_MODE`) y su `CardPaymentsApi` usa un contrato provisional (`id`, estados en minúsculas). Debe usar `/api/v1/card-payments/*` (campo `card_payment_id`, estados del backend) y consultar `GET /api/v1/card-payments/{id}` hasta `final: true`. Además `SalesApi` usa `GET /api/v1/merchants/{id}/sales`, que no existe en el backend. |
+| Paquete de Play Integrity desalineado | P1 | S | `PLAY_INTEGRITY_PACKAGE` tiene default `mx.softpos.app` en el backend, pero el `applicationId` de la app es `mx.kerno.softpos` (`.debug` en debug): los veredictos se rechazarían. Alinear default y configuración por entorno. |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
 | Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
-| Almacenamiento seguro de sesión | P1 | S | Tokens en Android Keystore / EncryptedSharedPreferences. La SAF usa una llave AES en memoria, no Keystore (fase 2 de todos modos). |
-| Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. |
+| Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. Antes de subir a Play: `targetSdk` 36 (hoy 35) y regenerar `gradle-wrapper.jar` para Gradle 8.14.3 con `distributionSha256Sum` en `gradle-wrapper.properties`. |
 | Telemetría y crash reporting | P1 | S | Crashlytics/Sentry sin datos sensibles. |
 
 ### F10 — Devoluciones, cancelaciones y comprobante
@@ -210,12 +210,13 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
 | Comprobante de venta | P1 | S | No existe ticket/recibo (solo en la demo web). Enviar por SMS/WhatsApp/email con PAN enmascarado, autorización y enlace de autofactura. |
+| Solicitudes de devolución sin resultado | P2 | S | Desde la auditoría del Lote E un webhook de devolución se asocia por `kerno_refund_id` aunque la llamada al procesador haya vencido, pero si el procesador nunca recibió la solicitud ésta queda `REQUESTED` reteniendo su monto hasta que el comercio reintente con la misma `Idempotency-Key`; falta un barrido que la reconsulte/expire. Un contracargo no descuenta las devoluciones en curso (si ambas proceden, la devolución llega como `EVENT_CONFLICT` para revisión). |
 | Notificación y defensa de contracargos | P1 | S | Desde el Lote E el contracargo se refleja en el ledger y encola `card_payment.chargeback_opened`; falta entregar el aviso al comercio (depende del publicador real del outbox, F5) y el flujo para enviar evidencia al procesador. |
 
 ### F11 — Plataforma y operación
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| CD y protección de `main` | P1 | S | El CI existe desde el Lote D (`go vet`, `go test -race`, Postgres 16, Web POS, Kotlin, imagen Docker). Falta: despliegue continuo a staging/prod, publicar la imagen, lint/`gofmt` (hay archivos sin formato en paquetes de fase 2), build de APK (bloqueado por F9) y exigir CI verde en `main` (protección de rama). |
+| CD y protección de `main` | P1 | S | El CI existe desde el Lote D (`go vet`, `go test -race`, Postgres 16, Web POS, Kotlin, imagen Docker). Falta: despliegue continuo a staging/prod, publicar la imagen, lint/`gofmt` (hay archivos sin formato en paquetes de fase 2), APK firmado de release (el CI ya compila el APK debug desde el Lote F) y exigir CI verde en `main` (protección de rama). |
 | Secretos en despliegue | P1 | S | Desde el Lote D no hay secretos en el repo (`.env` ignorado, `.env.example` con placeholders) y el guard de producción cubre cada secreto leído (test que lo amarra al código). Falta inyectarlos desde un Secrets Manager/KMS en el despliegue y definir su rotación. |
 | Secretos del historial y semántica del outbox | P1 | S | Los valores que estuvieron en `docker-compose.yml` antes del Lote D (contraseña de Postgres, `STP_HMAC_SECRET`, `VAULT_MASTER_KEY_HEX`) siguen en el historial de git: no reutilizarlos en ningún entorno. Outbox: desde la auditoría del Lote D un lote se corta antes de que una publicación pueda exceder el lease; los eventos sobrantes se reclaman al vencer el lease y ese reclamo cuenta como intento aunque no se hayan publicado (falta liberarlos sin contar). |
 | Infraestructura de despliegue | P0 | M | Postgres administrado con backups/PITR, Redis administrado, TLS, dominio, entornos dev/staging/prod. |
@@ -238,7 +239,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 1. **Cadena de fraude cerrada en lo esencial (Lote C):** `settle` toma el monto del pago autorizado y la comisión de la tarifa, el posteo es atómico y exactly-once, las dispersiones van solo a la CLABE de liquidación verificada y las devoluciones revierten apartado y comisión. Queda: verificación real de titularidad de esa CLABE (hoy la marca un operador) y 2FA al cambiarla (ver F6).
 2. **La bóveda CSD ya no usa llave hardcodeada** (Lote C); falta KMS real y re-cifrado al rotar (ver F2).
-3. **La app Android no es una app**: hay que migrar el módulo a Android y construir toda la UI.
+3. **La app Android ya es una app (Lote F), pero su cobro con tarjeta no está conectado al flujo real**: sigue llamando al endpoint EMV legacy (`410` sin `DEV_MODE`) y a un contrato provisional en vez de `/api/v1/card-payments/*`, consulta un endpoint de ventas que no existe y el paquete de Play Integrity del backend no coincide con su `applicationId` (ver F9).
 4. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks. Para el procesador, el flujo backend completo (intent, webhooks firmados, devoluciones, contracargos, conciliación) ya existe sobre el puerto `acquirer.Provider` (Lote E); falta el adaptador real.
 
 ---
@@ -263,7 +264,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - Payout automático diario; conciliador real: procesador vs. ledger ✅ Lote E; falta STP/banco vs. ledger.
 
 **Fase 3 — App y fiscal (≈5–7 semanas, en paralelo con fase 2)**
-- Módulo Android real con Compose + SDK Tap to Pay del procesador + pantallas MVP.
+- ~~Módulo Android real con Compose~~ ✅ Lote F (AND-30..32: shell, OTP, sesión en Keystore, pantallas de saldo/cobro/ventas/perfil); falta alinear su contrato con `/api/v1/card-payments/*`, SDK Tap to Pay del procesador y pantallas restantes (KYB, devoluciones, facturar).
 - PAC real, carga de CSD, cadena original validada, cancelación, PDF, factura global automática, comprobante de venta.
 
 **Fase 4 — Piloto controlado (≈2–3 semanas)**

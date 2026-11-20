@@ -71,15 +71,13 @@ func LoadMigrations(fsys fs.FS) ([]Migration, error) {
 // RunMigrationsFS applies every pending migration from fsys, each in its own
 // transaction, recording applied versions in schema_migrations. Re-running is
 // idempotent: already-recorded versions are skipped.
+//
+// Every step runs under a transaction-scoped advisory lock, so several server
+// replicas booting at once serialize instead of racing on DDL or on
+// schema_migrations (the pending check is repeated after taking the lock).
 func RunMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version VARCHAR(64) PRIMARY KEY,
-			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+	if err := createSchemaMigrationsTable(ctx, db); err != nil {
+		return err
 	}
 
 	migrations, err := LoadMigrations(fsys)
@@ -88,18 +86,23 @@ func RunMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	}
 
 	for _, m := range migrations {
-		var exists bool
-		err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", m.Version).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("failed to check migration status for %s: %w", m.Version, err)
-		}
-		if exists {
-			continue
-		}
-
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("failed to begin tx for migration %s: %w", m.Name, err)
+		}
+		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLockKey); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("failed to lock migrations for %s: %w", m.Version, err)
+		}
+		var exists bool
+		err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", m.Version).Scan(&exists)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("failed to check migration status for %s: %w", m.Version, err)
+		}
+		if exists {
+			_ = tx.Rollback()
+			continue
 		}
 
 		for _, stmt := range splitSQLStatements(m.UpSQL) {
@@ -122,6 +125,32 @@ func RunMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		}
 	}
 
+	return nil
+}
+
+// migrationLockKey is the pg_advisory_xact_lock key guarding schema migrations.
+const migrationLockKey int64 = 0x536f6674504f53 // "SoftPOS"
+
+func createSchemaMigrationsTable(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx for schema_migrations: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("failed to lock migrations: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version VARCHAR(64) PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`); err != nil {
+		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit schema_migrations table: %w", err)
+	}
 	return nil
 }
 

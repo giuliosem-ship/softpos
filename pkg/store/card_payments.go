@@ -125,6 +125,7 @@ type ReconciliationItem struct {
 	Detail            string
 	Status            string // OPEN | RESOLVED
 	ResolutionNote    string
+	ResolvedBy        string // user id of the operator who resolved it
 	CreatedAt         time.Time
 	ResolvedAt        *time.Time
 }
@@ -166,8 +167,9 @@ type AcquirerRepository interface {
 	ListUnsettledCaptures(ctx context.Context, settlementDateBefore string, limit int) ([]CardPaymentRecord, error)
 	InsertReconciliationItem(ctx context.Context, item ReconciliationItem) (bool, error)
 	ListReconciliationItems(ctx context.Context, status string, limit int) ([]ReconciliationItem, error)
-	// ResolveReconciliationItem marks an OPEN item RESOLVED (false if not open).
-	ResolveReconciliationItem(ctx context.Context, id int64, note string) (bool, error)
+	// ResolveReconciliationItem marks an OPEN item RESOLVED by the operator
+	// resolvedBy (false if not open).
+	ResolveReconciliationItem(ctx context.Context, id int64, note, resolvedBy string) (bool, error)
 	ListAcquirerPayouts(ctx context.Context, limit int) ([]AcquirerPayoutRecord, error)
 }
 
@@ -429,7 +431,7 @@ func (s *SQLMoneyStore) ListReconciliationItems(ctx context.Context, status stri
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, dedupe_key, provider, payout_id, card_payment_id, provider_payment_id, kind, expected_cents,
-			actual_cents, detail, status, resolution_note, created_at, resolved_at
+			actual_cents, detail, status, resolution_note, resolved_by, created_at, resolved_at
 		FROM acquirer_reconciliation_items
 		WHERE ($1 = '' OR status = $1)
 		ORDER BY id DESC LIMIT $2`, status, limit)
@@ -442,7 +444,7 @@ func (s *SQLMoneyStore) ListReconciliationItems(ctx context.Context, status stri
 		var it ReconciliationItem
 		var resolved sql.NullTime
 		if err := rows.Scan(&it.ID, &it.DedupeKey, &it.Provider, &it.PayoutID, &it.CardPaymentID, &it.ProviderPaymentID,
-			&it.Kind, &it.ExpectedCents, &it.ActualCents, &it.Detail, &it.Status, &it.ResolutionNote, &it.CreatedAt, &resolved); err != nil {
+			&it.Kind, &it.ExpectedCents, &it.ActualCents, &it.Detail, &it.Status, &it.ResolutionNote, &it.ResolvedBy, &it.CreatedAt, &resolved); err != nil {
 			return nil, err
 		}
 		if resolved.Valid {
@@ -454,10 +456,10 @@ func (s *SQLMoneyStore) ListReconciliationItems(ctx context.Context, status stri
 	return out, rows.Err()
 }
 
-func (s *SQLMoneyStore) ResolveReconciliationItem(ctx context.Context, id int64, note string) (bool, error) {
+func (s *SQLMoneyStore) ResolveReconciliationItem(ctx context.Context, id int64, note, resolvedBy string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE acquirer_reconciliation_items SET status = 'RESOLVED', resolution_note = $1, resolved_at = $2
-		WHERE id = $3 AND status = 'OPEN'`, note, time.Now().UTC(), id)
+		UPDATE acquirer_reconciliation_items SET status = 'RESOLVED', resolution_note = $1, resolved_by = $2, resolved_at = $3
+		WHERE id = $4 AND status = 'OPEN'`, note, resolvedBy, time.Now().UTC(), id)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve reconciliation item: %w", err)
 	}

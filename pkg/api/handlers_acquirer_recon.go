@@ -186,6 +186,7 @@ type ReconciliationItemResponse struct {
 	Detail            string `json:"detail,omitempty"`
 	Status            string `json:"status"`
 	ResolutionNote    string `json:"resolution_note,omitempty"`
+	ResolvedBy        string `json:"resolved_by,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	ResolvedAt        string `json:"resolved_at,omitempty"`
 }
@@ -259,7 +260,7 @@ func (s *Server) HandleAcquirerReconciliation(w http.ResponseWriter, r *http.Req
 		ri := ReconciliationItemResponse{
 			ID: it.ID, Kind: it.Kind, Provider: it.Provider, PayoutID: it.PayoutID, CardPaymentID: it.CardPaymentID,
 			ProviderPaymentID: it.ProviderPaymentID, ExpectedCents: it.ExpectedCents, ActualCents: it.ActualCents,
-			Detail: it.Detail, Status: it.Status, ResolutionNote: it.ResolutionNote, CreatedAt: it.CreatedAt.UTC().Format(time.RFC3339),
+			Detail: it.Detail, Status: it.Status, ResolutionNote: it.ResolutionNote, ResolvedBy: it.ResolvedBy, CreatedAt: it.CreatedAt.UTC().Format(time.RFC3339),
 		}
 		if it.ResolvedAt != nil {
 			ri.ResolvedAt = it.ResolvedAt.UTC().Format(time.RFC3339)
@@ -300,7 +301,14 @@ func (s *Server) HandleResolveReconciliationItem(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "RESOLUTION_NOTE_REQUIRED")
 		return
 	}
-	done, err := repo.ResolveReconciliationItem(r.Context(), id, req.Note)
+	// Resolving moves no money; who closed the difference is part of the
+	// report (audit trail), not only of the logs.
+	user, _ := UserIDFromContext(r.Context())
+	if user == "" {
+		writeError(w, http.StatusForbidden, "OPERATOR_IDENTITY_REQUIRED")
+		return
+	}
+	done, err := repo.ResolveReconciliationItem(r.Context(), id, req.Note, user)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "RECONCILIATION_UNAVAILABLE")
 		return
@@ -309,7 +317,6 @@ func (s *Server) HandleResolveReconciliationItem(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusNotFound, "OPEN_ITEM_NOT_FOUND")
 		return
 	}
-	user, _ := UserIDFromContext(r.Context())
 	slog.Info("acquirer reconciliation item resolved", "item_id", id, "operator", user)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "RESOLVED"})
 }

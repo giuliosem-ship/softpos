@@ -62,7 +62,8 @@ Notes:
   `acquirer_reconciliation_items` through `store.CardPaymentTx` (part of
   `MoneyTx`) and `store.AcquirerRepository` (implemented by both money
   stores); `payment_settlements` no longer references `emv_payments` (card
-  payments share it).
+  payments share it). Migration 011 adds `resolved_by` (operator user id)
+  to reconciliation items.
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements, SAT ingestion state.
 - Payment state change, ledger journal, RESICO monthly accumulator,

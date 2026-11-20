@@ -316,13 +316,14 @@ func (s *MemoryMoneyStore) ListReconciliationItems(_ context.Context, status str
 	return out, nil
 }
 
-func (s *MemoryMoneyStore) ResolveReconciliationItem(_ context.Context, id int64, note string) (bool, error) {
+func (s *MemoryMoneyStore) ResolveReconciliationItem(_ context.Context, id int64, note, resolvedBy string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, it := range s.card.recon {
 		if it.ID == id && it.Status == "OPEN" {
 			now := time.Now().UTC()
 			s.card.recon[i].Status, s.card.recon[i].ResolutionNote, s.card.recon[i].ResolvedAt = "RESOLVED", note, &now
+			s.card.recon[i].ResolvedBy = resolvedBy
 			return true, nil
 		}
 	}

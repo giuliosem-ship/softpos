@@ -238,9 +238,10 @@ stub; needs `DATABASE_URL`). Settlement dates are Mexico City calendar days.
 **Operator report** (role `operator`; others `403 ROLE_FORBIDDEN`):
 
 - `GET /api/v1/acquirer/reconciliation?status=OPEN|RESOLVED|ALL&limit=N` →
-  `{"items":[{"id","kind","provider","payout_id","card_payment_id","provider_payment_id","expected_cents","actual_cents","detail","status","resolution_note","created_at","resolved_at"}],"payouts":[{"provider","payout_id","amount_cents","expected_cents","settlement_date","item_count","discrepancy_count","status","created_at"}]}`
+  `{"items":[{"id","kind","provider","payout_id","card_payment_id","provider_payment_id","expected_cents","actual_cents","detail","status","resolution_note","resolved_by","created_at","resolved_at"}],"payouts":[{"provider","payout_id","amount_cents","expected_cents","settlement_date","item_count","discrepancy_count","status","created_at"}]}`
 - `POST /api/v1/acquirer/reconciliation/{item}/resolve {"note":"…"}` → `RESOLVED`
-  (`404 OPEN_ITEM_NOT_FOUND` if not open). Correcting journals, if any, are
+  with `resolved_by` = the operator's user id (migration 011; `404
+  OPEN_ITEM_NOT_FOUND` if not open). Resolving moves no money. Correcting journals, if any, are
   posted by backoffice tooling (next batch).
 
 ## 6. Plugging a real processor (checklist)

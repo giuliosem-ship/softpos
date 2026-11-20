@@ -139,7 +139,8 @@ func TestAcquirerPayout_FlagsMismatches(t *testing.T) {
 	if rec := serve(s, asRole(t, s, cardMerchant, auth.RoleOperator, jsonReq(http.MethodPost, path, map[string]any{"note": "again"}))); rec.Code != http.StatusNotFound {
 		t.Fatalf("resolve twice: want 404, got %d", rec.Code)
 	}
-	if _, rep := getRecon(t, s, auth.RoleOperator, "?status=RESOLVED"); len(rep.Items) != 1 || rep.Items[0].ResolutionNote != "processor test line" {
+	if _, rep := getRecon(t, s, auth.RoleOperator, "?status=RESOLVED"); len(rep.Items) != 1 || rep.Items[0].ResolutionNote != "processor test line" ||
+		rep.Items[0].ResolvedBy != "usr_test_"+cardMerchant {
 		t.Fatalf("resolved list: %+v", rep.Items)
 	}
 	if code, _ := getRecon(t, s, auth.RoleOperator, "?status=BOGUS"); code != http.StatusBadRequest {

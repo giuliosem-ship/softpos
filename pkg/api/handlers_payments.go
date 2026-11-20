@@ -67,7 +67,11 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Query merchant's accumulated monthly base sales and calculate RESICO Tax Split
-	accumulatedMonthlySalesCents := s.GetMerchantMonthlySalesCents(req.MerchantID)
+	accumulatedMonthlySalesCents, err := s.merchantMonthlySalesCents(req.MerchantID)
+	if err != nil {
+		http.Error(w, `{"error":"MONTHLY_SALES_UNAVAILABLE"}`, http.StatusServiceUnavailable)
+		return
+	}
 	taxSplit, err := fiscal.CalculateResicoTaxSplit(req.GrossAmountCents, accumulatedMonthlySalesCents, req.IsPersonaMoral)
 	if err != nil {
 		http.Error(w, `{"error":"TAX_CALCULATION_ERROR"}`, http.StatusBadRequest)
@@ -112,7 +116,7 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Atomically record the base amount into the merchant's monthly accumulated sales
-	s.AddMerchantMonthlySalesCents(req.MerchantID, taxSplit.BaseAmountCents)
+	_ = s.AddMerchantMonthlySalesCents(req.MerchantID, taxSplit.BaseAmountCents) // logged on failure
 
 	netAvailable := req.GrossAmountCents - (req.PlatformFeeCents + taxSplit.TotalTaxEscrowCents + rbfSweepCents)
 

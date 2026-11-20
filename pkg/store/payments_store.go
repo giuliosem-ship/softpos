@@ -87,6 +87,37 @@ func (r *SQLEMVPaymentRepository) SavePayment(ctx context.Context, record EMVPay
 	return nil
 }
 
+// InsertPayment inserts a new EMV payment and returns payments.ErrDuplicatePayment
+// if a payment with the same ID already exists (no overwrite).
+func (r *SQLEMVPaymentRepository) InsertPayment(ctx context.Context, record EMVPaymentRecord) error {
+	now := time.Now().UTC()
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	}
+	if record.UpdatedAt.IsZero() {
+		record.UpdatedAt = now
+	}
+	if record.Currency == "" {
+		record.Currency = "MXN"
+	}
+	res, err := r.db.ExecContext(ctx, `
+		INSERT INTO emv_payments (
+			id, merchant_id, amount_cents, currency, status,
+			masked_pan, cryptogram_type, cryptogram_hex, atc,
+			tlv_payload_hex, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (id) DO NOTHING
+	`,
+		record.PaymentID, record.MerchantID, record.AmountCents, record.Currency, string(record.Status),
+		record.MaskedPAN, string(record.CryptogramType), record.CryptogramHex, record.ATC,
+		record.TLVPayloadHex, record.CreatedAt, record.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert EMV payment: %w", err)
+	}
+	return requireRowAffected(res, payments.ErrDuplicatePayment)
+}
+
 // GetPayment retrieves an EMV payment record by its ID.
 func (r *SQLEMVPaymentRepository) GetPayment(ctx context.Context, paymentID string) (*EMVPaymentRecord, bool, error) {
 	query := `

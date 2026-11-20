@@ -249,18 +249,39 @@ func NewPaymentEngine() *PaymentEngine {
 	}
 }
 
-func (pe *PaymentEngine) Authorize(id string, merchantID string, emv EMVTags) (*Payment, error) {
+// PaymentProcessor is the card payment state machine used by the API. It is
+// implemented by the in-memory PaymentEngine (no-DB mode) and by
+// store.SQLPaymentEngine (PostgreSQL).
+type PaymentProcessor interface {
+	Authorize(id string, merchantID string, emv EMVTags) (*Payment, error)
+	Settle(id string) (*Payment, error)
+	Void(id string) (*Payment, error)
+	Refund(id string, refundCents int64) (*Payment, error)
+	GetPayment(id string) (*Payment, error)
+}
+
+var _ PaymentProcessor = (*PaymentEngine)(nil)
+
+// ValidateAuthorization checks the inputs of an EMV authorization request.
+func ValidateAuthorization(id string, merchantID string, emv EMVTags) error {
 	if id == "" || merchantID == "" {
-		return nil, errors.New("payment id and merchant id are required")
+		return errors.New("payment id and merchant id are required")
 	}
 	if emv.AmountCents <= 0 {
-		return nil, ErrInvalidAmount
+		return ErrInvalidAmount
 	}
 	if emv.CurrencyCode != "" && emv.CurrencyCode != "0484" {
-		return nil, ErrInvalidCurrency
+		return ErrInvalidCurrency
 	}
 	if emv.CryptogramType != CryptogramARQC && emv.CryptogramType != CryptogramTC {
-		return nil, ErrUnsupportedCryptogram
+		return ErrUnsupportedCryptogram
+	}
+	return nil
+}
+
+func (pe *PaymentEngine) Authorize(id string, merchantID string, emv EMVTags) (*Payment, error) {
+	if err := ValidateAuthorization(id, merchantID, emv); err != nil {
+		return nil, err
 	}
 
 	pe.mu.Lock()

@@ -312,6 +312,9 @@ func (r *SQLMerchantRepository) SaveMerchant(ctx context.Context, m MerchantReco
 		    updated_at = EXCLUDED.updated_at
 	`, m.ID, m.RFC, m.Name, m.IsRESICO, clabeVal, csdVal, now)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrDuplicateCLABE
+		}
 		return fmt.Errorf("failed to save merchant: %w", err)
 	}
 	return nil
@@ -381,19 +384,22 @@ func (r *SQLMerchantRepository) GetMerchantCLABE(ctx context.Context, merchantID
 }
 
 func (r *SQLMerchantRepository) SetMerchantCLABE(ctx context.Context, merchantID, clabe string) error {
-	_, err := r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE merchants
 		SET virtual_clabe = $1, updated_at = $2
 		WHERE id = $3
 	`, clabe, time.Now().UTC(), merchantID)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrDuplicateCLABE
+		}
 		return fmt.Errorf("failed to set merchant CLABE: %w", err)
 	}
-	return nil
+	return requireRowAffected(res, ErrMerchantNotFound)
 }
 
 func (r *SQLMerchantRepository) SaveMerchantCSD(ctx context.Context, merchantID string, encryptedCSDJSON []byte) error {
-	_, err := r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE merchants
 		SET encrypted_csd_json = $1, updated_at = $2
 		WHERE id = $3
@@ -401,7 +407,7 @@ func (r *SQLMerchantRepository) SaveMerchantCSD(ctx context.Context, merchantID 
 	if err != nil {
 		return fmt.Errorf("failed to save merchant CSD: %w", err)
 	}
-	return nil
+	return requireRowAffected(res, ErrMerchantNotFound)
 }
 
 func (r *SQLMerchantRepository) GetMerchantCSD(ctx context.Context, merchantID string) ([]byte, bool, error) {
@@ -471,6 +477,9 @@ func (r *SQLMerchantRepository) AddMonthlySalesCents(ctx context.Context, mercha
 				VALUES ($1, $2, $3, $4)
 			`, merchantID, yearMonth, newSales, now)
 			if err != nil {
+				if isForeignKeyViolation(err) {
+					return 0, ErrMerchantNotFound
+				}
 				return 0, fmt.Errorf("failed to insert monthly sales: %w", err)
 			}
 		} else {
@@ -543,6 +552,29 @@ func (r *SQLIdempotencyRepository) Set(ctx context.Context, key string, statusCo
 	`, key, statusCode, body, expiresAt, now)
 	if err != nil {
 		return fmt.Errorf("failed to save idempotency key: %w", err)
+	}
+	return nil
+}
+
+// isUniqueViolation reports whether err is a PostgreSQL unique_violation (23505).
+func isUniqueViolation(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "23505") || strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate key")
+}
+
+// isForeignKeyViolation reports whether err is a PostgreSQL foreign_key_violation (23503).
+func isForeignKeyViolation(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "23503") || strings.Contains(msg, "foreign key")
+}
+
+func requireRowAffected(res sql.Result, notFound error) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil // driver cannot report affected rows; assume success
+	}
+	if n == 0 {
+		return notFound
 	}
 	return nil
 }

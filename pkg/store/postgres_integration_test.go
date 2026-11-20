@@ -278,3 +278,93 @@ func TestPGIntegration_OutboxRepository(t *testing.T) {
 		t.Fatalf("expected no pending events, got %d", len(events))
 	}
 }
+
+func TestPGIntegration_SQLPaymentEngineStateMachine(t *testing.T) {
+	db := openMigratedPG(t)
+	engine := NewSQLPaymentEngine(NewSQLEMVPaymentRepository(db))
+	tags := payments.EMVTags{AmountCents: 5_000, CurrencyCode: "0484", CryptogramType: payments.CryptogramARQC,
+		CryptogramHex: "AABB", PANMasked: "415231******9012"}
+
+	p, err := engine.Authorize("p1", "m1", tags)
+	if err != nil || p.Status != payments.PaymentAuthorized {
+		t.Fatalf("Authorize: %+v %v", p, err)
+	}
+	if _, err := engine.Authorize("p1", "m1", tags); !errors.Is(err, payments.ErrDuplicatePayment) {
+		t.Fatalf("expected ErrDuplicatePayment, got %v", err)
+	}
+	if _, err := engine.Refund("p1", 5_000); !errors.Is(err, payments.ErrInvalidStateTransition) {
+		t.Fatalf("refund of authorized payment: want invalid transition, got %v", err)
+	}
+	if p, err = engine.Settle("p1"); err != nil || p.Status != payments.PaymentSettled {
+		t.Fatalf("Settle: %+v %v", p, err)
+	}
+	if _, err := engine.Settle("p1"); !errors.Is(err, payments.ErrInvalidStateTransition) {
+		t.Fatalf("double settle: %v", err)
+	}
+	if _, err := engine.Refund("p1", 5_001); !errors.Is(err, payments.ErrInvalidAmount) {
+		t.Fatalf("over-refund: %v", err)
+	}
+	if p, err = engine.Refund("p1", 5_000); err != nil || p.Status != payments.PaymentRefunded {
+		t.Fatalf("Refund: %+v %v", p, err)
+	}
+	if _, err := engine.GetPayment("nope"); !errors.Is(err, payments.ErrPaymentNotFound) {
+		t.Fatalf("GetPayment missing: %v", err)
+	}
+	var tlv string
+	_ = db.QueryRow(`SELECT tlv_payload_hex FROM emv_payments WHERE id='p1'`).Scan(&tlv)
+	if tlv != "" {
+		t.Fatalf("raw TLV (may contain clear PAN) must not be persisted, got %q", tlv)
+	}
+}
+
+func TestPGIntegration_CoDiRepositoryAndService(t *testing.T) {
+	db := openMigratedPG(t)
+	svc := payments.NewCoDiServiceWithRepository(NewSQLCoDiRepository(db))
+
+	if _, err := svc.CreatePaymentRequest("646180123400000007", 11_600, "Tacos", "REF1", time.Minute); err != nil {
+		t.Fatalf("CreatePaymentRequest: %v", err)
+	}
+	conf := &payments.CoDiConfirmation{TrackingKey: "TRK1", SellerCLABE: "646180123400000007", BuyerCLABE: "012180000118359719",
+		AmountCents: 11_600, Status: "APROBADO", BanxicoApprovalCode: "A1", Timestamp: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	if err := svc.ConfirmPayment(conf); err != nil {
+		t.Fatalf("ConfirmPayment: %v", err)
+	}
+
+	// A fresh service on the same DB sees the persisted state.
+	again := payments.NewCoDiServiceWithRepository(NewSQLCoDiRepository(db))
+	req, found, err := again.GetRequest("REF1")
+	if err != nil || !found || req.AmountCents != 11_600 || req.SellerCLABE != "646180123400000007" || req.Expiration.IsZero() {
+		t.Fatalf("GetRequest: %+v %v %v", req, found, err)
+	}
+	got, found, err := again.GetConfirmation("TRK1")
+	if err != nil || !found || got.AmountCents != 11_600 || !got.Timestamp.Equal(conf.Timestamp) {
+		t.Fatalf("GetConfirmation: %+v %v %v", got, found, err)
+	}
+	if _, found, _ := again.GetConfirmation("missing"); found {
+		t.Fatalf("expected missing confirmation")
+	}
+}
+
+func TestPGIntegration_MerchantRepositoryErrorMapping(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	repo := NewSQLMerchantRepository(db)
+
+	if err := repo.SetMerchantCLABE(ctx, "ghost", "646180123400000007"); !errors.Is(err, ErrMerchantNotFound) {
+		t.Fatalf("SetMerchantCLABE ghost: %v", err)
+	}
+	if err := repo.SaveMerchantCSD(ctx, "ghost", []byte(`{}`)); !errors.Is(err, ErrMerchantNotFound) {
+		t.Fatalf("SaveMerchantCSD ghost: %v", err)
+	}
+	if _, err := repo.AddMonthlySalesCents(ctx, "ghost", "2026-11", 100); !errors.Is(err, ErrMerchantNotFound) {
+		t.Fatalf("AddMonthlySalesCents ghost: %v", err)
+	}
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "a", RFC: "AAA010101AAA", Name: "A"})
+	_ = repo.SaveMerchant(ctx, MerchantRecord{ID: "b", RFC: "BBB010101BBB", Name: "B"})
+	if err := repo.SetMerchantCLABE(ctx, "a", "646180123400000007"); err != nil {
+		t.Fatalf("SetMerchantCLABE a: %v", err)
+	}
+	if err := repo.SetMerchantCLABE(ctx, "b", "646180123400000007"); !errors.Is(err, ErrDuplicateCLABE) {
+		t.Fatalf("duplicate CLABE: want ErrDuplicateCLABE, got %v", err)
+	}
+}

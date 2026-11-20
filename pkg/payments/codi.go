@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,9 +179,20 @@ func ValidateCoDiConfirmation(data []byte) (*CoDiConfirmation, error) {
 	return &conf, nil
 }
 
+// CoDiRepository persists CoDi payment requests and confirmations. When a
+// CoDiService has a repository, it is the source of truth (PostgreSQL mode);
+// otherwise state lives in process memory.
+type CoDiRepository interface {
+	SaveRequest(ctx context.Context, req CoDiRequest) error
+	GetRequest(ctx context.Context, reference string) (CoDiRequest, bool, error)
+	SaveConfirmation(ctx context.Context, conf CoDiConfirmation) error
+	GetConfirmation(ctx context.Context, trackingKey string) (CoDiConfirmation, bool, error)
+}
+
 // CoDiService manages CoDi QR payment requests and confirmations safely across goroutines.
 type CoDiService struct {
 	mu            sync.RWMutex
+	repo          CoDiRepository
 	requests      map[string]CoDiRequest
 	confirmations map[string]CoDiConfirmation
 }
@@ -190,6 +202,13 @@ func NewCoDiService() *CoDiService {
 		requests:      make(map[string]CoDiRequest),
 		confirmations: make(map[string]CoDiConfirmation),
 	}
+}
+
+// NewCoDiServiceWithRepository returns a CoDiService backed by repo.
+func NewCoDiServiceWithRepository(repo CoDiRepository) *CoDiService {
+	s := NewCoDiService()
+	s.repo = repo
+	return s
 }
 
 func (s *CoDiService) CreatePaymentRequest(clabe string, amountCents int64, concept string, ref string, ttl time.Duration) (string, error) {
@@ -211,6 +230,13 @@ func (s *CoDiService) CreatePaymentRequest(clabe string, amountCents int64, conc
 		return "", err
 	}
 
+	if s.repo != nil {
+		if err := s.repo.SaveRequest(context.Background(), req); err != nil {
+			return "", err
+		}
+		return qrStr, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests[ref] = req
@@ -229,8 +255,34 @@ func (s *CoDiService) ConfirmPayment(conf *CoDiConfirmation) error {
 		return ErrInvalidCoDiAmount
 	}
 
+	if s.repo != nil {
+		return s.repo.SaveConfirmation(context.Background(), *conf)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.confirmations[conf.TrackingKey] = *conf
 	return nil
+}
+
+// GetRequest returns the CoDi request registered under reference.
+func (s *CoDiService) GetRequest(reference string) (CoDiRequest, bool, error) {
+	if s.repo != nil {
+		return s.repo.GetRequest(context.Background(), reference)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	req, ok := s.requests[reference]
+	return req, ok, nil
+}
+
+// GetConfirmation returns the CoDi confirmation recorded under trackingKey.
+func (s *CoDiService) GetConfirmation(trackingKey string) (CoDiConfirmation, bool, error) {
+	if s.repo != nil {
+		return s.repo.GetConfirmation(context.Background(), trackingKey)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	conf, ok := s.confirmations[trackingKey]
+	return conf, ok, nil
 }

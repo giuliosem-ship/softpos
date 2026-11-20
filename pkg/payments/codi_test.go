@@ -1,6 +1,7 @@
 package payments_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -116,5 +117,57 @@ func TestValidateCoDiConfirmation(t *testing.T) {
 	_, err = payments.ValidateCoDiConfirmation([]byte(rejectedJSON))
 	if !errors.Is(err, payments.ErrInvalidCoDiPayload) {
 		t.Errorf("expected ErrInvalidCoDiPayload for non-approved status, got %v", err)
+	}
+}
+
+type fakeCoDiRepo struct {
+	reqs  map[string]payments.CoDiRequest
+	confs map[string]payments.CoDiConfirmation
+}
+
+func (f *fakeCoDiRepo) SaveRequest(_ context.Context, r payments.CoDiRequest) error {
+	f.reqs[r.Reference] = r
+	return nil
+}
+func (f *fakeCoDiRepo) GetRequest(_ context.Context, ref string) (payments.CoDiRequest, bool, error) {
+	r, ok := f.reqs[ref]
+	return r, ok, nil
+}
+func (f *fakeCoDiRepo) SaveConfirmation(_ context.Context, c payments.CoDiConfirmation) error {
+	f.confs[c.TrackingKey] = c
+	return nil
+}
+func (f *fakeCoDiRepo) GetConfirmation(_ context.Context, k string) (payments.CoDiConfirmation, bool, error) {
+	c, ok := f.confs[k]
+	return c, ok, nil
+}
+
+func TestCoDiService_InMemoryAndRepositoryBacked(t *testing.T) {
+	repo := &fakeCoDiRepo{reqs: map[string]payments.CoDiRequest{}, confs: map[string]payments.CoDiConfirmation{}}
+	for name, svc := range map[string]*payments.CoDiService{
+		"memory": payments.NewCoDiService(),
+		"repo":   payments.NewCoDiServiceWithRepository(repo),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.CreatePaymentRequest("646180123400000007", 500, "c", "R1", time.Minute); err != nil {
+				t.Fatalf("CreatePaymentRequest: %v", err)
+			}
+			if req, ok, err := svc.GetRequest("R1"); err != nil || !ok || req.AmountCents != 500 {
+				t.Fatalf("GetRequest: %+v %v %v", req, ok, err)
+			}
+			conf := &payments.CoDiConfirmation{TrackingKey: "TK1", AmountCents: 500, Status: "APROBADO"}
+			if err := svc.ConfirmPayment(conf); err != nil {
+				t.Fatalf("ConfirmPayment: %v", err)
+			}
+			if c, ok, err := svc.GetConfirmation("TK1"); err != nil || !ok || c.AmountCents != 500 {
+				t.Fatalf("GetConfirmation: %+v %v %v", c, ok, err)
+			}
+			if _, ok, _ := svc.GetConfirmation("nope"); ok {
+				t.Fatalf("expected missing confirmation")
+			}
+		})
+	}
+	if len(repo.reqs) != 1 || len(repo.confs) != 1 {
+		t.Fatalf("repository-backed service did not write through: %d reqs, %d confs", len(repo.reqs), len(repo.confs))
 	}
 }

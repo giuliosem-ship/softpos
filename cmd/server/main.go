@@ -144,8 +144,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
 
+		// Card payment state machine persists in emv_payments (SQLPaymentEngine).
 		sqlEMVRepo := store.NewSQLEMVPaymentRepository(db)
 		server.SetEMVPaymentRepository(sqlEMVRepo)
+
+		server.SetCoDiRepository(store.NewSQLCoDiRepository(db))
 
 		sqlOutboxRepo := store.NewSQLOutboxRepository(db)
 		server.SetOutboxRepository(sqlOutboxRepo)
@@ -177,7 +180,9 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		demoID := "merch_demo_01"
 		demoRFC := "TAQ850101XYZ"
 		demoCLABE := "646180123400000007"
-		_ = server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC)
+		if err := server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC); err != nil {
+			slog.Warn("demo merchant seeding failed", "error", err)
+		}
 
 		// Generate and register demo CSD for instant CFDI 4.0 stamping
 		privDER, certDER, err := generateSelfSignedCSD()

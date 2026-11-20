@@ -32,6 +32,33 @@ migration fails** (previously a migration failure was only a warning).
 - Not yet handled: concurrent runners from several replicas (no advisory lock);
   down migrations are stored but never executed automatically.
 
+## What is persisted (PostgreSQL mode)
+
+`cmd/server.BuildServer` wires these when `DATABASE_URL` is set; without it the
+same interfaces use in-memory implementations.
+
+| State | Interface | SQL implementation | In-memory implementation |
+|---|---|---|---|
+| Ledger accounts / journals / balances | `ledger.Repository` | `store.SQLLedgerRepository` | `ledger.LedgerEngine` maps |
+| Merchants, virtual CLABEs, encrypted CSDs, RESICO monthly sales | `store.MerchantRepository` | `store.SQLMerchantRepository` | `store.MemoryMerchantRepository` |
+| Card payment state machine | `payments.PaymentProcessor` | `store.SQLPaymentEngine` (`emv_payments`) | `payments.PaymentEngine` |
+| CoDi requests / confirmations | `payments.CoDiRepository` | `store.SQLCoDiRepository` (`codi_requests`, `codi_confirmations`) | maps inside `payments.CoDiService` |
+| Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |
+| SAT 69-B blacklist | `identity` repository | `store.SQLBlacklistRepository` | map |
+
+Notes:
+- The raw EMV TLV payload is **not** stored (it can contain the clear PAN /
+  track 2); `emv_payments.tlv_payload_hex` is written empty.
+- Storage errors are no longer swallowed: registering a merchant/CLABE/CSD
+  returns the error (`ErrDuplicateCLABE` -> HTTP 409 on `POST /merchants`), and a
+  failed monthly-sales read returns 503 `MONTHLY_SALES_UNAVAILABLE` instead of
+  silently using 0 (which would pick the wrong RESICO bracket).
+- Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
+  exists but is not wired), disbursement/CEP tracking, SAT ingestion state.
+- Payment state change + ledger posting + monthly sales are separate
+  transactions; a crash between them can leave them inconsistent (F5 gap
+  "errores de posteo ignorados").
+
 ## Environment variables
 
 | Variable | Default | Purpose |

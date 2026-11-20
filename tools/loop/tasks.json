@@ -982,6 +982,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 15/15 packages ok; TEST_DATABASE_URL (embedded-postgres 16 in scratch, outside repo) -run PGIntegration: 7/7 PASS; server binary smoke-tested with DATABASE_URL (healthz + demo merchant 200).",
       "audit_notes": "Real Postgres revealed no SQL bugs in existing repos (ledger, merchants, idempotency, blacklist, emv, rbf, outbox). Pending: no advisory lock for concurrent migration runners; mockpostgres fake driver still compiled into production package (sql_test_driver.go).",
       "priority": 62
+    },
+    {
+      "id": "MVP-02",
+      "component": "api-persistence",
+      "title": "Wire payment, CoDi, merchant, CSD and monthly-sales state to SQL repositories",
+      "status": "completed",
+      "files": {
+        "tests": "cmd/server/restart_integration_test.go, pkg/store/merchant_memory_test.go, pkg/store/postgres_integration_test.go, pkg/payments/codi_test.go, pkg/api/server_test.go",
+        "implementation": "pkg/store/merchant_memory.go, pkg/store/payment_engine_sql.go, pkg/store/codi_store.go, pkg/store/payments_store.go, pkg/store/postgres.go, pkg/payments/emv.go, pkg/payments/codi.go, pkg/api/server.go, pkg/api/handlers_payments.go, pkg/api/handlers_emv_codi.go, cmd/server/main.go, migrations/003_codi_payments.up.sql, migrations/003_codi_payments.down.sql, docs/PERSISTENCE.md"
+      },
+      "spec": "Remove the Server maps (merchants, CLABE indexes, encryptedCSDs, monthlySalesCents) in favour of store.MerchantRepository (SQL or in-memory impl). PaymentEngine behind payments.PaymentProcessor with store.SQLPaymentEngine (insert-only authorize, FOR UPDATE transitions, raw TLV not persisted). CoDiService gets an optional payments.CoDiRepository (SQL: codi_requests/codi_confirmations, migration 003). BuildServer wires all SQL implementations when DATABASE_URL is set. Storage errors propagate (duplicate CLABE 409, monthly sales read failure 503). RegisterMerchantCLABE no longer overwrites an existing merchant profile.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 15/15 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 11/11 PASS incl. TestPGIntegration_StateSurvivesRestart (merchant, CLABE, CSD->CFDI stamp, payments refund/void/duplicate, CoDi rows, monthly sales, ledger balances across rebuild).",
+      "audit_notes": "Integers only (int64 cents). RBF loans still in-memory (pkg/rbf out of scope; SQLRBFRepository unwired). Payment transition, ledger post and monthly sales are not one DB transaction yet. CoDi confirmation upsert keeps previous replay semantics (dedupe needs same-tx ledger posting).",
+      "priority": 63
     }
   ]
 }

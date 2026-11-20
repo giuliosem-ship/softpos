@@ -17,6 +17,7 @@ import (
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/pac"
+	"softpos/pkg/payments"
 	"softpos/pkg/rbf"
 	"softpos/pkg/stp"
 )
@@ -816,3 +817,47 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 	}
 }
 
+
+func TestRegisterMerchantWithCLABE_KeepsProfileAndRejectsDuplicateCLABE(t *testing.T) {
+	server, _ := setupTestServer(t)
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		server.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/merchants", strings.NewReader(body)))
+		return rec
+	}
+	if rec := post(`{"id":"m_clabe_1","rfc":"GARM850101ABC","name":"Fonda Real","is_resico":false,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("register: %d %s", rec.Code, rec.Body.String())
+	}
+	m, ok := server.GetMerchant("m_clabe_1")
+	if !ok || m.Name != "Fonda Real" || m.IsRESICO || m.CLABE != "646180123400000007" {
+		t.Fatalf("CLABE assignment must not overwrite the merchant profile: %+v", m)
+	}
+	if rec := post(`{"id":"m_clabe_2","rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"646180123400000007"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for a CLABE owned by another merchant, got %d %s", rec.Code, rec.Body.String())
+	}
+	if err := server.RegisterMerchantCSD("ghost_merchant", []byte("k"), []byte("c")); err == nil {
+		t.Fatalf("expected error registering a CSD for an unknown merchant")
+	}
+}
+
+type countingProcessor struct {
+	payments.PaymentProcessor
+	authorizes int
+}
+
+func (c *countingProcessor) Authorize(id, merchantID string, emv payments.EMVTags) (*payments.Payment, error) {
+	c.authorizes++
+	return c.PaymentProcessor.Authorize(id, merchantID, emv)
+}
+
+func TestSetPaymentProcessor_IsUsedByHandlers(t *testing.T) {
+	server, _ := setupTestServer(t)
+	proc := &countingProcessor{PaymentProcessor: payments.NewPaymentEngine()}
+	server.SetPaymentProcessor(proc)
+	body := `{"payment_id":"pp_1","merchant_id":"m1","tlv_hex":"9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"}`
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || proc.authorizes != 1 {
+		t.Fatalf("expected injected processor to authorize once, got code=%d count=%d", rec.Code, proc.authorizes)
+	}
+}

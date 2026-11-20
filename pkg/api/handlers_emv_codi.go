@@ -289,7 +289,11 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 	}
 
 	// Calculate RESICO tax split (0 platform fee on Banxico CoDi QR)
-	accSales := s.GetMerchantMonthlySalesCents(merchant.ID)
+	accSales, err := s.merchantMonthlySalesCents(merchant.ID)
+	if err != nil {
+		http.Error(w, `{"error":"MONTHLY_SALES_UNAVAILABLE"}`, http.StatusServiceUnavailable)
+		return
+	}
 	taxSplit, err := fiscal.CalculateResicoTaxSplit(conf.AmountCents, accSales, false)
 	if err != nil {
 		http.Error(w, `{"error":"TAX_SPLIT_FAILED"}`, http.StatusInternalServerError)
@@ -307,7 +311,7 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 	if rbfSweepCents > 0 {
 		_, _ = s.rbfEngine.ApplyRepayment(merchant.ID, rbfSweepCents)
 	}
-	s.AddMerchantMonthlySalesCents(merchant.ID, taxSplit.BaseAmountCents)
+	_ = s.AddMerchantMonthlySalesCents(merchant.ID, taxSplit.BaseAmountCents) // logged on failure
 
 	netAvailable := conf.AmountCents - taxSplit.TotalTaxEscrowCents - rbfSweepCents
 	resp := CoDiWebhookResponse{

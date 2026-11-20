@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
@@ -35,23 +36,18 @@ type Server struct {
 	stpSigner         *stp.STPSigner
 	stpClient         stp.STPClient
 	cepReconciler     *stp.CEPReconciler
-	paymentEngine     *payments.PaymentEngine
+	paymentEngine     payments.PaymentProcessor
 	codiService       *payments.CoDiService
 	pacOrchestrator   pac.PACClient
 	rbfEngine         *rbf.Engine
 	csdVault          *identity.CSDVaultService
 	idempotency       *IdempotencyStore
-	merchantRepo      *store.SQLMerchantRepository
+	merchantRepo      store.MerchantRepository
 	rbfRepo           *store.SQLRBFRepository
 	emvPaymentRepo    *store.SQLEMVPaymentRepository
 	outboxRepo        *store.SQLOutboxRepository
 	staticDir         string
 	mu                sync.RWMutex
-	merchants         map[string]Merchant
-	clabeToMerchant   map[string]string
-	merchantToCLABE   map[string]string
-	encryptedCSDs     map[string]identity.EncryptedCSD
-	monthlySalesCents map[string]int64
 	router            *http.ServeMux
 }
 
@@ -76,11 +72,7 @@ func NewServer(
 		rbfEngine:         rbf.NewEngine(ledgerEngine),
 		csdVault:          vault,
 		idempotency:       NewIdempotencyStore(),
-		merchants:         make(map[string]Merchant),
-		clabeToMerchant:   make(map[string]string),
-		merchantToCLABE:   make(map[string]string),
-		encryptedCSDs:     make(map[string]identity.EncryptedCSD),
-		monthlySalesCents: make(map[string]int64),
+		merchantRepo:      store.NewMemoryMerchantRepository(),
 		router:            http.NewServeMux(),
 	}
 
@@ -104,7 +96,9 @@ func (s *Server) SetPACClient(client pac.PACClient) {
 	s.pacOrchestrator = client
 }
 
-func (s *Server) SetMerchantRepository(repo *store.SQLMerchantRepository) {
+// SetMerchantRepository replaces the default in-memory merchant store (e.g. with
+// store.SQLMerchantRepository when DATABASE_URL is configured). Call at boot.
+func (s *Server) SetMerchantRepository(repo store.MerchantRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.merchantRepo = repo
@@ -116,10 +110,27 @@ func (s *Server) SetRBFRepository(repo *store.SQLRBFRepository) {
 	s.rbfRepo = repo
 }
 
+// SetEMVPaymentRepository makes card payment state persistent: the payment
+// state machine is switched to store.SQLPaymentEngine over repo.
 func (s *Server) SetEMVPaymentRepository(repo *store.SQLEMVPaymentRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emvPaymentRepo = repo
+	s.paymentEngine = store.NewSQLPaymentEngine(repo)
+}
+
+// SetPaymentProcessor overrides the card payment state machine.
+func (s *Server) SetPaymentProcessor(p payments.PaymentProcessor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paymentEngine = p
+}
+
+// SetCoDiRepository makes CoDi requests/confirmations persistent.
+func (s *Server) SetCoDiRepository(repo payments.CoDiRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codiService = payments.NewCoDiServiceWithRepository(repo)
 }
 
 func (s *Server) SetOutboxRepository(repo *store.SQLOutboxRepository) {
@@ -145,41 +156,30 @@ func (s *Server) SetStaticDir(dir string) {
 }
 
 // RegisterMerchantCSD encrypts and stores a merchant's CSD certificate and private key in the envelope-encrypted vault.
+// The merchant must already be registered.
 func (s *Server) RegisterMerchantCSD(merchantID string, keyDER []byte, certDER []byte) error {
 	enc, err := s.csdVault.StoreCSD(merchantID, certDER, keyDER, "vault-managed")
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.encryptedCSDs[merchantID] = enc
-	s.mu.Unlock()
-
-	if s.merchantRepo != nil {
-		encBytes, _ := json.Marshal(enc)
-		_ = s.merchantRepo.SaveMerchantCSD(context.Background(), merchantID, encBytes)
+	encBytes, err := json.Marshal(enc)
+	if err != nil {
+		return fmt.Errorf("failed to encode encrypted CSD: %w", err)
 	}
-	return nil
+	return s.merchantRepo.SaveMerchantCSD(context.Background(), merchantID, encBytes)
 }
 
 func (s *Server) getMerchantCSD(merchantID string) (identity.DecryptedCSD, error) {
-	s.mu.RLock()
-	enc, ok := s.encryptedCSDs[merchantID]
-	s.mu.RUnlock()
-	if !ok && s.merchantRepo != nil {
-		csdBytes, found, err := s.merchantRepo.GetMerchantCSD(context.Background(), merchantID)
-		if err == nil && found {
-			var loaded identity.EncryptedCSD
-			if json.Unmarshal(csdBytes, &loaded) == nil {
-				s.mu.Lock()
-				s.encryptedCSDs[merchantID] = loaded
-				s.mu.Unlock()
-				enc = loaded
-				ok = true
-			}
-		}
+	csdBytes, found, err := s.merchantRepo.GetMerchantCSD(context.Background(), merchantID)
+	if err != nil {
+		return identity.DecryptedCSD{}, err
 	}
-	if !ok {
+	if !found {
 		return identity.DecryptedCSD{}, errors.New("merchant CSD not registered")
+	}
+	var enc identity.EncryptedCSD
+	if err := json.Unmarshal(csdBytes, &enc); err != nil {
+		return identity.DecryptedCSD{}, fmt.Errorf("corrupt encrypted CSD: %w", err)
 	}
 	return s.csdVault.DecryptCSDForSigning(enc)
 }
@@ -201,159 +201,98 @@ func (s *Server) RegisterMerchant(id string, rfc string, name string, isRESICO b
 		return err
 	}
 
-	// Commit phase: persist in memory and optional SQL repository
-	s.mu.Lock()
-	s.merchants[id] = Merchant{
+	// Commit phase: persist the merchant profile in the configured repository
+	return s.merchantRepo.SaveMerchant(context.Background(), store.MerchantRecord{
 		ID:       id,
 		RFC:      rfc,
 		Name:     name,
 		IsRESICO: isRESICO,
-	}
-	s.mu.Unlock()
-
-	if s.merchantRepo != nil {
-		_ = s.merchantRepo.SaveMerchant(context.Background(), store.MerchantRecord{
-			ID:       id,
-			RFC:      rfc,
-			Name:     name,
-			IsRESICO: isRESICO,
-		})
-	}
-	return nil
+	})
 }
 
+// RegisterMerchantCLABE assigns a virtual CLABE to a merchant, registering a
+// placeholder merchant profile only when the merchant does not exist yet.
 func (s *Server) RegisterMerchantCLABE(clabe string, merchantID string, rfc string) error {
-	if err := s.RegisterMerchant(merchantID, rfc, "Merchant "+merchantID, true); err != nil {
-		return err
+	if _, exists := s.GetMerchant(merchantID); !exists {
+		if err := s.RegisterMerchant(merchantID, rfc, "Merchant "+merchantID, true); err != nil {
+			return err
+		}
 	}
+	return s.merchantRepo.SetMerchantCLABE(context.Background(), merchantID, clabe)
+}
 
-	s.mu.Lock()
-	s.clabeToMerchant[clabe] = merchantID
-	s.merchantToCLABE[merchantID] = clabe
-	s.mu.Unlock()
-
-	if s.merchantRepo != nil {
-		_ = s.merchantRepo.SetMerchantCLABE(context.Background(), merchantID, clabe)
+func merchantFromRecord(rec store.MerchantRecord) Merchant {
+	return Merchant{
+		ID:       rec.ID,
+		RFC:      rec.RFC,
+		Name:     rec.Name,
+		IsRESICO: rec.IsRESICO,
+		CLABE:    rec.VirtualCLABE,
 	}
-	return nil
 }
 
 func (s *Server) GetMerchant(id string) (Merchant, bool) {
-	s.mu.RLock()
-	m, ok := s.merchants[id]
-	s.mu.RUnlock()
-	if ok {
-		return m, true
+	rec, found, err := s.merchantRepo.GetMerchant(context.Background(), id)
+	if err != nil {
+		slog.Error("merchant lookup failed", "merchant_id", id, "error", err)
+		return Merchant{}, false
 	}
-
-	if s.merchantRepo != nil {
-		rec, found, err := s.merchantRepo.GetMerchant(context.Background(), id)
-		if err == nil && found {
-			merchant := Merchant{
-				ID:       rec.ID,
-				RFC:      rec.RFC,
-				Name:     rec.Name,
-				IsRESICO: rec.IsRESICO,
-				CLABE:    rec.VirtualCLABE,
-			}
-			s.mu.Lock()
-			s.merchants[id] = merchant
-			if rec.VirtualCLABE != "" {
-				s.clabeToMerchant[rec.VirtualCLABE] = id
-				s.merchantToCLABE[id] = rec.VirtualCLABE
-			}
-			s.mu.Unlock()
-			return merchant, true
-		}
+	if !found {
+		return Merchant{}, false
 	}
-	return Merchant{}, false
+	return merchantFromRecord(rec), true
 }
 
 func (s *Server) GetMerchantByCLABE(clabe string) (Merchant, bool) {
-	s.mu.RLock()
-	mID, ok := s.clabeToMerchant[clabe]
-	var m Merchant
-	if ok {
-		m = s.merchants[mID]
+	rec, found, err := s.merchantRepo.GetMerchantByCLABE(context.Background(), clabe)
+	if err != nil {
+		slog.Error("merchant CLABE lookup failed", "error", err)
+		return Merchant{}, false
 	}
-	s.mu.RUnlock()
-	if ok {
-		return m, true
+	if !found {
+		return Merchant{}, false
 	}
-
-	if s.merchantRepo != nil {
-		rec, found, err := s.merchantRepo.GetMerchantByCLABE(context.Background(), clabe)
-		if err == nil && found {
-			merchant := Merchant{
-				ID:       rec.ID,
-				RFC:      rec.RFC,
-				Name:     rec.Name,
-				IsRESICO: rec.IsRESICO,
-				CLABE:    rec.VirtualCLABE,
-			}
-			s.mu.Lock()
-			s.merchants[rec.ID] = merchant
-			s.clabeToMerchant[clabe] = rec.ID
-			s.merchantToCLABE[rec.ID] = clabe
-			s.mu.Unlock()
-			return merchant, true
-		}
-	}
-	return Merchant{}, false
+	return merchantFromRecord(rec), true
 }
 
 func (s *Server) GetMerchantCLABE(merchantID string) (string, bool) {
-	s.mu.RLock()
-	clabe, ok := s.merchantToCLABE[merchantID]
-	s.mu.RUnlock()
-	if ok {
-		return clabe, true
+	clabe, found, err := s.merchantRepo.GetMerchantCLABE(context.Background(), merchantID)
+	if err != nil {
+		slog.Error("merchant CLABE query failed", "merchant_id", merchantID, "error", err)
+		return "", false
 	}
-
-	if s.merchantRepo != nil {
-		c, found, err := s.merchantRepo.GetMerchantCLABE(context.Background(), merchantID)
-		if err == nil && found {
-			s.mu.Lock()
-			s.merchantToCLABE[merchantID] = c
-			s.clabeToMerchant[c] = merchantID
-			s.mu.Unlock()
-			return c, true
-		}
-	}
-	return "", false
+	return clabe, found
 }
 
-func monthlySalesKey(merchantID string) string {
-	return fmt.Sprintf("%s:%s", merchantID, time.Now().UTC().Format("2006-01"))
+func currentYearMonth() string {
+	return time.Now().UTC().Format("2006-01")
+}
+
+// merchantMonthlySalesCents returns the accumulated base sales for the current month, propagating storage errors.
+func (s *Server) merchantMonthlySalesCents(merchantID string) (int64, error) {
+	return s.merchantRepo.GetMonthlySalesCents(context.Background(), merchantID, currentYearMonth())
 }
 
 // GetMerchantMonthlySalesCents returns the accumulated monthly base sales (in cents) for a merchant in the current calendar month.
 func (s *Server) GetMerchantMonthlySalesCents(merchantID string) int64 {
-	if s.merchantRepo != nil {
-		yearMonth := time.Now().UTC().Format("2006-01")
-		cents, err := s.merchantRepo.GetMonthlySalesCents(context.Background(), merchantID, yearMonth)
-		if err == nil && cents > 0 {
-			return cents
-		}
+	cents, err := s.merchantMonthlySalesCents(merchantID)
+	if err != nil {
+		slog.Error("monthly sales lookup failed", "merchant_id", merchantID, "error", err)
+		return 0
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.monthlySalesCents[monthlySalesKey(merchantID)]
+	return cents
 }
 
 // AddMerchantMonthlySalesCents atomically increments a merchant's accumulated monthly base sales (in cents).
-func (s *Server) AddMerchantMonthlySalesCents(merchantID string, baseAmountCents int64) {
+func (s *Server) AddMerchantMonthlySalesCents(merchantID string, baseAmountCents int64) error {
 	if baseAmountCents <= 0 {
-		return
+		return nil
 	}
-	if s.merchantRepo != nil {
-		yearMonth := time.Now().UTC().Format("2006-01")
-		_, _ = s.merchantRepo.AddMonthlySalesCents(context.Background(), merchantID, yearMonth, baseAmountCents)
+	_, err := s.merchantRepo.AddMonthlySalesCents(context.Background(), merchantID, currentYearMonth(), baseAmountCents)
+	if err != nil {
+		slog.Error("monthly sales increment failed", "merchant_id", merchantID, "amount_cents", baseAmountCents, "error", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := monthlySalesKey(merchantID)
-	s.monthlySalesCents[key] += baseAmountCents
+	return err
 }
 
 func (s *Server) HandleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -410,7 +349,10 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if req.VirtualCLABE != "" {
-		_ = s.RegisterMerchantCLABE(req.VirtualCLABE, req.ID, req.RFC)
+		if err := s.RegisterMerchantCLABE(req.VirtualCLABE, req.ID, req.RFC); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"CLABE_ASSIGNMENT_FAILED","detail":%q}`, err.Error()), http.StatusConflict)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

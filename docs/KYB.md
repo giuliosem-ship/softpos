@@ -118,9 +118,14 @@ KYB_CHECKS_FAILED`, keeps `DRAFT` and stores `reason`:
 
 Then the status becomes `SUBMITTED` (`submitted_at`) and:
 
-1. **SAT 69-B** lookup (`identity.BlacklistService`): `PRESUNTO` /
+1. **SAT 69-B** lookup (`identity.BlacklistService.Lookup`): `PRESUNTO` /
    `DEFINITIVO` → `LISTED` → automatic `REJECTED` (`RFC_LISTED_69B`,
-   `decided_by = system:69b`); otherwise `CLEAR`.
+   `decided_by = system:69b`); `CLEAN` / `DESVIRTUADO` / `SENTENCIA_FAVORABLE`
+   → `CLEAR`. An RFC is only `CLEAR` against a **loaded** list: with no 69-B
+   record loaded (in memory or in `sat_blacklist`), a failed repository
+   lookup or an unrecognized status it stays `UNKNOWN` and the operator
+   checks the RFC by hand (the ingestion worker is not wired yet, see the
+   gap analysis).
 2. **Identity verification** through `kyb.KYCProvider` (liveness + INE +
    face match) over the latest `INE_FRONT`, `INE_BACK` and `SELFIE`
    (decrypted in memory only, 20 s timeout). The result (`PASSED`,

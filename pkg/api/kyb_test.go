@@ -248,6 +248,7 @@ func TestKYB_SubmitToReviewThenApproveAssignsCLABEAndOnboards(t *testing.T) {
 		}
 	}
 
+	s.blacklist.AddEntry("EFO110101XYZ", identity.BlacklistDefinitivo, "500-05-2023-1234") // a loaded 69-B list
 	code, resp, body := kybCall(t, s, m, auth.RoleOwner, http.MethodPost, base+"/submit", nil)
 	if code != http.StatusOK || resp.Status != kyb.StatusInReview || resp.SubmittedAt == "" || !resp.Checks.RFCValid ||
 		!resp.Checks.DocumentsComplete || resp.Checks.List69B != kyb.List69BClear {
@@ -460,5 +461,20 @@ func TestKYB_ApprovalRefusesRFCListed69B(t *testing.T) {
 	}
 	if _, has := s.GetMerchantCLABE(m); has {
 		t.Fatal("no CLABE for a refused approval")
+	}
+}
+
+// Audit (batch G): with no SAT 69-B list ingested (the worker is not wired
+// yet) the submission must not tell the operator the RFC is CLEAR.
+func TestKYB_SubmitWithoutA69BListIsUnknown(t *testing.T) {
+	s, _ := setupTestServer(t)
+	m := "m_kyb_no_69b_list"
+	draftMerchant(t, s, m)
+	base := "/api/v1/merchants/" + m + "/kyb"
+	kybCall(t, s, m, auth.RoleOwner, http.MethodPut, base, kybApplication())
+	uploadAllDocs(t, s, m, nil)
+	code, resp, body := kybCall(t, s, m, auth.RoleOwner, http.MethodPost, base+"/submit", nil)
+	if code != http.StatusOK || resp.Status != kyb.StatusInReview || resp.Checks.List69B != kyb.List69BUnknown {
+		t.Fatalf("submit without a 69-B list: want IN_REVIEW with list_69b UNKNOWN, got %d %s", code, body)
 	}
 }

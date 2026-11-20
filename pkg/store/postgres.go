@@ -307,6 +307,16 @@ func (r *SQLBlacklistRepository) AddEntry(ctx context.Context, entry identity.Bl
 	return nil
 }
 
+// HasEntries reports whether any 69-B record was loaded (an empty table
+// means "not checked", never "clean").
+func (r *SQLBlacklistRepository) HasEntries(ctx context.Context) (bool, error) {
+	var ok bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sat_blacklist)`).Scan(&ok); err != nil {
+		return false, fmt.Errorf("failed to query blacklist presence: %w", err)
+	}
+	return ok, nil
+}
+
 func (r *SQLBlacklistRepository) GetEntry(ctx context.Context, rfc string) (identity.BlacklistEntry, bool, error) {
 	normalizedRFC := strings.ToUpper(strings.TrimSpace(rfc))
 	var status, oficio string

@@ -255,7 +255,7 @@ func Classify69B(status identity.BlacklistStatus) List69B {
 	switch status {
 	case identity.BlacklistPresunto, identity.BlacklistDefinitivo:
 		return List69BListed
-	case identity.BlacklistClean, identity.BlacklistDesvirtuado, identity.BlacklistSentenciaFavorable, "":
+	case identity.BlacklistClean, identity.BlacklistDesvirtuado, identity.BlacklistSentenciaFavorable:
 		return List69BClear
 	}
 	return List69BUnknown

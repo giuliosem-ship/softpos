@@ -434,7 +434,13 @@ func (s *Server) HandleSubmitKYB(w http.ResponseWriter, r *http.Request) {
 	rec.Status, rec.Reason, rec.SubmittedAt, rec.DecidedAt, rec.DecidedBy = kyb.StatusSubmitted, "", &now, nil, ""
 	rec.List69B = kyb.List69BUnknown
 	if s.blacklist != nil {
-		rec.List69B = kyb.Classify69B(s.blacklist.GetStatus(app.RFC))
+		// UNKNOWN (never CLEAR) when no 69-B list is loaded or the lookup
+		// fails: the operator then has to check the RFC by hand.
+		if st, err := s.blacklist.Lookup(ctx, app.RFC); err != nil {
+			slog.Warn("SAT 69-B lookup not conclusive; list_69b UNKNOWN", "merchant_id", tenant, "error", err)
+		} else {
+			rec.List69B = kyb.Classify69B(st)
+		}
 	}
 	if rec, err = repo.UpdateKYB(ctx, rec); err != nil {
 		writeKYBStoreError(w, "submit", err)

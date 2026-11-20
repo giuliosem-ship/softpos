@@ -3,12 +3,27 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 )
 
 // ErrBlacklistedEntity is returned when a merchant is blacklisted under SAT Article 69-B.
 var ErrBlacklistedEntity = errors.New("merchant is blacklisted under SAT Article 69-B")
+
+var (
+	// ErrBlacklistNotLoaded: no SAT 69-B list has been loaded, so an RFC that
+	// is not found is not known to be clean.
+	ErrBlacklistNotLoaded = errors.New("SAT 69-B list not loaded")
+	// ErrBlacklistUnavailable: the 69-B repository lookup failed.
+	ErrBlacklistUnavailable = errors.New("SAT 69-B lookup unavailable")
+)
+
+// blacklistPresence is implemented by repositories that can tell whether any
+// 69-B record was ever loaded (SQL: rows in sat_blacklist).
+type blacklistPresence interface {
+	HasEntries(ctx context.Context) (bool, error)
+}
 
 // BlacklistStatus represents the status of a blacklist entry.
 type BlacklistStatus string
@@ -80,6 +95,41 @@ func (s *BlacklistService) GetStatus(rfc string) BlacklistStatus {
 		return BlacklistClean
 	}
 	return entry.Status
+}
+
+// Lookup is the authoritative 69-B status of rfc for decisions (KYB): unlike
+// GetStatus it never reports BlacklistClean for an RFC it could not check.
+// It returns ErrBlacklistUnavailable when the repository fails and
+// ErrBlacklistNotLoaded when the RFC is absent and no list was ever loaded.
+func (s *BlacklistService) Lookup(ctx context.Context, rfc string) (BlacklistStatus, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	normalizedRFC := strings.ToUpper(strings.TrimSpace(rfc))
+	if s.repo != nil {
+		entry, exists, err := s.repo.GetEntry(ctx, normalizedRFC)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrBlacklistUnavailable, err)
+		}
+		if exists {
+			return entry.Status, nil
+		}
+	}
+	if entry, exists := s.entries[normalizedRFC]; exists {
+		return entry.Status, nil
+	}
+	if len(s.entries) > 0 {
+		return BlacklistClean, nil
+	}
+	if p, ok := s.repo.(blacklistPresence); ok {
+		loaded, err := p.HasEntries(ctx)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrBlacklistUnavailable, err)
+		}
+		if loaded {
+			return BlacklistClean, nil
+		}
+	}
+	return "", ErrBlacklistNotLoaded
 }
 
 // GetEntry returns the blacklist entry for a given RFC.

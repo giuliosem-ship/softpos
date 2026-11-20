@@ -1,6 +1,8 @@
 package identity
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 )
@@ -83,4 +85,34 @@ func TestBlacklistConcurrency(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+type failingBlacklistRepo struct{}
+
+func (failingBlacklistRepo) AddEntry(context.Context, BlacklistEntry) error { return nil }
+func (failingBlacklistRepo) GetEntry(context.Context, string) (BlacklistEntry, bool, error) {
+	return BlacklistEntry{}, false, errors.New("db down")
+}
+
+// Audit (batch G): an RFC absent from a list that was never loaded, or a
+// lookup that failed, is not "clean".
+func TestBlacklistLookupIsNotCleanWithoutAList(t *testing.T) {
+	ctx := context.Background()
+	s := NewBlacklistService()
+	if _, err := s.Lookup(ctx, "GARM850101ABC"); !errors.Is(err, ErrBlacklistNotLoaded) {
+		t.Fatalf("empty list: want ErrBlacklistNotLoaded, got %v", err)
+	}
+	s.AddEntry("EFO110101XYZ", BlacklistDefinitivo, "500-05-2023-1234")
+	if st, err := s.Lookup(ctx, "GARM850101ABC"); err != nil || st != BlacklistClean {
+		t.Fatalf("loaded list, absent RFC: %v %v", st, err)
+	}
+	if st, err := s.Lookup(ctx, " efo110101xyz "); err != nil || st != BlacklistDefinitivo {
+		t.Fatalf("listed RFC: %v %v", st, err)
+	}
+	f := NewBlacklistService()
+	f.SetRepository(failingBlacklistRepo{})
+	f.AddEntry("EFO110101XYZ", BlacklistDefinitivo, "x")
+	if _, err := f.Lookup(ctx, "GARM850101ABC"); !errors.Is(err, ErrBlacklistUnavailable) {
+		t.Fatalf("repository failure: want ErrBlacklistUnavailable, got %v", err)
+	}
 }

@@ -78,6 +78,9 @@ func TestClassify69B(t *testing.T) {
 	if Classify69B(identity.BlacklistDesvirtuado) != List69BClear || Classify69B(identity.BlacklistClean) != List69BClear {
 		t.Fatal("clear statuses")
 	}
+	if Classify69B("") != List69BUnknown || Classify69B("SOMETHING_NEW") != List69BUnknown {
+		t.Fatal("an unrecognized status is not clear")
+	}
 }
 
 func TestMockKYCProvider(t *testing.T) {

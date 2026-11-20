@@ -197,12 +197,23 @@ func TestPGIntegration_IdempotencyAndBlacklist(t *testing.T) {
 	}
 
 	bl := NewSQLBlacklistRepository(db)
+	if has, err := bl.HasEntries(ctx); err != nil || has {
+		t.Fatalf("HasEntries on an empty list: %v %v", has, err)
+	}
+	svc := identity.NewBlacklistService()
+	svc.SetRepository(bl)
+	if _, err := svc.Lookup(ctx, "GARM850101ABC"); !errors.Is(err, identity.ErrBlacklistNotLoaded) {
+		t.Fatalf("Lookup with an empty table: want ErrBlacklistNotLoaded, got %v", err)
+	}
 	if err := bl.AddEntry(ctx, identity.BlacklistEntry{RFC: "xxx010101xxx", Status: identity.BlacklistDefinitivo, OficioSAT: "500-05"}); err != nil {
 		t.Fatalf("AddEntry: %v", err)
 	}
 	entry, found, err := bl.GetEntry(ctx, "XXX010101XXX")
 	if err != nil || !found || entry.Status != identity.BlacklistDefinitivo {
 		t.Fatalf("GetEntry: %+v %v %v", entry, found, err)
+	}
+	if st, err := svc.Lookup(ctx, "GARM850101ABC"); err != nil || st != identity.BlacklistClean {
+		t.Fatalf("Lookup with a loaded table: %v %v", st, err)
 	}
 }
 

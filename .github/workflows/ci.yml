@@ -77,7 +77,7 @@ jobs:
         run: node --test web/pos/softpos_sdk.test.js
 
   kotlin:
-    name: Kotlin module tests (JDK 17)
+    name: Android app (unit tests + lint + debug APK, JDK 17)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -88,10 +88,15 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # ubuntu-latest ships an Android SDK (ANDROID_HOME); this installs the
+      # licenses/platform the build needs (compileSdk 35, build-tools 35.0.0).
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
       # Validates gradle-wrapper.jar against the official checksums and caches.
       - uses: gradle/actions/setup-gradle@v4
-      - name: Gradle test
-        run: ./gradlew --no-daemon :app:test
+      - name: Unit tests, lint and debug APK
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
   docker:
     name: Docker image build

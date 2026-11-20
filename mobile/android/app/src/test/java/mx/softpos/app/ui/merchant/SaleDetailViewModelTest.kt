@@ -73,6 +73,8 @@ class SaleDetailViewModelTest {
         backend.seedCaptured("cp_9", 10_000)
         backend.refundErrors += ApiResult.Error(NETWORK_ERROR_STATUS, NETWORK_ERROR_CODE, "")
         backend.refundErrors += ApiResult.Error(502, "ACQUIRER_UNAVAILABLE", "")
+        // Stored and sent to the processor, then the state write failed: outcome unknown.
+        backend.refundErrors += ApiResult.Error(500, "CARD_REFUND_STORE_FAILED", "")
         backend.refundErrors += ApiResult.Error(502, "ACQUIRER_REJECTED", "")
         val seen = mutableListOf<String>()
         val api = object : mx.softpos.app.payments.CardPaymentsApi by backend {
@@ -83,9 +85,10 @@ class SaleDetailViewModelTest {
         vm.load()
         vm.refundAll(); assertEquals(RefundError.NETWORK, vm.state.value.refundError)
         vm.refundAll(); assertEquals(RefundError.ACQUIRER_UNAVAILABLE, vm.state.value.refundError)
+        vm.refundAll(); assertEquals(RefundError.UNKNOWN, vm.state.value.refundError)
         vm.refundAll(); assertEquals(RefundError.ACQUIRER_REJECTED, vm.state.value.refundError)
         vm.refundAll()
-        assertEquals(listOf("rk_1", "rk_1", "rk_1", "rk_2"), seen)
+        assertEquals(listOf("rk_1", "rk_1", "rk_1", "rk_1", "rk_2"), seen)
         // No simulator (release-like): the request stays pending until the processor confirms.
         assertEquals(10_000L, vm.state.value.lastRefund?.amountCents)
         assertEquals(0L, vm.state.value.payment?.refundedCents)

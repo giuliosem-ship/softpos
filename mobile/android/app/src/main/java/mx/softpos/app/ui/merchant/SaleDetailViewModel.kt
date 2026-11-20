@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import mx.softpos.app.core.money.MoneyParser
 import mx.softpos.app.core.network.ApiResult
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
+import mx.softpos.app.core.network.isUnknownOutcome
 import mx.softpos.app.payments.CardPayment
 import mx.softpos.app.payments.CardPaymentsApi
 import mx.softpos.app.payments.CardRefund
@@ -47,9 +48,9 @@ data class SaleDetailUiState(
  * Sale detail: reads the card payment (captured / refunded / chargeback
  * amounts, settlement) and lets the owner refund it in full or in part via
  * `POST /card-payments/{id}/refunds`. The `Idempotency-Key` is stable per
- * refund attempt and amount: kept while the outcome is unknown (network,
- * `502 ACQUIRER_UNAVAILABLE`) so a retry replays the same request, dropped
- * once the backend answered.
+ * refund attempt and amount: kept while the outcome is unknown (network, 5xx
+ * other than `ACQUIRER_REJECTED`) so a retry replays the same request,
+ * dropped once the backend answered definitively.
  */
 class SaleDetailViewModel(
     sale: Sale?,
@@ -113,9 +114,9 @@ class SaleDetailViewModel(
                     }
                 }
                 is ApiResult.Error -> {
-                    val unknownOutcome = r.statusCode == NETWORK_ERROR_STATUS ||
-                        (r.statusCode == 502 && r.errorCode == "ACQUIRER_UNAVAILABLE")
-                    if (!unknownOutcome) refundKey = null
+                    // 500 CARD_REFUND_STORE_FAILED / 504 may follow a refund the processor
+                    // accepted: a new key would send a second refund.
+                    if (!r.isUnknownOutcome()) refundKey = null
                     _state.update { it.copy(isRefunding = false, refundError = r.toRefundError()) }
                 }
             }

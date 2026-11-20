@@ -25,6 +25,10 @@ class FakeCardBackend : CardPaymentsApi, DevCardSimulator {
     val refundErrors = ArrayDeque<ApiResult.Error>()
     /** When false, [simulate] fails like a non-DEV backend (404). */
     var devMode = true
+    /** Rewrites the intent response (e.g. a replay of a tapped intent has no client_secret). */
+    var intentResponse: (CardPaymentIntent) -> CardPaymentIntent = { it }
+    /** Called on every [getPayment] (e.g. to advance a fake clock). */
+    var onGet: () -> Unit = {}
 
     @Synchronized
     override fun createIntent(idempotencyKey: String, amountCents: Long, reference: String?): ApiResult<CardPaymentIntent> {
@@ -32,12 +36,12 @@ class FakeCardBackend : CardPaymentsApi, DevCardSimulator {
         intentErrors.removeFirstOrNull()?.let { return it }
         byKey[idempotencyKey]?.let { (id, amount) ->
             if (amount != amountCents) return ApiResult.Error(409, "IDEMPOTENCY_KEY_REUSED", "")
-            return ApiResult.Success(intentOf(payments.getValue(id)), 200)
+            return ApiResult.Success(intentResponse(intentOf(payments.getValue(id))), 200)
         }
         val id = "cp_${payments.size + 1}"
         payments[id] = CardPayment(id, CardPaymentStatus.CREATED, amountCents, providerPaymentId = "mock_pi_$id")
         byKey[idempotencyKey] = id to amountCents
-        return ApiResult.Success(intentOf(payments.getValue(id)), 201)
+        return ApiResult.Success(intentResponse(intentOf(payments.getValue(id))), 201)
     }
 
     private fun intentOf(p: CardPayment) = CardPaymentIntent(
@@ -48,6 +52,7 @@ class FakeCardBackend : CardPaymentsApi, DevCardSimulator {
     @Synchronized
     override fun getPayment(id: String): ApiResult<CardPayment> {
         getCalls++
+        onGet()
         return payments[id]?.let { ApiResult.Success(it, 200) } ?: ApiResult.Error(404, "CARD_PAYMENT_NOT_FOUND", "")
     }
 

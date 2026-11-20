@@ -66,3 +66,15 @@ internal fun parseErrorCode(body: String, status: Int): String =
     } catch (_: Exception) {
         null
     } ?: "HTTP_$status"
+
+/**
+ * True when a money request (`Idempotency-Key`) may have been applied even
+ * though it failed: no response, an unparsable one, or any 5xx except the
+ * definitive ones. The retry must reuse the same key so the backend replays
+ * the stored request instead of creating a second intent / refund.
+ */
+fun ApiResult.Error.isUnknownOutcome(): Boolean =
+    statusCode == NETWORK_ERROR_STATUS || (statusCode >= 500 && errorCode !in DEFINITIVE_5XX)
+
+/** 5xx codes the backend returns before storing anything, or after a definitive provider rejection. */
+private val DEFINITIVE_5XX = setOf("ACQUIRER_REJECTED", "ACQUIRER_NOT_CONFIGURED")

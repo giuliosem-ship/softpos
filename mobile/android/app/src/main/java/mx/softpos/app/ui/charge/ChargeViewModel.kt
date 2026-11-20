@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import mx.softpos.app.core.network.ApiResult
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
+import mx.softpos.app.core.network.isUnknownOutcome
 import mx.softpos.app.merchant.MerchantApi
 import mx.softpos.app.merchant.MerchantProfile
 import mx.softpos.app.payments.CardPayment
@@ -100,9 +101,10 @@ object SpeiQrPayload {
  * Card flow (docs/ACQUIRER_INTEGRATION.md §2): intent with a per-attempt
  * `Idempotency-Key` → processor SDK with `provider_payment_id` +
  * `client_secret` → poll `GET /card-payments/{id}` until `final`. The key is
- * kept while the outcome of the intent call is unknown (network error, `502
- * ACQUIRER_UNAVAILABLE`), so the retry returns the same intent instead of a
- * second charge; it is dropped once the attempt is settled one way or another.
+ * kept while the outcome of the intent call is unknown (network error, any
+ * 5xx but `ACQUIRER_REJECTED` / `ACQUIRER_NOT_CONFIGURED`), so the retry
+ * returns the same intent instead of a second one; it is dropped once the
+ * attempt is settled one way or another.
  */
 class ChargeViewModel(
     private val cardApi: CardPaymentsApi,
@@ -155,7 +157,7 @@ class ChargeViewModel(
             val intent = when (val r = withContext(io) { cardApi.createIntent(key, amount) }) {
                 is ApiResult.Success -> r.data
                 is ApiResult.Error -> {
-                    if (!r.isRetryableWithSameKey()) attemptKey = null
+                    if (!r.isUnknownOutcome()) attemptKey = null
                     return@launch backToEntering(r.toChargeError())
                 }
             }
@@ -266,10 +268,6 @@ class ChargeViewModel(
     private fun fail(error: ChargeError) = _state.update { it.copy(error = error) }
     private fun backToEntering(error: ChargeError?) =
         _state.update { it.copy(step = ChargeStep.Entering, error = error, declineCode = null) }
-
-    /** Outcome unknown: the retry must reuse the key so the backend replays the same intent. */
-    private fun ApiResult.Error.isRetryableWithSameKey(): Boolean =
-        statusCode == NETWORK_ERROR_STATUS || (statusCode == 502 && errorCode == "ACQUIRER_UNAVAILABLE")
 
     private fun ApiResult.Error.toChargeError(): ChargeError = when {
         statusCode == NETWORK_ERROR_STATUS -> ChargeError.NETWORK

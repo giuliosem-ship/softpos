@@ -147,7 +147,7 @@ class ChargeViewModelTest {
     fun nonRetryableErrorsDropTheKey() = runTest(dispatcher) {
         backend.intentErrors += ApiResult.Error(503, "ACQUIRER_NOT_CONFIGURED", "")
         backend.intentErrors += ApiResult.Error(409, "IDEMPOTENCY_KEY_REUSED", "")
-        backend.intentErrors += ApiResult.Error(403, "MERCHANT_KYB_NOT_APPROVED", "")
+        backend.intentErrors += ApiResult.Error(403, "MERCHANT_NOT_APPROVED", "")
         val vm = vm()
         vm.type(1, 0, 0)
         vm.chargeWithCard(); advanceUntilIdle()
@@ -157,6 +157,21 @@ class ChargeViewModelTest {
         vm.chargeWithCard(); advanceUntilIdle()
         assertEquals(ChargeError.NOT_APPROVED, vm.state.value.error)
         assertEquals(listOf("key_1", "key_2", "key_3"), backend.intentKeys)
+    }
+
+    @Test
+    fun serverErrorsAndGatewayTimeoutsKeepTheKey() = runTest(dispatcher) {
+        // 500 CARD_PAYMENT_STORE_FAILED can follow a stored intent; a proxy 504 has no
+        // body at all. Either way the outcome is unknown: a new key could create a second intent.
+        backend.intentErrors += ApiResult.Error(500, "CARD_PAYMENT_STORE_FAILED", "")
+        backend.intentErrors += ApiResult.Error(504, "HTTP_504", "")
+        backend.intentErrors += ApiResult.Error(502, "ACQUIRER_REJECTED", "")
+        val vm = vm()
+        vm.type(4, 0, 0)
+        repeat(3) { vm.chargeWithCard(); advanceUntilIdle() }
+        vm.chargeWithCard(); advanceUntilIdle()
+        assertEquals(listOf("key_1", "key_1", "key_1", "key_2"), backend.intentKeys, "only the definitive rejection drops it")
+        assertTrue(vm.state.value.step is ChargeStep.CardApproved)
     }
 
     @Test

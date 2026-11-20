@@ -246,6 +246,47 @@ func TestPGIntegration_AcquirerWebhooksConcurrentDuplicatesAndOutOfOrder(t *test
 	if got := availableBalance(t, srv, tok, merchantID); got != afterRefund-3000 {
 		t.Fatalf("chargeback must debit once: %d, want %d", got, afterRefund-3000)
 	}
+
+	// Refund + chargeback never exceed the capture (20000 - 5000 - 3000 left).
+	over := acquirer.Event{ID: "evt_pg_rf_over", Type: acquirer.EventRefunded, ProviderPaymentID: intent.ProviderPaymentID, RefundID: "re_pg_over", AmountCents: 12001}
+	if c := deliverSigned(t, srv, over); c != http.StatusUnprocessableEntity {
+		t.Fatalf("refund above capture - chargebacks: want 422, got %d", c)
+	}
+}
+
+// TestPGIntegration_RefundWebhookMatchedByKernoRefundID: the provider refund
+// call times out (no provider refund id stored); the webhook echoing
+// kerno_refund_id completes the request and releases its hold.
+func TestPGIntegration_RefundWebhookMatchedByKernoRefundID(t *testing.T) {
+	srv, _, tok, db := buildCardServerDB(t, func(c *Config) { c.AcquirerWebhookSecret = pgAcquirerSecret })
+	mock := srv.AcquirerProvider().(*acquirer.MockProvider)
+	_, intent := cardIntent(t, srv, tok, "pg-rf-kid", 20000)
+	for _, e := range mock.SimulateTap(intent.ProviderPaymentID, intent.CardPaymentID, 20000) {
+		if c := deliverSigned(t, srv, e); c != http.StatusOK {
+			t.Fatalf("tap %s: %d", e.Type, c)
+		}
+	}
+	amount := int64(1000 + acquirer.MockTimeoutSuffix)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/card-payments/"+intent.CardPaymentID+"/refunds", bytes.NewReader([]byte(`{"amount_cents":`+strconv.FormatInt(amount, 10)+`}`)))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Idempotency-Key", "pg-rf-kid-1")
+	rec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("refund timeout: %d %s", rec.Code, rec.Body.String())
+	}
+	var refundID string
+	if err := db.QueryRow(`SELECT id FROM card_payment_refunds WHERE card_payment_id = $1 AND status = 'REQUESTED' AND provider_refund_id IS NULL`, intent.CardPaymentID).Scan(&refundID); err != nil {
+		t.Fatal(err)
+	}
+	ev := acquirer.Event{ID: "evt_pg_rf_kid", Type: acquirer.EventRefunded, ProviderPaymentID: intent.ProviderPaymentID,
+		RefundID: "re_pg_kid", KernoRefundID: refundID, AmountCents: amount}
+	if c := deliverSigned(t, srv, ev); c != http.StatusOK {
+		t.Fatalf("refund webhook: %d", c)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM card_payment_refunds WHERE id = $1 AND status = 'SUCCEEDED' AND provider_refund_id = 're_pg_kid'`, refundID); n != 1 {
+		t.Fatal("refund request not completed by kerno_refund_id")
+	}
 }
 
 // TestPGIntegration_AcquirerPayoutReconciliation: processor payouts on real
@@ -349,6 +390,22 @@ func TestPGIntegration_AcquirerPayoutReconciliation(t *testing.T) {
 	}
 	if n := countRows(t, db, `SELECT COUNT(*) FROM acquirer_reconciliation_items WHERE kind = 'NOT_SETTLED' AND card_payment_id = $1`, d.CardPaymentID); n != 1 {
 		t.Fatalf("NOT_SETTLED rows: %d", n)
+	}
+
+	// Already flagged captures are not listed again (no batch starvation).
+	if list, err := store.NewSQLMoneyStore(db).ListUnsettledCaptures(context.Background(), "2099-01-01", 10); err != nil || len(list) != 0 {
+		t.Fatalf("flagged capture listed again: %d %v", len(list), err)
+	}
+	// Resolving records the operator (audit trail).
+	var itemID int64
+	if err := db.QueryRow(`SELECT id FROM acquirer_reconciliation_items WHERE kind = 'NOT_SETTLED' AND card_payment_id = $1`, d.CardPaymentID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doJSON(t, srv, opTok, http.MethodPost, "/api/v1/acquirer/reconciliation/"+strconv.FormatInt(itemID, 10)+"/resolve", map[string]any{"note": "paid late"}); rec.Code != http.StatusOK {
+		t.Fatalf("resolve: %d %s", rec.Code, rec.Body.String())
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM acquirer_reconciliation_items WHERE id = $1 AND status = 'RESOLVED' AND resolved_by = 'usr_ops'`, itemID); n != 1 {
+		t.Fatalf("resolved_by not stored")
 	}
 
 	// The worker wiring starts and stops with its context.

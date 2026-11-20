@@ -11,6 +11,13 @@ import mx.softpos.app.core.network.toJsonBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/** One `(user, merchant, role)` link (`merchant_memberships`). */
+@Serializable
+data class MembershipInfo(
+    @SerialName("merchant_id") val merchantId: String,
+    @SerialName("role") val role: String = ""
+)
+
 /** Token pair returned by `/otp/verify` and `/refresh` (docs/AUTH.md). */
 @Serializable
 data class TokenPair(
@@ -21,7 +28,8 @@ data class TokenPair(
     @SerialName("refresh_expires_in") val refreshExpiresInSeconds: Long = 0L,
     @SerialName("user_id") val userId: String = "",
     @SerialName("merchant_id") val merchantId: String = "",
-    @SerialName("role") val role: String = ""
+    @SerialName("role") val role: String = "",
+    @SerialName("memberships") val memberships: List<MembershipInfo> = emptyList()
 )
 
 /**

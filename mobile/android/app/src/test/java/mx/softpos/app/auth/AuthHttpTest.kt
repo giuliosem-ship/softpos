@@ -46,6 +46,22 @@ class AuthHttpTest {
     }
 
     @Test
+    fun refreshSwitchesMerchantAndReadsMemberships() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"access_token":"at_3","expires_in":900,"refresh_token":"rt_3","user_id":"usr_1",
+                   "merchant_id":"mer_2","role":"cashier","memberships":[
+                   {"user_id":"usr_1","merchant_id":"mer_1","role":"owner","created_at":"2026-01-01T00:00:00Z"},
+                   {"user_id":"usr_1","merchant_id":"mer_2","role":"cashier","created_at":"2026-01-01T00:00:00Z"}]}"""
+            )
+        )
+        val pair = (HttpAuthApi(baseUrl(), plain).refresh("rt_2", "mer_2") as ApiResult.Success).data
+        assertEquals(listOf(MembershipInfo("mer_1", "owner"), MembershipInfo("mer_2", "cashier")), pair.memberships)
+        assertEquals(2, pair.toStoredSession(0L).memberships.size)
+        assertEquals("""{"refresh_token":"rt_2","merchant_id":"mer_2"}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test
     fun backendErrorCodeIsSurfaced() {
         server.enqueue(MockResponse().setResponseCode(429).setBody("""{"error":"OTP_RATE_LIMITED"}"""))
         val r = HttpAuthApi(baseUrl(), plain).requestOtp("+525512345678") as ApiResult.Error

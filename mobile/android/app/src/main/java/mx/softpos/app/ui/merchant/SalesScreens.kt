@@ -7,6 +7,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.KeyboardType
+import mx.softpos.app.core.money.MoneyParser
+import mx.softpos.app.payments.CardPayment
+import mx.softpos.app.payments.CardPaymentStatus
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
@@ -63,21 +78,114 @@ fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
 }
 
 @Composable
-fun SaleDetailScreen(sale: Sale?, onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.load() }
+    var confirm by remember { mutableStateOf<RefundChoice?>(null) }
+
+    Column(
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        val sale = state.sale
         if (sale == null) {
             Text(stringResource(R.string.sale_not_found))
         } else {
+            val status = state.payment?.status ?: sale.status
             InfoCard(
                 title = stringResource(R.string.sale_amount),
                 value = MoneyFormatter.formatMxn(sale.amountCents),
-                caption = stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))
+                caption = stringResource(sale.kindRes()) + " · " + stringResource(statusRes(status))
             )
             Text(stringResource(R.string.sale_id, sale.id))
             if (sale.createdAt.isNotBlank()) Text(stringResource(R.string.sale_date, sale.createdAt))
         }
+        if (state.isLoading) CircularProgressIndicator()
+        state.error?.let { LoadErrorMessage(it, viewModel::load) }
+        state.payment?.let { p -> CardPaymentDetail(p) }
+        state.lastRefund?.let {
+            Text(stringResource(R.string.refund_requested, MoneyFormatter.formatMxn(it.amountCents)))
+        }
+        if (state.canRefund) {
+            RefundSection(state, viewModel, onConfirm = { confirm = it })
+        }
         TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
     }
+
+    confirm?.let { choice ->
+        val amount = when (choice) {
+            RefundChoice.ALL -> state.refundableCents
+            RefundChoice.PARTIAL -> MoneyParser.parseMxnToCents(state.refundInput) ?: 0L
+        }
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text(stringResource(R.string.refund_confirm_title)) },
+            text = { Text(stringResource(R.string.refund_confirm_text, MoneyFormatter.formatMxn(amount))) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = null
+                    if (choice == RefundChoice.ALL) viewModel.refundAll() else viewModel.refundPartial()
+                }) { Text(stringResource(R.string.refund_confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text(stringResource(R.string.action_back)) } }
+        )
+    }
+}
+
+private enum class RefundChoice { ALL, PARTIAL }
+
+@Composable
+private fun CardPaymentDetail(p: CardPayment) {
+    if (p.capturedCents > 0L) Text(stringResource(R.string.sale_captured, MoneyFormatter.formatMxn(p.capturedCents)))
+    if (p.refundedCents > 0L) Text(stringResource(R.string.sale_refunded, MoneyFormatter.formatMxn(p.refundedCents)))
+    if (p.status == CardPaymentStatus.CHARGEBACK) {
+        Text(
+            stringResource(R.string.sale_chargeback_open, MoneyFormatter.formatMxn(p.chargebackCents)),
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+    if (p.status == CardPaymentStatus.CHARGEBACK_REVERSED) Text(stringResource(R.string.sale_chargeback_reversed))
+    if (p.declineCode.isNotBlank()) Text(stringResource(R.string.sale_decline_code, p.declineCode))
+    p.settlement?.let {
+        Text(stringResource(R.string.sale_fee, MoneyFormatter.formatMxn(it.platformFeeCents)))
+        Text(stringResource(R.string.sale_tax_set_aside, MoneyFormatter.formatMxn(it.taxEscrowCents)))
+        Text(stringResource(R.string.sale_net, MoneyFormatter.formatMxn(it.netAvailableCents)))
+    }
+}
+
+@Composable
+private fun RefundSection(state: SaleDetailUiState, vm: SaleDetailViewModel, onConfirm: (RefundChoice) -> Unit) {
+    Text(stringResource(R.string.refund_title), style = MaterialTheme.typography.titleMedium)
+    Text(stringResource(R.string.refund_refundable, MoneyFormatter.formatMxn(state.refundableCents)))
+    Button(onClick = { onConfirm(RefundChoice.ALL) }, enabled = !state.isRefunding, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.refund_all))
+    }
+    OutlinedTextField(
+        value = state.refundInput,
+        onValueChange = vm::onRefundInput,
+        label = { Text(stringResource(R.string.refund_amount_label)) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedButton(
+        onClick = { onConfirm(RefundChoice.PARTIAL) },
+        enabled = !state.isRefunding && state.refundInput.isNotBlank(),
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(stringResource(R.string.refund_partial)) }
+    if (state.isRefunding) CircularProgressIndicator()
+    state.refundError?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error) }
+}
+
+private fun RefundError.messageRes(): Int = when (this) {
+    RefundError.INVALID_AMOUNT -> R.string.refund_error_invalid_amount
+    RefundError.EXCEEDS_REMAINING -> R.string.refund_error_exceeds
+    RefundError.NOT_ALLOWED -> R.string.refund_error_not_allowed
+    RefundError.ACQUIRER_UNAVAILABLE -> R.string.refund_error_acquirer_unavailable
+    RefundError.ACQUIRER_REJECTED -> R.string.refund_error_rejected
+    RefundError.IDEMPOTENCY_CONFLICT -> R.string.charge_error_idempotency
+    RefundError.NETWORK -> R.string.error_network
+    RefundError.UNKNOWN -> R.string.error_unknown
 }
 
 internal fun Sale.kindRes(): Int = when (kind.lowercase()) {

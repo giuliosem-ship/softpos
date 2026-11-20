@@ -14,6 +14,7 @@ class FakeAuthApi : AuthApi {
     val logoutTokens = mutableListOf<String>()
     val otpPhones = mutableListOf<String>()
     var lastVerify: Pair<String, String>? = null
+    val refreshMerchantIds = mutableListOf<String?>()
 
     override fun requestOtp(phoneE164: String): ApiResult<Unit> {
         otpPhones += phoneE164
@@ -27,6 +28,7 @@ class FakeAuthApi : AuthApi {
 
     override fun refresh(refreshToken: String, merchantId: String?): ApiResult<TokenPair> {
         refreshCalls.incrementAndGet()
+        synchronized(refreshMerchantIds) { refreshMerchantIds += merchantId }
         if (refreshDelayMs > 0) Thread.sleep(refreshDelayMs)
         return refreshResult(refreshToken)
     }

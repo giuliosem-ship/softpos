@@ -43,8 +43,11 @@ CI (`.github/workflows/ci.yml`, job `kotlin`) runs
 - `MainActivity` → `KernoApp` (Compose). FLAG_SECURE is set app-wide through
   `WindowSecurityGuard` (Android adapters in `ui/security/AndroidWindowSecurity.kt`).
 - Manual DI: `AppContainer` (one per process, owned by `KernoApplication`).
-- Navigation (navigation-compose): no session → login; session → bottom bar
-  *Inicio* (balances), *Cobrar*, *Ventas* (list + detail), *Perfil* (profile, CLABE, logout).
+- Navigation (navigation-compose): no session → login; session without a
+  merchant and several memberships → merchant picker; otherwise bottom bar
+  *Inicio* (balances), *Cobrar*, *Ventas* (list + detail with refunds),
+  *Perfil* (profile, CLABE, switch merchant, logout). The merchant app is
+  keyed on user + merchant, so switching tenant rebuilds every ViewModel.
 - ViewModels are `androidx.lifecycle.ViewModel`s with injected APIs and an IO
   dispatcher, unit-tested with fakes (`src/test`). API clients are blocking
   OkHttp + kotlinx.serialization, called on the IO dispatcher.
@@ -100,6 +103,34 @@ The list asks for the next page (`before=next_cursor`) when its end is
 reached; `null` = last page; duplicates across pages are dropped; *Actualizar*
 starts over from the first page.
 
+### Refunds and sale detail (`docs/ACQUIRER_INTEGRATION.md` §4)
+
+The detail of a card sale reads `GET /api/v1/card-payments/{card_payment_id}`
+and shows captured / refunded / chargeback amounts, the settlement split
+(fee, tax set-aside, net) and the decline code. Owners (session role
+`owner`; hidden for cashiers/operators, the backend enforces it too) can
+refund the whole refundable remainder (`{}`) or a typed amount
+(`MoneyParser`, Long cents, ≤ 2 decimals, ≤ refundable), after a
+confirmation dialog: `POST /api/v1/card-payments/{id}/refunds` with an
+`Idempotency-Key` stable per attempt and amount (kept on network errors and
+`502 ACQUIRER_UNAVAILABLE`, dropped on any other answer). The `202 PENDING`
+request is shown as such; the money moves when the processor's
+`payment.refunded` arrives (in debug the DEV simulator plays it with
+`{"outcome":"refund","refund_id"}`). Statuses `PARTIALLY_REFUNDED`,
+`REFUNDED`, `CHARGEBACK` (amount debited from the available balance) and
+`CHARGEBACK_REVERSED` have their own labels.
+
+### Merchant picker
+
+The token pair's `memberships` (`merchant_id`, `role`) are stored in the
+encrypted session. When login returns no `merchant_id` and there are several
+memberships, the picker is shown before the app; *Perfil → Cambiar de
+comercio* opens it too. Choosing calls `POST /api/v1/auth/refresh
+{refresh_token, merchant_id}` under the same single-flight lock as the 401
+refresh; only a `401` ends the session (`403 NOT_A_MERCHANT_MEMBER`, 429 or
+5xx keep the current one). Merchants are listed by id and role: the backend
+has no endpoint that names merchants outside the current tenant.
+
 ## What is mocked or provisional
 
 | Item | Status |
@@ -119,5 +150,4 @@ starts over from the first page.
 3. **Signing and distribution**: upload key in CI secrets, Play App Signing,
    internal/closed track, forced minimum version; bump targetSdk to 36.
 4. **Crash reporting / telemetry** (Crashlytics or Sentry) with PII scrubbing.
-5. Remaining F9 screens: KYB onboarding, refunds, CFDI invoicing, merchant
-   selection when a user has several memberships.
+5. Remaining F9 screens: KYB onboarding, CFDI invoicing; F10 sale receipt.

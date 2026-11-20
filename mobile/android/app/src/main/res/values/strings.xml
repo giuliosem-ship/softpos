@@ -99,4 +99,40 @@
     <string name="settings_clabe_caption">Cuenta a la que tus clientes te pagan por SPEI.</string>
     <string name="settings_resico">Régimen: RESICO</string>
     <string name="settings_role">Rol: %1$s</string>
+    <string name="settings_switch_merchant">Cambiar de comercio</string>
+
+    <!-- Selector de comercio -->
+    <string name="picker_title">Elige un comercio</string>
+    <string name="picker_subtitle">Tu cuenta tiene acceso a varios comercios.</string>
+    <string name="picker_merchant">Comercio %1$s</string>
+    <string name="picker_current">Actual</string>
+    <string name="picker_error_not_member">Ya no tienes acceso a ese comercio.</string>
+    <string name="role_owner">Dueño</string>
+    <string name="role_cashier">Cajero</string>
+    <string name="role_operator">Operador</string>
+    <string name="role_unknown">Sin rol</string>
+
+    <!-- Devoluciones -->
+    <string name="sale_captured">Cobrado: %1$s</string>
+    <string name="sale_refunded">Devuelto: %1$s</string>
+    <string name="sale_chargeback_open">Contracargo abierto: se descontaron %1$s de tu disponible.</string>
+    <string name="sale_chargeback_reversed">El contracargo se resolvió a tu favor.</string>
+    <string name="sale_decline_code">Motivo de rechazo: %1$s</string>
+    <string name="sale_fee">Comisión: %1$s</string>
+    <string name="sale_tax_set_aside">Apartado para impuestos: %1$s</string>
+    <string name="sale_net">Neto a tu disponible: %1$s</string>
+    <string name="refund_title">Devolución</string>
+    <string name="refund_refundable">Puedes devolver hasta %1$s</string>
+    <string name="refund_all">Devolver todo</string>
+    <string name="refund_amount_label">Monto a devolver (ej. 50.00)</string>
+    <string name="refund_partial">Devolver este monto</string>
+    <string name="refund_confirm_title">¿Confirmas la devolución?</string>
+    <string name="refund_confirm_text">Se devolverán %1$s a la tarjeta del cliente.</string>
+    <string name="refund_confirm">Devolver</string>
+    <string name="refund_requested">Devolución de %1$s solicitada. Se aplica cuando el procesador la confirme.</string>
+    <string name="refund_error_invalid_amount">Escribe un monto válido, con hasta 2 decimales.</string>
+    <string name="refund_error_exceeds">El monto supera lo que queda por devolver.</string>
+    <string name="refund_error_not_allowed">Solo el dueño del comercio puede hacer devoluciones.</string>
+    <string name="refund_error_acquirer_unavailable">El procesador no respondió. Reintenta: no se devolverá dos veces.</string>
+    <string name="refund_error_rejected">El procesador rechazó la devolución.</string>
 </resources>

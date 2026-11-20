@@ -7,6 +7,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import mx.softpos.app.auth.AuthApi
 import mx.softpos.app.auth.HttpAuthApi
+import mx.softpos.app.auth.MembershipInfo
 import mx.softpos.app.auth.SessionManager
 import mx.softpos.app.auth.authenticatedClient
 import mx.softpos.app.auth.keystoreTokenStore
@@ -69,6 +70,8 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
     fun currentMerchantId(): String? = sessionManager.current()?.merchantId?.ifBlank { null }
 
     fun currentRole(): String = sessionManager.current()?.role.orEmpty()
+
+    fun memberships(): List<MembershipInfo> = sessionManager.current()?.memberships.orEmpty()
 
     /** Process-wide scope for work that must outlive a screen (logout). */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -60,6 +60,27 @@ class SessionManager(
         }
     }
 
+    /**
+     * Re-scopes the session to another membership through `/refresh
+     * {refresh_token, merchant_id}` (docs/AUTH.md). Same single-flight lock as
+     * the 401 refresh, so a concurrent refresh never reuses the rotated token.
+     * Only a `401` (invalid/reused refresh token) ends the session; a `403
+     * NOT_A_MERCHANT_MEMBER`, 429 or 5xx leaves the current session as it was.
+     */
+    fun switchMerchant(merchantId: String): ApiResult<Unit> = synchronized(lock) {
+        val current = _session.value ?: return ApiResult.Error(401, "NO_SESSION", "")
+        when (val result = authApi.refresh(current.refreshToken, merchantId)) {
+            is ApiResult.Success -> {
+                onLogin(result.data)
+                ApiResult.Success(Unit, result.statusCode)
+            }
+            is ApiResult.Error -> {
+                if (result.statusCode == 401) clearLocal()
+                result
+            }
+        }
+    }
+
     /** Revokes the refresh family on the server (best effort) and wipes the device. */
     fun logout() {
         val current = synchronized(lock) {

@@ -138,6 +138,8 @@ data class SettingsUiState(
     val isLoading: Boolean = false,
     val profile: MerchantProfile? = null,
     val role: String = "",
+    /** The user belongs to several merchants: Profile offers the picker. */
+    val canSwitchMerchant: Boolean = false,
     val error: LoadError? = null
 )
 
@@ -146,7 +148,8 @@ class SettingsViewModel(
     private val merchantId: MerchantIdProvider,
     private val role: () -> String,
     private val onLogout: () -> Unit,
-    private val io: CoroutineDispatcher = Dispatchers.IO
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val membershipCount: () -> Int = { 0 }
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -154,14 +157,14 @@ class SettingsViewModel(
     fun load() {
         val id = merchantId()
         if (id == null) {
-            _state.value = SettingsUiState(role = role(), error = LoadError.NO_MERCHANT)
+            _state.value = SettingsUiState(role = role(), canSwitchMerchant = membershipCount() > 1, error = LoadError.NO_MERCHANT)
             return
         }
-        _state.update { it.copy(isLoading = true, error = null, role = role()) }
+        _state.update { it.copy(isLoading = true, error = null, role = role(), canSwitchMerchant = membershipCount() > 1) }
         viewModelScope.launch {
             val result = withContext(io) { merchantApi.getMerchant(id) }
             _state.value = when (result) {
-                is ApiResult.Success -> SettingsUiState(profile = result.data, role = role())
+                is ApiResult.Success -> _state.value.copy(isLoading = false, profile = result.data)
                 is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
             }
         }

@@ -38,6 +38,9 @@ import mx.softpos.app.ui.login.LoginScreen
 import mx.softpos.app.ui.login.LoginViewModel
 import mx.softpos.app.ui.merchant.HomeScreen
 import mx.softpos.app.ui.merchant.HomeViewModel
+import mx.softpos.app.ui.merchant.MerchantPickerScreen
+import mx.softpos.app.ui.merchant.MerchantPickerViewModel
+import mx.softpos.app.ui.merchant.SaleDetailViewModel
 import mx.softpos.app.ui.merchant.SaleDetailScreen
 import mx.softpos.app.ui.merchant.SalesScreen
 import mx.softpos.app.ui.merchant.SalesViewModel
@@ -50,6 +53,7 @@ private object Routes {
     const val SALES = "sales"
     const val SALE_DETAIL = "sales/{saleId}"
     const val SETTINGS = "settings"
+    const val PICKER = "merchant-picker"
     fun saleDetail(id: String) = "sales/$id"
 }
 
@@ -67,14 +71,23 @@ private val tabs = listOf(
 fun KernoApp(container: AppContainer) {
     val session by container.sessionManager.session.collectAsStateWithLifecycle()
     Surface(modifier = Modifier.fillMaxSize()) {
-        if (session == null) {
-            Box(Modifier.safeDrawingPadding()) {
+        val s = session
+        when {
+            s == null -> Box(Modifier.safeDrawingPadding()) {
                 val vm = viewModel { LoginViewModel(container.authApi, container.sessionManager) }
                 LoginScreen(vm)
             }
-        } else {
-            // Keyed on the user so ViewModels never leak across sessions.
-            key(session?.userId) { MerchantApp(container) }
+            // Several memberships and no tenant in the token: choose one first.
+            s.merchantId.isBlank() && s.memberships.size > 1 -> Box(Modifier.safeDrawingPadding()) {
+                key(s.userId) {
+                    val vm = viewModel {
+                        MerchantPickerViewModel(s.memberships, null, container.sessionManager::switchMerchant)
+                    }
+                    MerchantPickerScreen(vm, onLogout = container::logout)
+                }
+            }
+            // Keyed on user + merchant so ViewModels never leak across sessions or tenants.
+            else -> key(s.userId, s.merchantId) { MerchantApp(container) }
         }
     }
 }
@@ -104,16 +117,32 @@ private fun MerchantApp(container: AppContainer) {
                 SalesScreen(vm, onOpen = { nav.navigate(Routes.saleDetail(it)) })
             }
             composable(Routes.SALE_DETAIL) { entry ->
-                // Shares the list's ViewModel so the detail reads the loaded sale.
+                // The list's ViewModel holds the loaded sale; the detail reads the card payment.
                 val parent = remember(entry) { nav.getBackStackEntry(Routes.SALES) }
-                val vm = viewModel(parent) { SalesViewModel(container.salesApi, container::currentMerchantId) }
-                SaleDetailScreen(vm.sale(entry.arguments?.getString("saleId").orEmpty()), onBack = { nav.popBackStack() })
+                val list = viewModel(parent) { SalesViewModel(container.salesApi, container::currentMerchantId) }
+                val sale = list.sale(entry.arguments?.getString("saleId").orEmpty())
+                val vm = viewModel(entry) {
+                    SaleDetailViewModel(sale, container.cardPaymentsApi, container::currentRole, container.devCardSimulator)
+                }
+                SaleDetailScreen(vm, onBack = { nav.popBackStack() })
             }
             composable(Routes.SETTINGS) {
                 val vm = viewModel {
-                    SettingsViewModel(container.merchantApi, container::currentMerchantId, container::currentRole, container::logout)
+                    SettingsViewModel(
+                        container.merchantApi, container::currentMerchantId, container::currentRole, container::logout,
+                        membershipCount = { container.memberships().size }
+                    )
                 }
-                SettingsScreen(vm)
+                SettingsScreen(vm, onSwitchMerchant = { nav.navigate(Routes.PICKER) })
+            }
+            composable(Routes.PICKER) {
+                val vm = viewModel {
+                    MerchantPickerViewModel(
+                        container.memberships(), container.currentMerchantId(), container.sessionManager::switchMerchant,
+                        onSwitched = { nav.popBackStack() }
+                    )
+                }
+                MerchantPickerScreen(vm, onBack = { nav.popBackStack() })
             }
         }
     }

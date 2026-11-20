@@ -192,8 +192,16 @@ can simulate a CoDi payment without holding the secret.
 
 Production guard (`APP_ENV=production`) refuses to start with `DEV_MODE`,
 `JWT_SECRET` < 32 bytes, `CODI_WEBHOOK_SECRET` < 32 bytes, a missing/default
-`STP_HMAC_SECRET`, a missing/default/malformed `VAULT_MASTER_KEY_HEX` or a
-malformed `VAULT_PREVIOUS_KEYS` (plus the DB/demo checks).
+or < 32-byte `STP_HMAC_SECRET`, a missing/default/malformed
+`VAULT_MASTER_KEY_HEX`, a malformed `VAULT_PREVIOUS_KEYS`, a
+`PLAY_INTEGRITY_SECRET` set but < 32 bytes, a missing `DATABASE_URL` or one
+with `sslmode=disable`, `REDIS_ADDR` without a ≥ 16-byte `REDIS_PASSWORD`, any
+secret still holding the `.env.example` `CHANGE_ME` placeholder, or demo
+seeding. The full list of variables (secret or not) is `ServerEnvVars` in
+`cmd/server/config_guard.go`; tests keep it equal to the variables the code
+reads, require `.env.example` to document each one and require a guard case
+for every secret (MVP-11). `docker-compose.yml` holds no secrets: it loads
+`.env` (git-ignored, copied from `.env.example`).
 
 CSD vault keys (MVP-09): `NewServer` no longer has a hardcoded key (it starts
 with an ephemeral random one); `cmd/server` installs an

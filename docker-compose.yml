@@ -1,17 +1,26 @@
+# Local stack: PostgreSQL 16 + Redis 7 + the Kerno (SoftPOS) server.
+#
+# No secrets live in this file. Copy the template and fill every CHANGE_ME:
+#
+#   cp .env.example .env   # git-ignored
+#   docker compose up --build
+#
+# DEV_MODE is off unless you set DEV_MODE=true in your own .env (local demo
+# only). Database and Redis ports are bound to 127.0.0.1, never public.
 services:
   postgres:
     image: postgres:16-alpine
     container_name: softpos-postgres
     environment:
       POSTGRES_DB: softpos
-      POSTGRES_USER: softpos_user
-      POSTGRES_PASSWORD: softpos_secure_password
+      POSTGRES_USER: softpos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U softpos_user -d softpos"]
+      test: ["CMD-SHELL", "pg_isready -U softpos -d softpos"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -20,13 +29,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: softpos-redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -42,20 +53,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # All configuration and secrets come from .env (template: .env.example).
+    env_file: .env
     environment:
-      PORT: 8080
-      DATABASE_URL: "postgres://softpos_user:softpos_secure_password@postgres:5432/softpos?sslmode=disable"
-      REDIS_ADDR: "redis:6379"
-      STP_HMAC_SECRET: "softpos_prod_hmac_secret_key"
-      VAULT_MASTER_KEY_HEX: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-      SEED_DEMO_MERCHANT: "true"
-      # Local demo only: ephemeral JWT secret + OTP codes in logs (docs/AUTH.md)
-      DEV_MODE: "true"
-      STATIC_DIR: "/app/web/pos"
+      # Non-secret container wiring only.
+      PORT: "8080"
+      STATIC_DIR: /app/web/pos
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3

@@ -27,6 +27,7 @@ mobile/android/local.properties
 # Environment & Secrets
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.cer

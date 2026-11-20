@@ -1108,6 +1108,20 @@
       "test_results": "python yaml.safe_load OK (actionlint not installed); JAVA_HOME=openjdk@17 ./gradlew :app:test 78/78 PASS; go vet ./... clean; go test -race -count=1 ./... OK. Docker build and the GitHub Actions run itself not executed locally (no Docker, no runner).",
       "audit_notes": "Docker image build only syntax-reviewed locally; first CI run on GitHub will be its real validation. gofmt not enforced (pre-existing unformatted files in phase-2 packages). No APK job: the module is Kotlin/JVM, not Android (F9).",
       "priority": 71
+    },
+    {
+      "id": "MVP-11",
+      "component": "platform",
+      "title": "Secrets out of the repo config",
+      "status": "completed",
+      "files": {
+        "tests": "cmd/server/env_vars_test.go",
+        "implementation": "cmd/server/config_guard.go, docker-compose.yml, .env.example, .gitignore, docs/AUTH.md, README.md"
+      },
+      "spec": "docker-compose.yml carries no secrets, no vault key and no DEV_MODE: the server uses env_file .env (git-ignored) and postgres/redis read POSTGRES_PASSWORD/REDIS_PASSWORD via required ${VAR:?} interpolation; redis runs with --requirepass; DB/Redis ports bound to 127.0.0.1. Committed .env.example documents every variable with CHANGE_ME placeholders (unignored with !.env.example). config_guard.go declares ServerEnvVars (name + Secret flag); production guard now also rejects a missing DATABASE_URL, REDIS_ADDR without a >=16-byte REDIS_PASSWORD, a short PLAY_INTEGRITY_SECRET when set, an STP_HMAC_SECRET < 32 bytes and any secret still holding the CHANGE_ME placeholder.",
+      "test_results": "TestServerEnvVars_MatchCode (AST scan of os.Getenv/LookupEnv/parseDurationEnv literals in cmd/ and pkg/ == ServerEnvVars), TestEnvExample_DocumentsEveryVariable (each var documented, secrets only empty/placeholder), TestValidateProductionConfig_CoversEverySecret (every Secret var has rejected cases). go vet clean; go test -race -count=1 ./... all ok.",
+      "audit_notes": "No real secrets manager/KMS integration (env injection only). docker compose up not executed locally (no Docker).",
+      "priority": 72
     }
   ]
 }

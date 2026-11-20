@@ -23,7 +23,60 @@ var (
 	ErrWeakJWTSecret             = errors.New("insecure configuration: JWT_SECRET must be set to at least 32 bytes in production")
 	ErrDevModeInProduction       = errors.New("insecure configuration: DEV_MODE cannot be enabled in production")
 	ErrInsecureCoDiWebhookSecret = errors.New("insecure configuration: CODI_WEBHOOK_SECRET must be set to at least 32 bytes in production")
+	ErrMissingDatabaseURL        = errors.New("insecure configuration: DATABASE_URL is required in production (without it all money state is in memory)")
+	ErrInsecureRedisPassword     = errors.New("insecure configuration: REDIS_PASSWORD must be set to at least 16 bytes when REDIS_ADDR is used in production")
+	ErrWeakPlayIntegritySecret   = errors.New("insecure configuration: PLAY_INTEGRITY_SECRET, when set, must be at least 32 bytes in production")
+	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
+
+// minSecretLen is the minimum length of shared secrets in production.
+const minSecretLen = 32
+
+// EnvVar documents one environment variable read by the server.
+type EnvVar struct {
+	Name   string
+	Secret bool // secrets must never be committed; the production guard checks each one
+}
+
+// ServerEnvVars is the complete list of environment variables the server
+// reads (TestServerEnvVars_MatchCode keeps it in sync with the code and with
+// .env.example). Every Secret entry is enforced by ValidateProductionConfig
+// (TestValidateProductionConfig_CoversEverySecret).
+var ServerEnvVars = []EnvVar{
+	{Name: "APP_ENV"},
+	{Name: "ENV"},
+	{Name: "PORT"},
+	{Name: "STATIC_DIR"},
+	{Name: "MIGRATIONS_DIR"},
+	{Name: "SQL_DRIVER"},
+	{Name: "DATABASE_URL", Secret: true},
+	{Name: "REDIS_ADDR"},
+	{Name: "REDIS_PASSWORD", Secret: true},
+	{Name: "DEV_MODE"},
+	{Name: "SEED_DEMO_MERCHANT"},
+	{Name: "JWT_SECRET", Secret: true},
+	{Name: "AUTH_ACCESS_TTL"},
+	{Name: "AUTH_REFRESH_TTL"},
+	{Name: "AUTH_RATE_LIMIT_PER_MINUTE"},
+	{Name: "PLAY_INTEGRITY_SECRET", Secret: true},
+	{Name: "PLAY_INTEGRITY_PACKAGE"},
+	{Name: "CODI_WEBHOOK_SECRET", Secret: true},
+	{Name: "STP_HMAC_SECRET", Secret: true},
+	{Name: "STP_BASE_URL"},
+	{Name: "VAULT_MASTER_KEY_HEX", Secret: true},
+	{Name: "VAULT_MASTER_KEY_ID"},
+	{Name: "VAULT_PREVIOUS_KEYS", Secret: true},
+	{Name: "DEFAULT_PLATFORM_FEE_BPS"},
+	{Name: "ALLOW_CASHIER_REFUNDS"},
+	{Name: "OUTBOX_POLL_INTERVAL"},
+	{Name: "OUTBOX_BATCH_SIZE"},
+	{Name: "OUTBOX_PUBLISHER"},
+}
+
+// isPlaceholder reports whether v still holds a .env.example placeholder.
+func isPlaceholder(v string) bool {
+	return strings.Contains(strings.ToLower(v), "change_me")
+}
 
 // insecureVaultKey reports whether keyHex decodes to the public dev key (in
 // any spelling: case, surrounding spaces) or to a trivial key (all bytes equal).
@@ -46,6 +99,14 @@ func ValidateProductionConfig(cfg Config, env string) error {
 		return nil
 	}
 
+	// 0. No secret may still hold the .env.example placeholder.
+	for _, v := range []string{cfg.DatabaseURL, cfg.RedisPassword, cfg.JWTSecret, cfg.PlayIntegritySecret,
+		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys} {
+		if isPlaceholder(v) {
+			return ErrPlaceholderSecret
+		}
+	}
+
 	// 1. Vault Master Key validation
 	if cfg.VaultMasterKeyHex == "" || insecureVaultKey(cfg.VaultMasterKeyHex) {
 		return ErrInsecureDefaultVaultKey
@@ -64,13 +125,19 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	}
 
 	// 2. STP HMAC Secret validation
-	if cfg.STPHMACSecret == "" || cfg.STPHMACSecret == defaultSTPHMACSecret {
+	if len(cfg.STPHMACSecret) < minSecretLen || cfg.STPHMACSecret == defaultSTPHMACSecret {
 		return ErrInsecureDefaultSTPSecret
 	}
 
-	// 3. Database SSL enforcement
+	// 3. Database required, with SSL
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return ErrMissingDatabaseURL
+	}
 	if strings.Contains(cfg.DatabaseURL, "sslmode=disable") {
 		return ErrInsecureDatabaseURL
+	}
+	if cfg.RedisAddr != "" && len(cfg.RedisPassword) < 16 {
+		return ErrInsecureRedisPassword
 	}
 
 	// 4. No demo merchant seeding in production
@@ -82,13 +149,16 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	if cfg.DevMode {
 		return ErrDevModeInProduction
 	}
-	if len(cfg.JWTSecret) < 32 {
+	if len(cfg.JWTSecret) < minSecretLen {
 		return ErrWeakJWTSecret
 	}
 
-	// 6. Webhook signing secrets
-	if len(cfg.CoDiWebhookSecret) < 32 {
+	// 6. Webhook and attestation signing secrets
+	if len(cfg.CoDiWebhookSecret) < minSecretLen {
 		return ErrInsecureCoDiWebhookSecret
+	}
+	if cfg.PlayIntegritySecret != "" && len(cfg.PlayIntegritySecret) < minSecretLen {
+		return ErrWeakPlayIntegritySecret
 	}
 
 	return nil

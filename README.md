@@ -74,8 +74,11 @@ Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reinicia
 
 ### 2. Infraestructura con Docker Compose (PostgreSQL + Redis + Server)
 ```bash
+cp .env.example .env   # .env está en .gitignore; reemplaza cada CHANGE_ME (openssl rand -hex 32)
 docker compose up --build
 ```
+
+`docker-compose.yml` no contiene secretos ni activa `DEV_MODE`: toda la configuración sale de `.env`. `.env.example` documenta cada variable que lee el servidor.
 
 ### 3. Validación y Pruebas
 ```bash

@@ -175,6 +175,24 @@ class ChargeViewModelTest {
     }
 
     @Test
+    fun replayOfATappedIntentPollsInsteadOfRestartingTheSdk() = runTest(dispatcher) {
+        // Backend replay of a non-CREATED intent: no client_secret, no new SDK session.
+        backend.intentResponse = { it.copy(status = CardPaymentStatus.AUTHORIZED, clientSecret = "") }
+        var collects = 0
+        val tap = object : TapToPayProvider {
+            override val isAvailable = true
+            override suspend fun collect(intent: CardPaymentIntent): TapToPayOutcome { collects++; return TapToPayOutcome.Failed("x") }
+        }
+        val vm = vm(tap = tap)
+        vm.type(1, 0, 0)
+        vm.chargeWithCard()
+        advanceUntilIdle()
+        assertEquals(0, collects)
+        assertEquals(emptyList<String>(), backend.cancels, "an authorized payment is never canceled by the app")
+        assertTrue(vm.state.value.step is ChargeStep.CardPending)
+    }
+
+    @Test
     fun pollingBacksOffAndTimesOutAsPending() = runTest(dispatcher) {
         // An SDK that "approves" but no webhook ever arrives: the status stays CREATED.
         val silentTap = object : TapToPayProvider {

@@ -162,7 +162,10 @@ class ChargeViewModel(
                 }
             }
             activePaymentId = intent.cardPaymentId
-            if (intent.status == CardPaymentStatus.CREATED || intent.status == CardPaymentStatus.AUTHORIZED) {
+            // A replay of an intent that was already tapped (any status but CREATED)
+            // has no client_secret: no new SDK session, and never cancel it
+            // (cancel would void an AUTHORIZED payment); just read the outcome.
+            if (intent.status == CardPaymentStatus.CREATED && intent.clientSecret.isNotBlank()) {
                 setStep(ChargeStep.ProcessingCard(CardStage.WAITING_FOR_CARD))
                 when (val outcome = tapToPay.collect(intent)) {
                     TapToPayOutcome.Approved, is TapToPayOutcome.Declined -> Unit

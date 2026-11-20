@@ -30,8 +30,10 @@ RUN apk add --no-cache ca-certificates \
 WORKDIR /app
 
 COPY --from=builder /out/softpos-server /app/softpos-server
-# Only the Web POS static assets are served (STATIC_DIR=/app/web/pos).
+# Static assets: the Web POS (STATIC_DIR=/app/web/pos) and the internal
+# backoffice UI (/backoffice/, served from the sibling web/backoffice).
 COPY --chown=root:root web/pos/ /app/web/pos/
+COPY --chown=root:root web/backoffice/ /app/web/backoffice/
 
 USER 10001:10001
 

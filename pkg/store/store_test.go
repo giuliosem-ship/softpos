@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"softpos/migrations"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 )
@@ -355,4 +357,37 @@ type bufioReaderHelper struct {
 
 func (b *bufioReaderHelper) ReadString(delim byte) (string, error) {
 	return b.r.ReadString(delim)
+}
+
+func TestNormalizeDriverName(t *testing.T) {
+	for in, want := range map[string]string{
+		"": "pgx", "postgres": "pgx", "PostgreSQL": "pgx", "pgx": "pgx", "mockpostgres": "mockpostgres",
+	} {
+		if got := NormalizeDriverName(in); got != want {
+			t.Errorf("NormalizeDriverName(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadMigrations_EmbeddedAndDuplicateVersions(t *testing.T) {
+	all, err := LoadMigrations(migrations.FS)
+	if err != nil {
+		t.Fatalf("LoadMigrations(embedded): %v", err)
+	}
+	if len(all) < 2 || all[0].Version != "001" || all[0].DownSQL == "" {
+		t.Fatalf("unexpected embedded migrations: %+v", all)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i-1].Version >= all[i].Version {
+			t.Fatalf("migrations not sorted: %s >= %s", all[i-1].Version, all[i].Version)
+		}
+	}
+
+	dup := fstest.MapFS{
+		"001_a.up.sql": {Data: []byte("SELECT 1;")},
+		"001_b.up.sql": {Data: []byte("SELECT 2;")},
+	}
+	if _, err := LoadMigrations(dup); err == nil {
+		t.Fatalf("expected duplicate version error")
+	}
 }

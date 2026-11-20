@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"softpos/migrations"
 	"softpos/pkg/api"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
@@ -48,16 +49,8 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	// Empty MIGRATIONS_DIR means "use the migrations embedded in the binary".
 	migrationsDir := os.Getenv("MIGRATIONS_DIR")
-	if migrationsDir == "" {
-		if _, err := os.Stat("migrations"); err == nil {
-			migrationsDir = "migrations"
-		} else if _, err := os.Stat("../../migrations"); err == nil {
-			migrationsDir = "../../migrations"
-		} else {
-			migrationsDir = "migrations"
-		}
-	}
 
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
@@ -80,10 +73,7 @@ func LoadConfigFromEnv() Config {
 		hmacSecret = "softpos_dev_secret_key_12345678"
 	}
 
-	sqlDriver := os.Getenv("SQL_DRIVER")
-	if sqlDriver == "" {
-		sqlDriver = "postgres"
-	}
+	sqlDriver := store.NormalizeDriverName(os.Getenv("SQL_DRIVER"))
 
 	return Config{
 		Port:              port,
@@ -111,14 +101,25 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	// 1. Initialize PostgreSQL persistence and migrations if DATABASE_URL is configured
 	if cfg.DatabaseURL != "" {
 		var err error
-		db, err = sql.Open(cfg.SQLDriver, cfg.DatabaseURL)
+		db, err = sql.Open(store.NormalizeDriverName(cfg.SQLDriver), cfg.DatabaseURL)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
 		}
+		if err := db.PingContext(ctx); err != nil {
+			_ = db.Close()
+			return nil, nil, nil, fmt.Errorf("failed to connect to database: %w", err)
+		}
 
-		// Execute migrations
-		if err := store.RunMigrations(ctx, db, cfg.MigrationsDir); err != nil {
-			slog.Warn("database migrations warning", "error", err)
+		// Apply versioned migrations (embedded by default, MIGRATIONS_DIR overrides).
+		var migErr error
+		if cfg.MigrationsDir != "" {
+			migErr = store.RunMigrations(ctx, db, cfg.MigrationsDir)
+		} else {
+			migErr = store.RunMigrationsFS(ctx, db, migrations.FS)
+		}
+		if migErr != nil {
+			_ = db.Close()
+			return nil, nil, nil, fmt.Errorf("database migrations failed: %w", migErr)
 		}
 
 		// Wire SQL repositories with pessimistic locking into domain engines

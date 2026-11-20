@@ -968,6 +968,20 @@
       "test_results": "PASS: ",
       "audit_notes": "**Audit Report**\n\nThe implementation of `StoreAndForwardQueue` in Kotlin demonstrates a well-structured approach to offline transaction queuing with encryption. However, several areas require attention to enhance security, concurrency safety, and robustness.\n\n### Key Findings:\n\n1. **Concurrency Safety Flaws:**\n   - **Issue:** The `dispatchAll()` method retrieves the first queue item without holding the lock, leading to potential race conditions when multiple threads access or modify the queue.\n   - **Recommendation:** Acquire the lock before accessing and processing any queue items to ensure thread safety.\n\n2. **Partial Failure Handling:**\n   - **Issue:** If decryption fails for an item, the entire dispatch process halts, leaving other transactions in the queue unprocessed.\n   - **Recommendation:** Implement a mechanism to handle individual failures without stopping the entire operation, allowing subsequent items to be processed.\n\n3. **Lack of Padding in AES/GCM:**\n   - **Issue:** While AES-256-GCM is used with no padding, it's crucial to ensure that all plaintext data fits within the block size (128 bits). The current code doesn't enforce this.\n   - **Recommendation:** Add checks to ensure plaintext data does not exceed block limits or switch to a cipher mode that supports variable lengths.\n\n### Actionable Bullet Points:\n\n- **Improve Concurrency Safety:**\n  Acquire the lock before accessing and processing each queue item in `dispatchAll()` to prevent race conditions and ensure thread safety.\n\n- **Enhance Failure Handling:**\n  Modify `dispatchAll()` to continue processing subsequent transactions even if a single decryption or dispatch fails, ensuring all possible items are processed.\n\n- **Ensure Data Integrity with AES/GCM:**\n  Add validation to enforce plaintext data within acceptable block sizes for AES-GCM encryption to prevent potential vulnerabilities.\n\n### Conclusion:\nThe implementation is solid but requires addressing concurrency and error handling issues to ensure robustness and compliance.",
       "completed_at": "2026-11-01T12:49:46.094198"
+    },
+    {
+      "id": "MVP-01",
+      "component": "store-postgres",
+      "title": "PostgreSQL driver, versioned embedded migrations and real-DB integration tests",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/store/postgres_integration_test.go, pkg/store/store_test.go, cmd/server/main_integration_test.go, pkg/store/pgtest/pgtest.go",
+        "implementation": "pkg/store/driver.go, pkg/store/migrations.go, migrations/embed.go, cmd/server/main.go, docker-compose.yml, go.mod, go.sum, docs/PERSISTENCE.md"
+      },
+      "spec": "Register pgx/v5/stdlib as driver 'pgx' (SQL_DRIVER default; 'postgres' alias normalized). Embed migrations/ as single source of truth; RunMigrationsFS applies NNN_*.up.sql in order with schema_migrations version table, idempotent re-runs, duplicate versions rejected. BuildServer pings the DB and fails fast on connection or migration errors. docker-compose stops mounting 001 into initdb. TestPGIntegration_* tests run against real Postgres when TEST_DATABASE_URL is set (isolated schema per test via pgtest), skipped otherwise.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 15/15 packages ok; TEST_DATABASE_URL (embedded-postgres 16 in scratch, outside repo) -run PGIntegration: 7/7 PASS; server binary smoke-tested with DATABASE_URL (healthz + demo merchant 200).",
+      "audit_notes": "Real Postgres revealed no SQL bugs in existing repos (ledger, merchants, idempotency, blacklist, emv, rbf, outbox). Pending: no advisory lock for concurrent migration runners; mockpostgres fake driver still compiled into production package (sql_test_driver.go).",
+      "priority": 62
     }
   ]
 }

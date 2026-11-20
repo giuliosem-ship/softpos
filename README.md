@@ -67,6 +67,8 @@ go run ./cmd/server
 open http://localhost:8080/pos/
 ```
 
+Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md).
+
 ### 2. Infraestructura con Docker Compose (PostgreSQL + Redis + Server)
 ```bash
 docker compose up --build

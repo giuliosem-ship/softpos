@@ -278,7 +278,8 @@ func (s *MemoryMoneyStore) ListUnsettledCaptures(_ context.Context, before strin
 	defer s.mu.Unlock()
 	var out []CardPaymentRecord
 	for _, p := range s.card.payments {
-		if p.ProviderPayoutID == "" && p.CapturedCents > 0 && p.ProviderSettlementDate != "" && p.ProviderSettlementDate < before {
+		if p.ProviderPayoutID == "" && p.CapturedCents > 0 && p.ProviderSettlementDate != "" && p.ProviderSettlementDate < before &&
+			!s.card.reconKeys[NotSettledDedupeKey(p.ID)] {
 			out = append(out, p)
 		}
 	}

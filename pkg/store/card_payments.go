@@ -111,6 +111,9 @@ const (
 	ReconNotSettled          = "NOT_SETTLED"
 )
 
+// NotSettledDedupeKey is the dedupe key of the NOT_SETTLED item of a capture.
+func NotSettledDedupeKey(cardPaymentID string) string { return "notsettled:" + cardPaymentID }
+
 // ReconciliationItem is one difference in the processor reconciliation report.
 type ReconciliationItem struct {
 	ID                int64
@@ -163,7 +166,9 @@ type CardPaymentTx interface {
 // SQLMoneyStore and MemoryMoneyStore implement it.
 type AcquirerRepository interface {
 	// ListUnsettledCaptures returns captured payments with no provider payout
-	// whose expected settlement date is before settlementDateBefore (YYYY-MM-DD).
+	// whose expected settlement date is before settlementDateBefore (YYYY-MM-DD)
+	// and that are not flagged yet (no item with dedupe key
+	// NotSettledDedupeKey), so a full batch never hides newer captures.
 	ListUnsettledCaptures(ctx context.Context, settlementDateBefore string, limit int) ([]CardPaymentRecord, error)
 	InsertReconciliationItem(ctx context.Context, item ReconciliationItem) (bool, error)
 	ListReconciliationItems(ctx context.Context, status string, limit int) ([]ReconciliationItem, error)
@@ -405,6 +410,7 @@ func (s *SQLMoneyStore) ListUnsettledCaptures(ctx context.Context, before string
 	rows, err := s.db.QueryContext(ctx, `SELECT `+cardPaymentColumns+` FROM card_payments
 		WHERE provider_payout_id = '' AND captured_cents > 0 AND provider_settlement_date <> ''
 		  AND provider_settlement_date < $1
+		  AND NOT EXISTS (SELECT 1 FROM acquirer_reconciliation_items r WHERE r.dedupe_key = 'notsettled:' || card_payments.id)
 		ORDER BY provider_settlement_date, id LIMIT $2`, before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list unsettled captures: %w", err)

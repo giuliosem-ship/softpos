@@ -88,3 +88,25 @@ func TestAcquirerSettlementWatcher_RunStops(t *testing.T) {
 		t.Fatal("watcher did not stop")
 	}
 }
+
+// Captures already flagged must not fill the batch: with more overdue captures
+// than BatchSize, every run reaches new ones instead of re-listing the same.
+func TestAcquirerSettlementWatcher_BatchDoesNotStarveOnFlaggedCaptures(t *testing.T) {
+	ms := store.NewMemoryMoneyStore(ledger.NewLedgerEngine(), func() payments.PaymentProcessor { return nil },
+		func() store.MerchantRepository { return store.NewMemoryMerchantRepository() })
+	seedCapture(t, ms, "cp_a", "2026-11-10", "")
+	seedCapture(t, ms, "cp_b", "2026-11-11", "")
+	now := func() time.Time { return time.Date(2026, 11, 20, 16, 0, 0, 0, time.UTC) }
+	w := NewAcquirerSettlementWatcher(ms, AcquirerSettlementConfig{Now: now, BatchSize: 1, Logger: slog.New(slog.NewTextHandler(&syncBuffer{}, nil))})
+	total := 0
+	for i := 0; i < 3; i++ {
+		n, err := w.RunOnce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += n
+	}
+	if total != 2 {
+		t.Fatalf("flagged %d of 2 overdue captures", total)
+	}
+}

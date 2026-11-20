@@ -69,7 +69,7 @@ func (w *AcquirerSettlementWatcher) RunOnce(ctx context.Context) (int, error) {
 	created := 0
 	for _, cp := range list {
 		ok, err := w.repo.InsertReconciliationItem(ctx, store.ReconciliationItem{
-			DedupeKey:         "notsettled:" + cp.ID,
+			DedupeKey:         store.NotSettledDedupeKey(cp.ID),
 			Provider:          cp.Provider,
 			CardPaymentID:     cp.ID,
 			ProviderPaymentID: cp.ProviderPaymentID,

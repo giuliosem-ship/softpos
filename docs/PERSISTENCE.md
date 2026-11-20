@@ -46,6 +46,7 @@ same interfaces use in-memory implementations.
 | Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |
 | SAT 69-B blacklist | `identity` repository | `store.SQLBlacklistRepository` | map |
 | Users, memberships, OTP challenges, refresh tokens, attestation nonces (`docs/AUTH.md`) | `auth.Repository` | `store.SQLAuthRepository` (migrations 005, 006) | `auth.MemoryRepository` |
+| Money unit of work: settlements, exactly-once keys, merchant tariff (`docs/MONEY_FLOWS.md`) | `store.MoneyStore` | `store.SQLMoneyStore` (`payment_settlements`, `money_operations`, `merchants.platform_fee_bps`, migration 007) | `store.MemoryMoneyStore` |
 
 Notes:
 - The raw EMV TLV payload is **not** stored (it can contain the clear PAN /
@@ -56,9 +57,10 @@ Notes:
   silently using 0 (which would pick the wrong RESICO bracket).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), disbursement/CEP tracking, SAT ingestion state.
-- Payment state change + ledger posting + monthly sales are separate
-  transactions; a crash between them can leave them inconsistent (F5 gap
-  "errores de posteo ignorados").
+- Payment state change, ledger journal, RESICO monthly accumulator,
+  settlement record, webhook exactly-once key and outbox event are written in
+  **one transaction** (`store.SQLMoneyStore`, see `docs/MONEY_FLOWS.md`);
+  posting errors roll back and return 5xx.
 
 ## Outbox dispatcher
 
@@ -76,8 +78,9 @@ goroutine; on SIGTERM it is stopped after the HTTP server drains.
 - Delivery is at-least-once: publishers must be idempotent on the event ID.
 - Publishers: `log` (default; logs metadata, never the payload) and `noop`.
   Real targets implement `outbox.Publisher`.
-- Nothing enqueues events yet (`SaveEventTx` must be called inside the business
-  transaction by later batches).
+- Producers (MVP-07): `payment.settled`, `payment.voided`, `payment.refunded`,
+  `codi.confirmed`, `spei.abono_received` are enqueued with `SaveEventTx`
+  inside the money transaction (see `docs/MONEY_FLOWS.md`).
 
 ## Environment variables
 
@@ -89,6 +92,7 @@ goroutine; on SIGTERM it is stopped after the HTTP server drains.
 | `OUTBOX_POLL_INTERVAL` | `2s` | dispatcher poll interval (Go duration) |
 | `OUTBOX_BATCH_SIZE` | `50` | events claimed per pass |
 | `OUTBOX_PUBLISHER` | `log` | `log` or `noop` |
+| `DEFAULT_PLATFORM_FEE_BPS` | `200` | platform tariff for merchants without `platform_fee_bps` (0..10000) |
 | `TEST_DATABASE_URL` | empty | enables real-Postgres integration tests |
 
 ## Running locally

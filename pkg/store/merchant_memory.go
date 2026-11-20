@@ -20,6 +20,10 @@ type MerchantRepository interface {
 	GetMerchantCSD(ctx context.Context, merchantID string) ([]byte, bool, error)
 	GetMonthlySalesCents(ctx context.Context, merchantID, yearMonth string) (int64, error)
 	AddMonthlySalesCents(ctx context.Context, merchantID, yearMonth string, amountCents int64) (int64, error)
+	// GetMerchantPlatformFeeBps returns the merchant tariff; set=false means
+	// "use the server default".
+	GetMerchantPlatformFeeBps(ctx context.Context, merchantID string) (bps int64, set bool, err error)
+	SetMerchantPlatformFeeBps(ctx context.Context, merchantID string, bps int64) error
 }
 
 var (
@@ -34,6 +38,7 @@ type MemoryMerchantRepository struct {
 	merchants    map[string]MerchantRecord
 	clabeOwner   map[string]string
 	monthlySales map[string]int64 // merchantID + "|" + yearMonth
+	feeBps       map[string]int64
 }
 
 func NewMemoryMerchantRepository() *MemoryMerchantRepository {
@@ -41,6 +46,7 @@ func NewMemoryMerchantRepository() *MemoryMerchantRepository {
 		merchants:    make(map[string]MerchantRecord),
 		clabeOwner:   make(map[string]string),
 		monthlySales: make(map[string]int64),
+		feeBps:       make(map[string]int64),
 	}
 }
 
@@ -174,4 +180,41 @@ func (r *MemoryMerchantRepository) AddMonthlySalesCents(_ context.Context, merch
 		r.monthlySales[key] += amountCents
 	}
 	return r.monthlySales[key], nil
+}
+
+// AdjustMonthlySalesCents applies a signed delta (refund reversals), flooring
+// the accumulator at zero.
+func (r *MemoryMerchantRepository) AdjustMonthlySalesCents(_ context.Context, merchantID, yearMonth string, delta int64) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.merchants[merchantID]; !ok {
+		return 0, ErrMerchantNotFound
+	}
+	key := merchantID + "|" + yearMonth
+	v := r.monthlySales[key] + delta
+	if v < 0 {
+		v = 0
+	}
+	r.monthlySales[key] = v
+	return v, nil
+}
+
+func (r *MemoryMerchantRepository) GetMerchantPlatformFeeBps(_ context.Context, merchantID string) (int64, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	bps, ok := r.feeBps[merchantID]
+	return bps, ok, nil
+}
+
+func (r *MemoryMerchantRepository) SetMerchantPlatformFeeBps(_ context.Context, merchantID string, bps int64) error {
+	if bps < 0 || bps > 10000 {
+		return ErrInvalidFeeBps
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.merchants[merchantID]; !ok {
+		return ErrMerchantNotFound
+	}
+	r.feeBps[merchantID] = bps
+	return nil
 }

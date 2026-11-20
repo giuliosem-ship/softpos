@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -152,20 +153,24 @@ func TestSoftPOSPaymentSettle_SuccessWithRESICO(t *testing.T) {
 	merchantID := "merch_taqueria_01"
 	server.RegisterMerchant(merchantID, "GARM850101ABC", "Taqueria Los Primos", true)
 
-	// Settle a $1,160.00 MXN sale (116000 cents)
-	// Platform fee: $33.60 (3360 cents)
+	// Settle a $1,160.00 MXN sale (116000 cents) under a 2.90% merchant tariff:
+	// platform fee = 116000 * 290 / 10000 = 3364 cents (server-derived).
 	// Buyer is Persona Moral -> Art. 113-J applies:
 	// Base = 100000, IVA = 16000, PM withholds 1.25% ISR (1250 cents)
 	// Total tax escrow = 16000 (IVA)
-	// Net available = 116000 - (3360 + 16000) = 96640 cents
-	payload := SettlePaymentRequest{
-		PaymentID:        "pay_softpos_001",
-		MerchantID:       merchantID,
-		GrossAmountCents: 116000,
-		CustomerRFC:      "B2B850101XYZ",
-		IsPersonaMoral:   true,
-		PlatformFeeCents: 3360,
-		RBFSweepCents:    0,
+	// Net available = 116000 - (3364 + 16000) = 96636 cents
+	authorizeTestPayment(t, server, merchantID, "pay_softpos_001", 116000)
+	if err := server.merchantRepo.SetMerchantPlatformFeeBps(context.Background(), merchantID, 290); err != nil {
+		t.Fatal(err)
+	}
+	// Client-sent fee / RBF amounts are ignored (no longer part of the contract).
+	payload := map[string]any{
+		"payment_id":         "pay_softpos_001",
+		"merchant_id":        merchantID,
+		"customer_rfc":       "B2B850101XYZ",
+		"is_persona_moral":   true,
+		"platform_fee_cents": 0,
+		"rbf_sweep_cents":    50000,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -190,14 +195,17 @@ func TestSoftPOSPaymentSettle_SuccessWithRESICO(t *testing.T) {
 	if resp.TaxEscrowCents != 16000 {
 		t.Errorf("expected TaxEscrow 16000, got %d", resp.TaxEscrowCents)
 	}
-	if resp.NetAvailableCents != 96640 {
-		t.Errorf("expected net available 96640, got %d", resp.NetAvailableCents)
+	if resp.PlatformFeeCents != 3364 || resp.PlatformFeeBps != 290 || resp.RBFSweepCents != 0 {
+		t.Errorf("fee/rbf must be server-derived, got fee=%d bps=%d rbf=%d", resp.PlatformFeeCents, resp.PlatformFeeBps, resp.RBFSweepCents)
+	}
+	if resp.NetAvailableCents != 96636 {
+		t.Errorf("expected net available 96636, got %d", resp.NetAvailableCents)
 	}
 
 	// Verify ledger
 	availBal, _ := server.ledger.GetBalance("LIABILITY:MERCHANT:" + merchantID + ":AVAILABLE")
-	if availBal.AmountCents != 96640 {
-		t.Errorf("expected ledger available balance 96640, got %d", availBal.AmountCents)
+	if availBal.AmountCents != 96636 {
+		t.Errorf("expected ledger available balance 96636, got %d", availBal.AmountCents)
 	}
 
 	escrowBal, _ := server.ledger.GetBalance("LIABILITY:MERCHANT:" + merchantID + ":TAX_ESCROW")
@@ -384,6 +392,8 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 
 	merchantID := "merch_resico_tiers"
 	_ = server.RegisterMerchant(merchantID, "GARM850101ABC", "Taqueria Escalonada", true)
+	authorizeTestPayment(t, server, merchantID, "pay_tier_01", 2900000)
+	authorizeTestPayment(t, server, merchantID, "pay_tier_02", 1160000)
 
 	// Sale 1: $29,000.00 MXN gross (2,900,000 cents) -> Base = 2,500,000 cents ($25,000.00 MXN) -> 1.0% ISR tier (0.010)
 	sale1 := SettlePaymentRequest{
@@ -391,8 +401,6 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 		MerchantID:       merchantID,
 		GrossAmountCents: 2900000,
 		IsPersonaMoral:   false,
-		PlatformFeeCents: 0,
-		RBFSweepCents:    0,
 	}
 	body1, _ := json.Marshal(sale1)
 	rec1 := httptest.NewRecorder()
@@ -404,8 +412,8 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 	}
 	var resp1 SettlePaymentResponse
 	_ = json.Unmarshal(rec1.Body.Bytes(), &resp1)
-	if resp1.ISRRate != 0.010 {
-		t.Errorf("expected ISRRate 0.010 on first sale, got %f", resp1.ISRRate)
+	if resp1.ISRRateBps != 100 {
+		t.Errorf("expected ISR rate 100 bps on first sale, got %d", resp1.ISRRateBps)
 	}
 
 	// Sale 2 in the same month: $11,600.00 MXN gross (1,160,000 cents) -> Base = 1,000,000 cents
@@ -415,8 +423,6 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 		MerchantID:       merchantID,
 		GrossAmountCents: 1160000,
 		IsPersonaMoral:   false,
-		PlatformFeeCents: 0,
-		RBFSweepCents:    0,
 	}
 	body2, _ := json.Marshal(sale2)
 	rec2 := httptest.NewRecorder()
@@ -428,8 +434,8 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 	}
 	var resp2 SettlePaymentResponse
 	_ = json.Unmarshal(rec2.Body.Bytes(), &resp2)
-	if resp2.ISRRate != 0.011 {
-		t.Errorf("expected escalated ISRRate 0.011 on second sale, got %f", resp2.ISRRate)
+	if resp2.ISRRateBps != 110 {
+		t.Errorf("expected escalated ISR rate 110 bps on second sale, got %d", resp2.ISRRateBps)
 	}
 	if resp2.ISREscrowCents != 11000 {
 		t.Errorf("expected ISREscrowCents 11000 (1.1%% of 1,000,000), got %d", resp2.ISREscrowCents)
@@ -452,29 +458,23 @@ func TestMerchantIsolatedRBFBalance(t *testing.T) {
 	jnl, _ := ledger.NewJournalEntry("loan_orig_m1", time.Now(), "Originate RBF Loan M1", loanEntries, nil)
 	_ = server.ledger.PostTransaction(jnl)
 
-	// Settle a payment for Merchant 1 with a 10,000-cent RBF sweep
-	settleM1 := SettlePaymentRequest{
-		PaymentID:        "pay_rbf_m1",
-		MerchantID:       m1,
-		GrossAmountCents: 116000,
-		IsPersonaMoral:   false,
-		PlatformFeeCents: 3360,
-		RBFSweepCents:    10000,
-	}
-	b1, _ := json.Marshal(settleM1)
+	// Settle a payment for Merchant 1 claiming a 10,000-cent RBF sweep: the
+	// client value is ignored (no active loan in the RBF engine -> sweep 0).
+	authorizeTestPayment(t, server, m1, "pay_rbf_m1", 116000)
+	b1, _ := json.Marshal(map[string]any{"payment_id": "pay_rbf_m1", "rbf_sweep_cents": 10000})
 	recSettle := httptest.NewRecorder()
 	server.Router().ServeHTTP(recSettle, asTenant(t, server, m1, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(b1))))
 	if recSettle.Code != http.StatusOK {
 		t.Fatalf("settle M1 failed: %d", recSettle.Code)
 	}
 
-	// Query Merchant 1 balance -> RBF debt should be 40,000 cents (50,000 - 10,000)
+	// Query Merchant 1 balance -> RBF debt unchanged at 50,000 cents
 	recBal1 := httptest.NewRecorder()
 	server.Router().ServeHTTP(recBal1, asTenant(t, server, m1, httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+m1+"/balances", nil)))
 	var bal1 MerchantBalancesResponse
 	_ = json.Unmarshal(recBal1.Body.Bytes(), &bal1)
-	if bal1.RBFDebtCents != 40000 {
-		t.Errorf("expected Merchant 1 RBFDebtCents 40000, got %d", bal1.RBFDebtCents)
+	if bal1.RBFDebtCents != 50000 {
+		t.Errorf("expected Merchant 1 RBFDebtCents 50000 (client sweep ignored), got %d", bal1.RBFDebtCents)
 	}
 
 	// Query Merchant 2 balance -> RBF debt MUST be 0 (strictly isolated from Merchant 1)
@@ -561,10 +561,8 @@ func TestEMVAuthorizeSettleAndReverse(t *testing.T) {
 	}
 
 	settleBody, _ := json.Marshal(SettlePaymentRequest{
-		PaymentID:        "emv_pay_settle_02",
-		MerchantID:       merchantID,
-		GrossAmountCents: 25000,
-		PlatformFeeCents: 500,
+		PaymentID:  "emv_pay_settle_02",
+		MerchantID: merchantID,
 	})
 	recSettle := httptest.NewRecorder()
 	server.Router().ServeHTTP(recSettle, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody))))
@@ -690,6 +688,8 @@ func TestRBFLoanLifecycleAndAutomaticSweepCap(t *testing.T) {
 	server, _ := setupTestServer(t)
 	merchantID := "merch_rbf_auto"
 	_ = server.RegisterMerchant(merchantID, "GARM850101ABC", "Panaderia RBF", true)
+	authorizeTestPayment(t, server, merchantID, "pay_auto_rbf_1", 348_000)
+	authorizeTestPayment(t, server, merchantID, "pay_auto_rbf_2", 348_000)
 
 	// 1. Originate $1,000.00 MXN (100,000 cents) loan with 10% fixed fee (1000 bps -> 10,000 cents fee, Cap = 110,000 cents)
 	// and 20% holdback rate (2000 bps)

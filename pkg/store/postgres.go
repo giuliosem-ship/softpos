@@ -22,6 +22,8 @@ var (
 	ErrMerchantNotFound    = errors.New("merchant not found")
 	ErrDuplicateMerchant   = errors.New("merchant already exists")
 	ErrDuplicateCLABE      = errors.New("clabe already assigned to another merchant")
+	ErrDuplicateJournal    = errors.New("ledger journal already posted")
+	ErrInvalidFeeBps       = errors.New("platform fee must be between 0 and 10000 bps")
 )
 
 // MerchantRecord represents persisted merchant profile data.
@@ -123,6 +125,26 @@ func (r *SQLLedgerRepository) PostTransaction(ctx context.Context, journal *ledg
 		_ = tx.Rollback()
 	}()
 
+	if err := postJournalTx(ctx, tx, journal); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit ledger transaction: %w", err)
+	}
+	return nil
+}
+
+// postJournalTx posts a balanced journal inside tx: it locks every involved
+// account (SELECT ... FOR UPDATE, sorted to avoid deadlocks), inserts the
+// journal and its entries and updates the balances. The caller commits.
+func postJournalTx(ctx context.Context, tx *sql.Tx, journal *ledger.JournalEntry) error {
+	if journal == nil {
+		return errors.New("journal entry cannot be nil")
+	}
+	if !journal.IsBalanced() {
+		return ErrUnbalancedJournal
+	}
 	// Collect unique account IDs and sort them to prevent deadlocks across concurrent threads
 	accountIDs := make([]string, 0, len(journal.Entries))
 	seen := make(map[string]bool)
@@ -168,6 +190,9 @@ func (r *SQLLedgerRepository) PostTransaction(ctx context.Context, journal *ledg
 		VALUES ($1, $2, $3, $4)
 	`, journal.ID, journal.Description, metaBytes, journal.Timestamp.UTC())
 	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrDuplicateJournal
+		}
 		return fmt.Errorf("failed to insert journal: %w", err)
 	}
 
@@ -220,9 +245,6 @@ func (r *SQLLedgerRepository) PostTransaction(ctx context.Context, journal *ledg
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit ledger transaction: %w", err)
-	}
 	return nil
 }
 
@@ -512,6 +534,29 @@ func (r *SQLMerchantRepository) AddMonthlySalesCents(ctx context.Context, mercha
 		return 0, fmt.Errorf("failed to commit monthly sales: %w", err)
 	}
 	return newSales, nil
+}
+
+func (r *SQLMerchantRepository) GetMerchantPlatformFeeBps(ctx context.Context, merchantID string) (int64, bool, error) {
+	var bps sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `SELECT platform_fee_bps FROM merchants WHERE id = $1`, merchantID).Scan(&bps)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("failed to get merchant platform fee: %w", err)
+	}
+	return bps.Int64, bps.Valid, nil
+}
+
+func (r *SQLMerchantRepository) SetMerchantPlatformFeeBps(ctx context.Context, merchantID string, bps int64) error {
+	if bps < 0 || bps > 10000 {
+		return ErrInvalidFeeBps
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE merchants SET platform_fee_bps = $1, updated_at = $2 WHERE id = $3`, bps, time.Now().UTC(), merchantID)
+	if err != nil {
+		return fmt.Errorf("failed to set merchant platform fee: %w", err)
+	}
+	return requireRowAffected(res, ErrMerchantNotFound)
 }
 
 // ----------------------------------------------------------------------------

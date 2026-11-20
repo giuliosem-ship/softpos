@@ -55,6 +55,9 @@ type Server struct {
 	devMode           bool
 	codiWebhookSecret []byte
 	staticDir         string
+	money             store.MoneyStore
+	defaultFeeBps     int64
+	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
 }
@@ -83,6 +86,8 @@ func NewServer(
 		merchantRepo:      store.NewMemoryMerchantRepository(),
 		router:            http.NewServeMux(),
 	}
+	s.money = s.newMemoryMoneyStore()
+	s.defaultFeeBps = DefaultPlatformFeeBps
 	s.auth = newEphemeralAuthService()
 	s.authLimiter = NewRateLimiter(DefaultAuthRateLimitPerMinute, time.Minute)
 

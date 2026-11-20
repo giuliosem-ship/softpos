@@ -148,8 +148,7 @@ func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	// Settle sale of $250.00 MXN (25,000 cents)
 	settleBody, _ := json.Marshal(SettlePaymentRequest{
 		PaymentID:        "pos_emv_001",
-		GrossAmountCents: 25000,
-		PlatformFeeCents: 500, // 2%
+		GrossAmountCents: 25000, // optional cross-check against the authorized amount
 	})
 	recSettle := httptest.NewRecorder()
 	server.Router().ServeHTTP(recSettle, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/payments/settle", bytes.NewReader(settleBody)), token))

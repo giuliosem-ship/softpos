@@ -9,7 +9,7 @@ var ErrInvalidTaxAmount = errors.New("tax amounts cannot be negative or invalid"
 type ResicoSplitResult struct {
 	BaseAmountCents           int64
 	IVAAmountCents            int64
-	ISRRate                   float64
+	ISRRateBps                int64 // ISR rate in basis points (100 = 1.00%)
 	ISREscrowCents            int64
 	TotalTaxEscrowCents       int64
 	NetMerchantCents          int64
@@ -32,8 +32,10 @@ func getResicoMonthlyRateBps(accumulatedSalesCents int64) int64 {
 	}
 }
 
-func GetResicoMonthlyRate(accumulatedSalesCents int64) float64 {
-	return float64(getResicoMonthlyRateBps(accumulatedSalesCents)) / 10000.0
+// GetResicoMonthlyRateBps returns the RESICO monthly ISR rate in basis points
+// for an accumulated monthly base (no floats: AGENTS.md money rule).
+func GetResicoMonthlyRateBps(accumulatedSalesCents int64) int64 {
+	return getResicoMonthlyRateBps(accumulatedSalesCents)
 }
 
 // CalculateResicoTaxSplit computes IVA and ISR RESICO splits using pure int64 arithmetic (zero float64 division/rounding).
@@ -70,7 +72,7 @@ func CalculateResicoTaxSplit(grossAmountCents int64, accumulatedMonthlySalesCent
 	return ResicoSplitResult{
 		BaseAmountCents:           baseAmountCents,
 		IVAAmountCents:            ivaAmountCents,
-		ISRRate:                   float64(isrRateBps) / 10000.0,
+		ISRRateBps:                isrRateBps,
 		ISREscrowCents:            isrEscrowCents,
 		TotalTaxEscrowCents:       totalTaxEscrowCents,
 		NetMerchantCents:          netMerchantCents,

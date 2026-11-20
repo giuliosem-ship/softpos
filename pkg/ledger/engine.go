@@ -151,6 +151,21 @@ func (le *LedgerEngine) PostTransaction(journal *JournalEntry) error {
 }
 
 func (le *LedgerEngine) RecordSplitPayment(grossMxnCents int64, merchantID string, platformFeeCents int64, taxEscrowCents int64, rbfSweepCents int64) (*JournalEntry, error) {
+	journal, err := NewSplitPaymentJournal(fmt.Sprintf("split_tx_%d", time.Now().UnixNano()), time.Now(), grossMxnCents, merchantID, platformFeeCents, taxEscrowCents, rbfSweepCents)
+	if err != nil {
+		return nil, err
+	}
+	if err := le.PostTransaction(journal); err != nil {
+		return nil, err
+	}
+	return journal, nil
+}
+
+// NewSplitPaymentJournal builds (without posting) the settlement split of a
+// sale: debit the acquirer receivable for the gross amount, credit platform fee
+// revenue, the merchant tax escrow, the merchant RBF loan receivable and the
+// merchant available balance with the remainder.
+func NewSplitPaymentJournal(journalID string, ts time.Time, grossMxnCents int64, merchantID string, platformFeeCents int64, taxEscrowCents int64, rbfSweepCents int64) (*JournalEntry, error) {
 	if grossMxnCents < 0 || platformFeeCents < 0 || taxEscrowCents < 0 || rbfSweepCents < 0 {
 		return nil, ErrInvalidAmount
 	}
@@ -167,15 +182,5 @@ func (le *LedgerEngine) RecordSplitPayment(grossMxnCents int64, merchantID strin
 		{AccountID: fmt.Sprintf("ASSET:RBF_LOANS_RECEIVABLE:%s", merchantID), Direction: Credit, Money: NewMoney(rbfSweepCents, "MXN")},
 		{AccountID: fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchantID), Direction: Credit, Money: NewMoney(netAvailableCents, "MXN")},
 	}
-
-	journalID := fmt.Sprintf("split_tx_%d", time.Now().UnixNano())
-	journal, err := NewJournalEntry(journalID, time.Now(), "Split Payment", entries, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := le.PostTransaction(journal); err != nil {
-		return nil, err
-	}
-	return journal, nil
+	return NewJournalEntry(journalID, ts, "Split Payment", entries, nil)
 }

@@ -170,17 +170,18 @@ func TestIdempotencyKeysAreScopedByTenant(t *testing.T) {
 	const a, b = "merch_idem_a", "merch_idem_b"
 	_ = s.RegisterMerchant(a, "GARM850101ABC", "A", true)
 	_ = s.RegisterMerchant(b, "GARM850101ABC", "B", true)
-	reqA := asTenant(t, s, a, jsonReq("POST", "/api/v1/payments/settle", map[string]any{"payment_id": "shared_id", "gross_amount_cents": 11600}))
+	tlv := "9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"
+	reqA := asTenant(t, s, a, jsonReq("POST", "/api/v1/payments/emv/authorize", map[string]any{"payment_id": "idem_a", "tlv_hex": tlv}))
 	reqA.Header.Set("Idempotency-Key", "same-key")
 	if rec := serve(s, reqA); rec.Code != http.StatusOK {
-		t.Fatalf("A settle: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("A authorize: %d %s", rec.Code, rec.Body.String())
 	}
-	reqB := asTenant(t, s, b, jsonReq("POST", "/api/v1/payments/settle", map[string]any{"payment_id": "shared_id", "gross_amount_cents": 23200}))
+	reqB := asTenant(t, s, b, jsonReq("POST", "/api/v1/payments/emv/authorize", map[string]any{"payment_id": "idem_b", "tlv_hex": tlv}))
 	reqB.Header.Set("Idempotency-Key", "same-key")
 	rec := serve(s, reqB)
-	var resp SettlePaymentResponse
+	var resp EMVAuthorizeResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if rec.Code != http.StatusOK || resp.GrossAmountCents != 23200 {
+	if rec.Code != http.StatusOK || resp.PaymentID != "idem_b" || resp.MerchantID != b {
 		t.Fatalf("B must not receive A's cached response: %d %+v", rec.Code, resp)
 	}
 }

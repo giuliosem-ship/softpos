@@ -1052,6 +1052,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages with tests ok (webhook tests: valid, 6 bad-signature variants, stale +-6min, replay 409 + re-signed retry credited once, not configured 503, dev simulate, unit window edge); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 17/17 PASS (restart test signs the CoDi webhook); node --test web/pos/softpos_sdk.test.js 8/8; binary smoke test in DEV_MODE (401 anon, dev-session, simulate-confirm, unsigned webhook 401, boot refused without JWT_SECRET).",
       "audit_notes": "Replay check-then-set is not atomic across replicas (tracking_key idempotency still prevents double credit only within the same non-atomic window; single-transaction posting is Batch C). STP abono has no timestamp in its canonical string (STP scheme); replay protection there relies on claveRastreo idempotency. No real Banxico/STP signature format confirmed yet.",
       "priority": 67
+    },
+    {
+      "id": "MVP-07",
+      "component": "payments",
+      "title": "Server-derived settlement amounts + atomic money posting",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/money_flows_test.go, pkg/store/money_test.go, cmd/server/money_integration_test.go, pkg/api/server_test.go, pkg/api/tenant_auth_test.go, pkg/api/pos_frontend_test.go, pkg/fiscal/resico_test.go",
+        "implementation": "pkg/store/money.go, pkg/store/money_memory.go, migrations/007_money_posting.*.sql, pkg/store/postgres.go, pkg/store/merchant_memory.go, pkg/ledger/engine.go, pkg/api/money.go, pkg/api/handlers_payments.go, pkg/api/handlers_emv_codi.go, pkg/api/handlers_stp.go, pkg/api/server.go, pkg/fiscal/resico.go, cmd/server/main.go, web/pos/app.js, web/pos/softpos_sdk.js, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Settle only an AUTHORIZED card payment of the tenant: gross = authorized amount (optional gross_amount_cents must match -> 409 AMOUNT_MISMATCH), platform fee = merchant tariff bps (merchants.platform_fee_bps, NULL -> DEFAULT_PLATFORM_FEE_BPS, default 200) half-up, RBF sweep from the in-memory RBF engine (0 without loan); client fee/rbf fields ignored; unknown/foreign -> 404, voided -> 409, already settled -> stored result. store.MoneyStore unit of work (SQL: one transaction; memory: serialized + buffered) commits payment status + payment_settlements row + ledger journal + RESICO accumulator (row materialized then FOR UPDATE) + outbox event together; CoDi confirm and STP abono claim money_operations keys (codi:confirm:<tracking>, stp:abono:<clave>) with INSERT ON CONFLICT DO NOTHING in the same tx and replay the stored response. Refund/void through the same unit of work; posting errors -> rollback + 500. ISR rate exposed as isr_rate_bps (int64).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 19/19 PASS incl. 10 concurrent settles + 10 duplicate STP abonos + 10 re-signed CoDi retries credited exactly once and SQLMoneyStore rollback/commit; node --test web/pos/softpos_sdk.test.js 8/8.",
+      "audit_notes": "RBF loans still in process memory (repayment applied after commit; serialized in-process only for merchants with an active loan). is_persona_moral is still client-declared (affects ISR escrow, not the merchant's credited total beyond the ISR share). Hot global ledger rows serialize all postings.",
+      "priority": 68
     }
   ]
 }

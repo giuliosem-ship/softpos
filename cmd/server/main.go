@@ -62,6 +62,11 @@ type Config struct {
 	// Empty outside DEV_MODE disables the webhook (503).
 	CoDiWebhookSecret string
 
+	// DefaultPlatformFeeBps is the tariff for merchants without their own
+	// (DEFAULT_PLATFORM_FEE_BPS, 0..10000; unset keeps api.DefaultPlatformFeeBps).
+	DefaultPlatformFeeBps int64
+	HasDefaultFeeBps      bool
+
 	// Outbox dispatcher (only runs when DatabaseURL is set).
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
 	OutboxBatchSize    int           // OUTBOX_BATCH_SIZE, default 50
@@ -130,12 +135,23 @@ func LoadConfigFromEnv() Config {
 			slog.Warn("invalid AUTH_RATE_LIMIT_PER_MINUTE, using default", "value", val)
 		}
 	}
+	var feeBps int64
+	hasFee := false
+	if val := os.Getenv("DEFAULT_PLATFORM_FEE_BPS"); val != "" {
+		if n, err := strconv.ParseInt(val, 10, 64); err == nil && n >= 0 && n <= 10000 {
+			feeBps, hasFee = n, true
+		} else {
+			slog.Warn("invalid DEFAULT_PLATFORM_FEE_BPS, using default", "value", val)
+		}
+	}
 	integrityPkg := os.Getenv("PLAY_INTEGRITY_PACKAGE")
 	if integrityPkg == "" {
 		integrityPkg = "mx.softpos.app"
 	}
 
 	return Config{
+		DefaultPlatformFeeBps:  feeBps,
+		HasDefaultFeeBps:       hasFee,
 		AuthRateLimitPerMinute: authRate,
 		PlayIntegritySecret:    os.Getenv("PLAY_INTEGRITY_SECRET"),
 		CoDiWebhookSecret:      os.Getenv("CODI_WEBHOOK_SECRET"),
@@ -301,6 +317,9 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	}
 	server.SetAuthService(authSvc)
 	server.SetDevMode(cfg.DevMode)
+	if cfg.HasDefaultFeeBps {
+		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
+	}
 	if codiSecret != "" {
 		server.SetCoDiWebhookSecret(codiSecret)
 	}
@@ -323,6 +342,9 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		server.SetEMVPaymentRepository(sqlEMVRepo)
 
 		server.SetCoDiRepository(store.NewSQLCoDiRepository(db))
+
+		// Payment state + journal + RESICO accumulator + outbox in one transaction.
+		server.SetMoneyStore(store.NewSQLMoneyStore(db))
 
 		sqlOutboxRepo := store.NewSQLOutboxRepository(db)
 		server.SetOutboxRepository(sqlOutboxRepo)

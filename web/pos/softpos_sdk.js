@@ -390,8 +390,6 @@
         merchant_id: params.merchantId,
         gross_amount_cents: params.grossAmountCents,
         is_persona_moral: Boolean(params.isPersonaMoral),
-        platform_fee_cents: params.platformFeeCents || 0,
-        rbf_sweep_cents: params.rbfSweepCents || 0,
       });
     }
 

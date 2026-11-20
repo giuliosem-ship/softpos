@@ -1,40 +1,39 @@
 package fiscal
 
 import (
-	"math"
 	"testing"
 )
 
 func TestMonthlyBrackets(t *testing.T) {
 	// <= 25,000 MXN (2,500,000 cents): 1.0%
-	if r := GetResicoMonthlyRate(1000000); math.Abs(r-0.010) > 1e-6 {
-		t.Errorf("expected 0.010, got %f", r)
+	if r := GetResicoMonthlyRateBps(1000000); r != 100 {
+		t.Errorf("expected 0.010, got %d", r)
 	}
-	if r := GetResicoMonthlyRate(2500000); math.Abs(r-0.010) > 1e-6 {
-		t.Errorf("expected 0.010, got %f", r)
+	if r := GetResicoMonthlyRateBps(2500000); r != 100 {
+		t.Errorf("expected 0.010, got %d", r)
 	}
 
 	// <= 50,000 MXN (5,000,000 cents): 1.1%
-	if r := GetResicoMonthlyRate(3500000); math.Abs(r-0.011) > 1e-6 {
-		t.Errorf("expected 0.011, got %f", r)
+	if r := GetResicoMonthlyRateBps(3500000); r != 110 {
+		t.Errorf("expected 0.011, got %d", r)
 	}
-	if r := GetResicoMonthlyRate(5000000); math.Abs(r-0.011) > 1e-6 {
-		t.Errorf("expected 0.011, got %f", r)
+	if r := GetResicoMonthlyRateBps(5000000); r != 110 {
+		t.Errorf("expected 0.011, got %d", r)
 	}
 
 	// <= 83,333.33 MXN: 1.5%
-	if r := GetResicoMonthlyRate(6000000); math.Abs(r-0.015) > 1e-6 {
-		t.Errorf("expected 0.015, got %f", r)
+	if r := GetResicoMonthlyRateBps(6000000); r != 150 {
+		t.Errorf("expected 0.015, got %d", r)
 	}
 
 	// <= 208,333.33 MXN: 2.0%
-	if r := GetResicoMonthlyRate(10000000); math.Abs(r-0.020) > 1e-6 {
-		t.Errorf("expected 0.020, got %f", r)
+	if r := GetResicoMonthlyRateBps(10000000); r != 200 {
+		t.Errorf("expected 0.020, got %d", r)
 	}
 
 	// > 208,333.33 MXN: 2.5%
-	if r := GetResicoMonthlyRate(25000000); math.Abs(r-0.025) > 1e-6 {
-		t.Errorf("expected 0.025, got %f", r)
+	if r := GetResicoMonthlyRateBps(25000000); r != 250 {
+		t.Errorf("expected 0.025, got %d", r)
 	}
 }
 
@@ -50,8 +49,8 @@ func TestB2CSaleTaxSplit(t *testing.T) {
 	if result.IVAAmountCents != 16000 {
 		t.Errorf("expected IVA 16000, got %d", result.IVAAmountCents)
 	}
-	if math.Abs(result.ISRRate-0.010) > 1e-6 {
-		t.Errorf("expected ISR rate 0.010, got %f", result.ISRRate)
+	if result.ISRRateBps != 100 {
+		t.Errorf("expected ISR rate 100 bps, got %d", result.ISRRateBps)
 	}
 	if result.ISREscrowCents != 1000 {
 		t.Errorf("expected ISR escrow 1000, got %d", result.ISREscrowCents)
@@ -80,8 +79,8 @@ func TestB2BPersonaMoralWithholding(t *testing.T) {
 	if result.IVAAmountCents != 16000 {
 		t.Errorf("expected IVA 16000, got %d", result.IVAAmountCents)
 	}
-	if math.Abs(result.ISRRate-0.0125) > 1e-6 {
-		t.Errorf("expected ISR rate 0.0125, got %f", result.ISRRate)
+	if result.ISRRateBps != 125 {
+		t.Errorf("expected ISR rate 125 bps, got %d", result.ISRRateBps)
 	}
 	if result.ISREscrowCents != 1250 {
 		t.Errorf("expected ISR escrow 1250, got %d", result.ISREscrowCents)

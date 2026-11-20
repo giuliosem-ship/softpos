@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"softpos/pkg/fiscal"
 	"softpos/pkg/ledger"
 	"softpos/pkg/payments"
+	"softpos/pkg/store"
 )
 
 type EMVAuthorizeRequest struct {
@@ -145,50 +147,58 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	existing, err := s.paymentEngine.GetPayment(req.PaymentID)
-	if err != nil || existing.MerchantID != tenant { // foreign payments look nonexistent
-		http.Error(w, `{"error":"PAYMENT_NOT_FOUND"}`, http.StatusNotFound)
-		return
-	}
-
+	ctx := r.Context()
 	var updated *payments.Payment
-	switch existing.Status {
-	case payments.PaymentAuthorized:
-		updated, err = s.paymentEngine.Void(req.PaymentID)
+	err := s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
+		p, err := tx.GetPaymentForUpdate(ctx, req.PaymentID)
 		if err != nil {
-			http.Error(w, `{"error":"VOID_FAILED"}`, http.StatusConflict)
-			return
+			return err
 		}
-	case payments.PaymentSettled:
-		refundAmt := req.RefundCents
-		if refundAmt == 0 {
-			refundAmt = existing.AmountCents
+		if p.MerchantID != tenant {
+			return payments.ErrPaymentNotFound
 		}
-		updated, err = s.paymentEngine.Refund(req.PaymentID, refundAmt)
-		if err != nil {
-			http.Error(w, `{"error":"REFUND_FAILED"}`, http.StatusBadRequest)
-			return
+		switch p.Status {
+		case payments.PaymentAuthorized:
+			if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentAuthorized, payments.PaymentVoided); err != nil {
+				return err
+			}
+			p.Status = payments.PaymentVoided
+			updated = p
+			return tx.EnqueueEvent(ctx, "payment.voided", p.ID, map[string]any{"payment_id": p.ID, "merchant_id": tenant})
+		case payments.PaymentSettled:
+			refundAmt := req.RefundCents
+			if refundAmt == 0 {
+				refundAmt = p.AmountCents
+			}
+			if refundAmt <= 0 || refundAmt > p.AmountCents {
+				return errRefundExceedsBalance
+			}
+			availCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant)
+			jnl, err := ledger.NewJournalEntry("refund_"+p.ID, nowUTC(), "EMV Refund "+p.ID, []ledger.Entry{
+				{AccountID: availCode, Direction: ledger.Debit, Money: ledger.NewMoney(refundAmt, "MXN")},
+				{AccountID: "ASSET:ACQUIRER_RECEIVABLE", Direction: ledger.Credit, Money: ledger.NewMoney(refundAmt, "MXN")},
+			}, map[string]string{"payment_id": p.ID})
+			if err != nil {
+				return err
+			}
+			if err := tx.PostJournal(ctx, jnl); err != nil {
+				return err
+			}
+			if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentSettled, payments.PaymentRefunded); err != nil {
+				return err
+			}
+			p.Status = payments.PaymentRefunded
+			updated = p
+			return tx.EnqueueEvent(ctx, "payment.refunded", p.ID, map[string]any{"payment_id": p.ID, "merchant_id": tenant, "refund_cents": refundAmt})
+		default:
+			return payments.ErrInvalidStateTransition
 		}
-
-		// Post reversing journal entry on merchant available & acquirer receivable if accounts exist
-		availCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", existing.MerchantID)
-		entries := []ledger.Entry{
-			{AccountID: availCode, Direction: ledger.Debit, Money: ledger.NewMoney(refundAmt, "MXN")},
-			{AccountID: "ASSET:ACQUIRER_RECEIVABLE", Direction: ledger.Credit, Money: ledger.NewMoney(refundAmt, "MXN")},
-		}
-		if jnl, jErr := ledger.NewJournalEntry(
-			fmt.Sprintf("refund_%s_%d", req.PaymentID, time.Now().UnixNano()),
-			time.Now().UTC(),
-			fmt.Sprintf("EMV Refund %s", req.PaymentID),
-			entries,
-			nil,
-		); jErr == nil {
-			_ = s.ledger.PostTransaction(jnl)
-		}
-	default:
-		http.Error(w, `{"error":"INVALID_PAYMENT_STATE"}`, http.StatusConflict)
+	})
+	if err != nil {
+		writeMoneyError(w, "reverse", err)
 		return
 	}
+	updated.UpdatedAt = nowUTC()
 
 	resp := EMVReverseResponse{
 		PaymentID:   updated.ID,
@@ -323,63 +333,89 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	idempKey := "codi:confirm:" + conf.TrackingKey
-	if rec, exists := s.idempotency.Get(idempKey); exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(rec.StatusCode)
-		_, _ = w.Write(rec.Body)
-		return
-	}
-
 	merchant, exists := s.GetMerchantByCLABE(conf.SellerCLABE)
 	if !exists {
 		http.Error(w, `{"error":"UNKNOWN_SELLER_CLABE"}`, http.StatusNotFound)
 		return
 	}
 
+	// Validates and upserts the confirmation (idempotent; safe on retries).
 	if err := s.codiService.ConfirmPayment(conf); err != nil {
 		http.Error(w, `{"error":"CODI_CONFIRM_FAILED"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Calculate RESICO tax split (0 platform fee on Banxico CoDi QR)
-	accSales, err := s.merchantMonthlySalesCents(merchant.ID)
+	// Exactly-once credit: the tracking key is claimed inside the same
+	// transaction as the journal, the RESICO accumulator and the outbox event.
+	ctx := r.Context()
+	opKey := "codi:confirm:" + conf.TrackingKey
+	if s.hasActiveRBFLoan(merchant.ID) {
+		s.rbfMu.Lock()
+		defer s.rbfMu.Unlock()
+	}
+	var respBytes []byte
+	var rbfSweepCents int64
+	fresh := false
+	err = s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
+		fresh, rbfSweepCents = false, 0
+		claimed, _, prior, err := tx.ClaimOperation(ctx, opKey)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			respBytes = prior
+			return nil
+		}
+		ym := currentYearMonth()
+		accSales, err := tx.MonthlySalesForUpdate(ctx, merchant.ID, ym)
+		if err != nil {
+			return err
+		}
+		// RESICO tax split (0 platform fee on CoDi/SPEI)
+		taxSplit, err := fiscal.CalculateResicoTaxSplit(conf.AmountCents, accSales, false)
+		if err != nil {
+			return err
+		}
+		rbfSweepCents = s.rbfSweepCents(merchant.ID, conf.AmountCents, conf.AmountCents-taxSplit.TotalTaxEscrowCents)
+		jnl, err := ledger.NewSplitPaymentJournal("codi_"+conf.TrackingKey, nowUTC(), conf.AmountCents, merchant.ID, 0, taxSplit.TotalTaxEscrowCents, rbfSweepCents)
+		if err != nil {
+			return err
+		}
+		jnl.Description = "CoDi confirmation " + conf.TrackingKey
+		jnl.Metadata = map[string]string{"tracking_key": conf.TrackingKey, "merchant_id": merchant.ID}
+		if err := tx.PostJournal(ctx, jnl); err != nil {
+			return err
+		}
+		if err := tx.AddMonthlySales(ctx, merchant.ID, ym, taxSplit.BaseAmountCents); err != nil {
+			return err
+		}
+		resp := CoDiWebhookResponse{
+			Status:            "CONFIRMED",
+			TrackingKey:       conf.TrackingKey,
+			MerchantID:        merchant.ID,
+			GrossAmountCents:  conf.AmountCents,
+			TaxEscrowCents:    taxSplit.TotalTaxEscrowCents,
+			RBFSweepCents:     rbfSweepCents,
+			NetAvailableCents: conf.AmountCents - taxSplit.TotalTaxEscrowCents - rbfSweepCents,
+		}
+		if respBytes, err = json.Marshal(resp); err != nil {
+			return err
+		}
+		if err := tx.EnqueueEvent(ctx, "codi.confirmed", conf.TrackingKey, resp); err != nil {
+			return err
+		}
+		fresh = true
+		return tx.CompleteOperation(ctx, opKey, http.StatusOK, respBytes)
+	})
 	if err != nil {
-		http.Error(w, `{"error":"MONTHLY_SALES_UNAVAILABLE"}`, http.StatusServiceUnavailable)
+		writeMoneyError(w, "codi_confirm", err)
 		return
 	}
-	taxSplit, err := fiscal.CalculateResicoTaxSplit(conf.AmountCents, accSales, false)
-	if err != nil {
-		http.Error(w, `{"error":"TAX_SPLIT_FAILED"}`, http.StatusInternalServerError)
-		return
+	if fresh && rbfSweepCents > 0 {
+		if _, err := s.rbfEngine.ApplyRepayment(merchant.ID, rbfSweepCents); err != nil {
+			slog.Error("rbf repayment not applied after CoDi confirmation", "tracking_key", conf.TrackingKey, "error", err)
+		}
 	}
-
-	maxDeductible := conf.AmountCents - taxSplit.TotalTaxEscrowCents
-	rbfSweepCents := s.rbfEngine.CalculateSweep(merchant.ID, conf.AmountCents, maxDeductible)
-
-	if _, err := s.ledger.RecordSplitPayment(conf.AmountCents, merchant.ID, 0, taxSplit.TotalTaxEscrowCents, rbfSweepCents); err != nil {
-		http.Error(w, `{"error":"LEDGER_SPLIT_FAILED"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if rbfSweepCents > 0 {
-		_, _ = s.rbfEngine.ApplyRepayment(merchant.ID, rbfSweepCents)
-	}
-	_ = s.AddMerchantMonthlySalesCents(merchant.ID, taxSplit.BaseAmountCents) // logged on failure
-
-	netAvailable := conf.AmountCents - taxSplit.TotalTaxEscrowCents - rbfSweepCents
-	resp := CoDiWebhookResponse{
-		Status:            "CONFIRMED",
-		TrackingKey:       conf.TrackingKey,
-		MerchantID:        merchant.ID,
-		GrossAmountCents:  conf.AmountCents,
-		TaxEscrowCents:    taxSplit.TotalTaxEscrowCents,
-		RBFSweepCents:     rbfSweepCents,
-		NetAvailableCents: netAvailable,
-	}
-
-	respBytes, _ := json.Marshal(resp)
-	s.idempotency.Set(idempKey, http.StatusOK, respBytes, 24*time.Hour)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

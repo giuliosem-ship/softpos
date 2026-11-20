@@ -162,14 +162,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         tlvHex: tlvHex,
       });
 
-      // 2. Settle payment with atomic RESICO tax split & RBF holdback
+      // 2. Settle: the server derives gross (authorized amount), platform fee
+      // (merchant tariff) and RBF holdback; grossAmountCents is only cross-checked.
       const isPM = togglePM.checked;
       const settleResp = await client.settlePayment({
         paymentId: activePaymentId,
         merchantId: currentMerchantId,
         grossAmountCents: cents,
         isPersonaMoral: isPM,
-        platformFeeCents: Math.round(cents * 0.02), // 2.0% platform fee
       });
 
       renderReceipt(settleResp);
@@ -310,7 +310,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       recISRLabel.textContent = 'Retención 1.25% ISR PM (Art. 113-J):';
       recISR.textContent = SoftPOSSDK.formatMXN(settle.isr_escrow_cents);
     } else {
-      recISRLabel.textContent = `Apartado ISR RESICO (${(settle.isr_rate * 100).toFixed(1)}%):`;
+      recISRLabel.textContent = `Apartado ISR RESICO (${(settle.isr_rate_bps / 100).toFixed(2)}%):`;
       recISR.textContent = SoftPOSSDK.formatMXN(settle.isr_escrow_cents);
     }
 

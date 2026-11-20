@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"softpos/pkg/ledger"
+	"softpos/pkg/store"
 )
 
 type STPAbonoRequest struct {
@@ -82,6 +82,11 @@ func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(req.ClaveRastreo) == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_CLAVE_RASTREO")
+		return
+	}
+
 	montoCents, err := parseSTPMontoToCents(req.Monto)
 	if err != nil {
 		http.Error(w, `{"error":"INVALID_AMOUNT"}`, http.StatusBadRequest)
@@ -108,51 +113,55 @@ func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotency check on claveRastreo
-	if rec, exists := s.idempotency.Get("stp:abono:" + req.ClaveRastreo); exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(rec.StatusCode)
-		_, _ = w.Write(rec.Body)
-		return
-	}
-
 	merchant, exists := s.GetMerchantByCLABE(req.CuentaBeneficiario)
 	if !exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "UNKNOWN_VIRTUAL_CLABE",
-		})
+		writeError(w, http.StatusNotFound, "UNKNOWN_VIRTUAL_CLABE")
 		return
 	}
 
-	// Double-entry posting: Debit STP Concentrator, Credit Merchant Available
-	availableAccountID := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchant.ID)
-	entries := []ledger.Entry{
-		{AccountID: "ASSET:STP_CONCENTRATOR", Direction: ledger.Debit, Money: ledger.NewMoney(montoCents, "MXN")},
-		{AccountID: availableAccountID, Direction: ledger.Credit, Money: ledger.NewMoney(montoCents, "MXN")},
-	}
-
-	journalID := fmt.Sprintf("spei_in_%s_%d", req.ClaveRastreo, req.ID)
-	journal, err := ledger.NewJournalEntry(journalID, time.Now(), fmt.Sprintf("SPEI Inbound Abono %s", req.ClaveRastreo), entries, nil)
+	// Exactly-once on claveRastreo: the key claim, the journal and the outbox
+	// event commit in one transaction; a duplicate replays the first response.
+	ctx := r.Context()
+	opKey := "stp:abono:" + req.ClaveRastreo
+	var respBytes []byte
+	err = s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
+		claimed, _, prior, err := tx.ClaimOperation(ctx, opKey)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			respBytes = prior
+			return nil
+		}
+		// Double-entry posting: Debit STP Concentrator, Credit Merchant Available
+		availableAccountID := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchant.ID)
+		journal, err := ledger.NewJournalEntry("spei_in_"+req.ClaveRastreo, nowUTC(), "SPEI Inbound Abono "+req.ClaveRastreo, []ledger.Entry{
+			{AccountID: "ASSET:STP_CONCENTRATOR", Direction: ledger.Debit, Money: ledger.NewMoney(montoCents, "MXN")},
+			{AccountID: availableAccountID, Direction: ledger.Credit, Money: ledger.NewMoney(montoCents, "MXN")},
+		}, map[string]string{"clave_rastreo": req.ClaveRastreo, "stp_id": strconv.FormatInt(req.ID, 10)})
+		if err != nil {
+			return err
+		}
+		if err := tx.PostJournal(ctx, journal); err != nil {
+			return err
+		}
+		if err := tx.EnqueueEvent(ctx, "spei.abono_received", req.ClaveRastreo, map[string]any{
+			"clave_rastreo": req.ClaveRastreo,
+			"merchant_id":   merchant.ID,
+			"amount_cents":  montoCents,
+			"stp_id":        req.ID,
+		}); err != nil {
+			return err
+		}
+		if respBytes, err = json.Marshal(STPAbonoResponse{ID: req.ID, Mensaje: "confirmar"}); err != nil {
+			return err
+		}
+		return tx.CompleteOperation(ctx, opKey, http.StatusOK, respBytes)
+	})
 	if err != nil {
-		http.Error(w, `{"error":"LEDGER_JOURNAL_ERROR"}`, http.StatusInternalServerError)
+		writeMoneyError(w, "stp_abono", err)
 		return
 	}
-
-	if err := s.ledger.PostTransaction(journal); err != nil {
-		http.Error(w, `{"error":"LEDGER_POSTING_ERROR"}`, http.StatusInternalServerError)
-		return
-	}
-
-	resp := STPAbonoResponse{
-		ID:      req.ID,
-		Mensaje: "confirmar",
-	}
-	respBytes, _ := json.Marshal(resp)
-
-	// Cache idempotency for 24 hours
-	s.idempotency.Set("stp:abono:"+req.ClaveRastreo, http.StatusOK, respBytes, 24*time.Hour)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

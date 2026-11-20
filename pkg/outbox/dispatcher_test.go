@@ -345,3 +345,28 @@ func TestRunOnce_StaleOwnerResultIsDiscarded(t *testing.T) {
 		t.Fatalf("B's publish must stand: %s retries=%d", st, retries)
 	}
 }
+
+// TestRunOnce_StopsBatchBeforeLeaseExpires: events later in a batch must not
+// be published once their lease could expire during the publish (another
+// dispatcher may already have reclaimed them -> concurrent duplicate publish).
+func TestRunOnce_StopsBatchBeforeLeaseExpires(t *testing.T) {
+	src := newMemSource(4, 5)
+	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	var published []int64
+	slow := PublisherFunc(func(_ context.Context, ev store.OutboxEvent) error {
+		published = append(published, ev.ID)
+		clock.Advance(20 * time.Second) // each publish takes up to the publish timeout
+		return nil
+	})
+	d := NewDispatcher(src, slow, Config{Lease: time.Minute, PublishTimeout: 20 * time.Second, Now: clock.Now, BatchSize: 10})
+	res, err := d.RunOnce(context.Background())
+	if err != nil || res.Published != 2 {
+		t.Fatalf("want 2 published before the lease could expire, got %+v %v (published %v)", res, err, published)
+	}
+	if len(published) != 2 {
+		t.Fatalf("publisher called for %v; events 3 and 4 could outlive the lease", published)
+	}
+	if st, _, _ := src.status(3); st != "PROCESSING" {
+		t.Fatalf("unpublished event must stay PROCESSING for lease reclaim, got %s", st)
+	}
+}

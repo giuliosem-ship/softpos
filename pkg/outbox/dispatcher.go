@@ -173,10 +173,14 @@ func (d *Dispatcher) Owner() string { return d.cfg.Owner }
 
 // RunOnce claims one batch and processes it. When ctx is cancelled mid-batch,
 // the current event is finished and the remaining claimed events are left
-// PROCESSING; they are reclaimed after the lease expires.
+// PROCESSING; they are reclaimed after the lease expires. The same happens to
+// the rest of the batch once a publish could outlive the batch's lease (slow
+// destination): another dispatcher may reclaim those events at expiry, so
+// publishing them here would race a concurrent duplicate publish.
 func (d *Dispatcher) RunOnce(ctx context.Context) (Result, error) {
 	var res Result
-	events, err := d.src.ClaimDueEvents(ctx, d.cfg.BatchSize, d.cfg.Now(), d.cfg.Lease, d.cfg.Owner)
+	claimedAt := d.cfg.Now()
+	events, err := d.src.ClaimDueEvents(ctx, d.cfg.BatchSize, claimedAt, d.cfg.Lease, d.cfg.Owner)
 	if err != nil {
 		return res, err
 	}
@@ -184,6 +188,11 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (Result, error) {
 	markCtx := context.WithoutCancel(ctx)
 	for _, ev := range events {
 		if ctx.Err() != nil {
+			break
+		}
+		if d.cfg.Now().Sub(claimedAt)+d.cfg.PublishTimeout >= d.cfg.Lease {
+			d.cfg.Logger.Warn("outbox batch stopped: lease would expire during publish; rest left for reclaim",
+				"event_id", ev.ID, "owner", d.cfg.Owner, "lease", d.cfg.Lease)
 			break
 		}
 		if pubErr := d.publish(ctx, ev); pubErr != nil {

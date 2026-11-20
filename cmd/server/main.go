@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -57,6 +58,9 @@ type Config struct {
 	// Play Integrity verification for /api/v1/auth/attestation/verify.
 	PlayIntegritySecret  string // PLAY_INTEGRITY_SECRET; empty disables verification (503)
 	PlayIntegrityPackage string // PLAY_INTEGRITY_PACKAGE, default "mx.softpos.app"
+	// CoDiWebhookSecret signs POST /api/v1/webhooks/codi/confirm (CODI_WEBHOOK_SECRET).
+	// Empty outside DEV_MODE disables the webhook (503).
+	CoDiWebhookSecret string
 
 	// Outbox dispatcher (only runs when DatabaseURL is set).
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
@@ -91,10 +95,8 @@ func LoadConfigFromEnv() Config {
 		seedDemo = false
 	}
 
+	// No default here: BuildServer only falls back to the dev STP secret in DEV_MODE.
 	hmacSecret := os.Getenv("STP_HMAC_SECRET")
-	if hmacSecret == "" {
-		hmacSecret = "softpos_dev_secret_key_12345678"
-	}
 
 	sqlDriver := store.NormalizeDriverName(os.Getenv("SQL_DRIVER"))
 
@@ -136,6 +138,7 @@ func LoadConfigFromEnv() Config {
 	return Config{
 		AuthRateLimitPerMinute: authRate,
 		PlayIntegritySecret:    os.Getenv("PLAY_INTEGRITY_SECRET"),
+		CoDiWebhookSecret:      os.Getenv("CODI_WEBHOOK_SECRET"),
 		PlayIntegrityPackage:   integrityPkg,
 		DevMode:                devMode,
 		JWTSecret:              os.Getenv("JWT_SECRET"),
@@ -200,8 +203,47 @@ func buildAuthService(cfg Config, repo auth.Repository) (*auth.Service, error) {
 	return svc, nil
 }
 
+// ErrDevSTPSecretOutsideDevMode is returned when the well-known dev STP HMAC
+// secret is configured without DEV_MODE (anyone could forge STP abonos).
+var ErrDevSTPSecretOutsideDevMode = errors.New("STP_HMAC_SECRET is the public dev default; set a real secret or DEV_MODE=true")
+
+// resolveWebhookSecrets applies the dev-mode fallbacks: the dev STP HMAC secret
+// and an ephemeral CoDi webhook secret are only used with DEV_MODE.
+func resolveWebhookSecrets(cfg Config) (stpSecret, codiSecret string, err error) {
+	stpSecret, codiSecret = cfg.STPHMACSecret, cfg.CoDiWebhookSecret
+	if stpSecret == defaultSTPHMACSecret && !cfg.DevMode {
+		return "", "", ErrDevSTPSecretOutsideDevMode
+	}
+	if stpSecret == "" {
+		if cfg.DevMode {
+			stpSecret = defaultSTPHMACSecret
+			slog.Warn("DEV_MODE: using the public dev STP HMAC secret")
+		} else {
+			slog.Warn("STP_HMAC_SECRET not set: HMAC-signed STP webhooks will be rejected (RSA only)")
+		}
+	}
+	if codiSecret == "" {
+		if cfg.DevMode {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				return "", "", err
+			}
+			codiSecret = hex.EncodeToString(b)
+			slog.Warn("DEV_MODE: CODI_WEBHOOK_SECRET not set, using an ephemeral random secret")
+		} else {
+			slog.Warn("CODI_WEBHOOK_SECRET not set: CoDi confirmation webhook disabled (503)")
+		}
+	}
+	return stpSecret, codiSecret, nil
+}
+
 // BuildServer instantiates and connects all infrastructure, repositories, and domain services.
 func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.RedisClient, error) {
+	stpSecret, codiSecret, err := resolveWebhookSecrets(cfg)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	ledgerEngine := ledger.NewLedgerEngine()
 	blacklistService := identity.NewBlacklistService()
 
@@ -210,7 +252,6 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 
 	// 1. Initialize PostgreSQL persistence and migrations if DATABASE_URL is configured
 	if cfg.DatabaseURL != "" {
-		var err error
 		db, err = sql.Open(store.NormalizeDriverName(cfg.SQLDriver), cfg.DatabaseURL)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
@@ -241,7 +282,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	}
 
 	// 2. Initialize STP Signer
-	stpSigner := stp.NewSTPSigner(nil, nil, cfg.STPHMACSecret)
+	stpSigner := stp.NewSTPSigner(nil, nil, stpSecret)
 
 	// 3. Create HTTP Server
 	server := api.NewServer(ledgerEngine, blacklistService, stpSigner)
@@ -260,6 +301,9 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	}
 	server.SetAuthService(authSvc)
 	server.SetDevMode(cfg.DevMode)
+	if codiSecret != "" {
+		server.SetCoDiWebhookSecret(codiSecret)
+	}
 	if cfg.AuthRateLimitPerMinute > 0 {
 		server.SetAuthRateLimit(cfg.AuthRateLimitPerMinute)
 	}

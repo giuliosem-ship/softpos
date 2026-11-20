@@ -413,8 +413,10 @@
       });
     }
 
+    // DEV_MODE only: the server signs the CoDi confirmation (the real webhook
+    // requires an HMAC signature the browser must never hold).
     async simulateCoDiConfirmation(params) {
-      return this._request('/api/v1/webhooks/codi/confirm', 'POST', {
+      return this._request('/api/v1/dev/codi/simulate-confirm', 'POST', {
         tracking_key: params.trackingKey,
         seller_clabe: params.sellerClabe,
         buyer_clabe: params.buyerClabe || '012180000118359719',

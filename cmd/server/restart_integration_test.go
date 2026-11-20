@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
@@ -38,10 +41,11 @@ func doJSON(t *testing.T, srv *api.Server, token, method, path string, body any)
 // the server on the same database, and checks every piece of state persisted.
 func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	cfg := Config{
-		SQLDriver:     "pgx",
-		DatabaseURL:   pgtest.URL(t),
-		STPHMACSecret: "test_secret",
-		JWTSecret:     testJWTSecret,
+		SQLDriver:         "pgx",
+		DatabaseURL:       pgtest.URL(t),
+		STPHMACSecret:     "test_secret",
+		CoDiWebhookSecret: "restart_codi_webhook_secret_32_bytes!",
+		JWTSecret:         testJWTSecret,
 	}
 	const clabe = "646180123400000007"
 
@@ -93,11 +97,16 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	}); rec.Code != http.StatusOK {
 		t.Fatalf("codi qr: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doJSON(t, srv1, "", http.MethodPost, "/api/v1/webhooks/codi/confirm", map[string]any{
-		"tracking_key": "BNXRESTART0001", "seller_clabe": clabe, "buyer_clabe": "012180000118359719",
-		"amount_cents": 11600, "timestamp": "2026-11-19T12:00:00Z", "status": "APROBADO", "banxico_approval_code": "AUT9",
-	}); rec.Code != http.StatusOK {
-		t.Fatalf("codi confirm: %d %s", rec.Code, rec.Body.String())
+	codiBody := `{"tracking_key":"BNXRESTART0001","seller_clabe":"` + clabe + `","buyer_clabe":"012180000118359719",` +
+		`"amount_cents":11600,"timestamp":"2026-11-19T12:00:00Z","status":"APROBADO","banxico_approval_code":"AUT9"}`
+	ts := time.Now().Unix()
+	codiReq := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/codi/confirm", strings.NewReader(codiBody))
+	codiReq.Header.Set(api.WebhookTimestampHeader, strconv.FormatInt(ts, 10))
+	codiReq.Header.Set(api.WebhookSignatureHeader, api.SignWebhook([]byte(cfg.CoDiWebhookSecret), ts, []byte(codiBody)))
+	codiRec := httptest.NewRecorder()
+	srv1.Router().ServeHTTP(codiRec, codiReq)
+	if codiRec.Code != http.StatusOK {
+		t.Fatalf("codi confirm: %d %s", codiRec.Code, codiRec.Body.String())
 	}
 	salesBefore := srv1.GetMerchantMonthlySalesCents(merchantID)
 	balRec := doJSON(t, srv1, tok, http.MethodGet, "/api/v1/merchants/"+merchantID+"/balances", nil)

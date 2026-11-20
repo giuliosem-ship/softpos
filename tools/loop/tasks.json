@@ -1038,6 +1038,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages with tests ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 17/17 PASS (restart test now registers via an authenticated user, reuses the boot-1 JWT on boot 2 and checks the owner membership persisted); node --test web/pos/softpos_sdk.test.js 8/8.",
       "audit_notes": "Settle still trusts body amounts and credits unknown payment ids for the tenant (Batch C); disbursement destination CLABE still free-form (Batch C). Rate limiter is per-process and uses the TCP peer IP (gateway needed behind proxies). Attestation verdict is not yet required for login. CLABE assignment at registration still client-supplied (F1).",
       "priority": 66
+    },
+    {
+      "id": "MVP-06",
+      "component": "webhooks",
+      "title": "Signed webhooks",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/webhook_signature_test.go, pkg/api/server_test.go, cmd/server/main_test.go, cmd/server/config_guard_test.go, cmd/server/restart_integration_test.go",
+        "implementation": "pkg/api/webhook_signature.go, pkg/api/handlers_emv_codi.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, web/pos/softpos_sdk.js, docs/AUTH.md"
+      },
+      "spec": "POST /api/v1/webhooks/codi/confirm requires X-Kerno-Timestamp + X-Kerno-Signature: v1=hex(HMAC-SHA256(CODI_WEBHOOK_SECRET, ts + '.' + raw body)), constant-time compare, +-5 min window (401 STALE_TIMESTAMP), bad/missing signature 401 INVALID_SIGNATURE, accepted signatures cached 10 min in the idempotency store -> 409 WEBHOOK_REPLAYED, no secret -> 503 (fail closed), body capped at 1 MiB. STP: no default HMAC secret in config; the public dev secret is used only with DEV_MODE and BuildServer refuses it otherwise. Production guard rejects CODI_WEBHOOK_SECRET < 32 bytes and missing/default STP secret. DEV_MODE-only POST /api/v1/dev/codi/simulate-confirm signs server-side for the caller's own CLABE (Web POS demo).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages with tests ok (webhook tests: valid, 6 bad-signature variants, stale +-6min, replay 409 + re-signed retry credited once, not configured 503, dev simulate, unit window edge); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration: 17/17 PASS (restart test signs the CoDi webhook); node --test web/pos/softpos_sdk.test.js 8/8; binary smoke test in DEV_MODE (401 anon, dev-session, simulate-confirm, unsigned webhook 401, boot refused without JWT_SECRET).",
+      "audit_notes": "Replay check-then-set is not atomic across replicas (tracking_key idempotency still prevents double credit only within the same non-atomic window; single-transaction posting is Batch C). STP abono has no timestamp in its canonical string (STP scheme); replay protection there relies on claveRastreo idempotency. No real Banxico/STP signature format confirmed yet.",
+      "priority": 67
     }
   ]
 }

@@ -53,6 +53,7 @@ type Server struct {
 	authLimiter       *RateLimiter
 	integrityVerifier *identity.PlayIntegrityVerifier
 	devMode           bool
+	codiWebhookSecret []byte
 	staticDir         string
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -124,6 +125,14 @@ func (s *Server) SetPlayIntegrityVerifier(v *identity.PlayIntegrityVerifier) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.integrityVerifier = v
+}
+
+// SetCoDiWebhookSecret sets the HMAC secret for POST /api/v1/webhooks/codi/confirm.
+// Without it the webhook answers 503 WEBHOOK_NOT_CONFIGURED.
+func (s *Server) SetCoDiWebhookSecret(secret string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codiWebhookSecret = []byte(secret)
 }
 
 // SetDevMode enables explicit local-development endpoints (demo session).
@@ -490,6 +499,7 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/payments/codi/qr", s.HandleCoDiCreateQR)
 	s.router.HandleFunc("POST /api/v1/webhooks/codi/confirm", s.HandleCoDiWebhookConfirm)
 	s.router.HandleFunc("POST /api/v1/payments/settle", s.HandlePaymentSettle)
+	s.router.HandleFunc("POST /api/v1/dev/codi/simulate-confirm", s.HandleDevCoDiSimulate) // DEV_MODE only
 
 	// CFDI 4.0 Invoicing & Multi-PAC Stamping
 	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.HandleStampIndividualCFDI)

@@ -33,6 +33,7 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 		STPHMACSecret:     "prod_stp_hmac_secret_very_long_and_random_string_xyz",
 		SeedDemoMerchant:  false,
 		JWTSecret:         "prod_jwt_secret_with_at_least_32_random_bytes",
+		CoDiWebhookSecret: "prod_codi_webhook_secret_with_32_random_bytes",
 	}
 
 	// 1. Valid production config passes
@@ -76,6 +77,20 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 			t.Errorf("JWT_SECRET %q: expected ErrWeakJWTSecret, got: %v", weak, err)
 		}
 	}
+	// 7. Reject missing / short CoDi webhook secret and missing STP secret
+	for _, weak := range []string{"", "short"} {
+		badCoDi := prodCfg
+		badCoDi.CoDiWebhookSecret = weak
+		if err := ValidateProductionConfig(badCoDi, "production"); !errors.Is(err, ErrInsecureCoDiWebhookSecret) {
+			t.Errorf("CODI_WEBHOOK_SECRET %q: expected ErrInsecureCoDiWebhookSecret, got: %v", weak, err)
+		}
+	}
+	noSTP := prodCfg
+	noSTP.STPHMACSecret = ""
+	if err := ValidateProductionConfig(noSTP, "production"); !errors.Is(err, ErrInsecureDefaultSTPSecret) {
+		t.Errorf("missing STP secret: expected ErrInsecureDefaultSTPSecret, got: %v", err)
+	}
+
 	devCfg := prodCfg
 	devCfg.DevMode = true
 	if err := ValidateProductionConfig(devCfg, "production"); !errors.Is(err, ErrDevModeInProduction) {

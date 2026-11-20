@@ -11,12 +11,13 @@ const (
 )
 
 var (
-	ErrInsecureDefaultVaultKey  = errors.New("insecure configuration: default vault master key cannot be used in production")
-	ErrInsecureDefaultSTPSecret = errors.New("insecure configuration: default STP HMAC secret cannot be used in production")
-	ErrInsecureDatabaseURL      = errors.New("insecure configuration: database SSL mode cannot be disabled in production")
-	ErrDemoMerchantInProduction = errors.New("insecure configuration: demo merchant seeding must be disabled in production")
-	ErrWeakJWTSecret            = errors.New("insecure configuration: JWT_SECRET must be set to at least 32 bytes in production")
-	ErrDevModeInProduction      = errors.New("insecure configuration: DEV_MODE cannot be enabled in production")
+	ErrInsecureDefaultVaultKey   = errors.New("insecure configuration: default vault master key cannot be used in production")
+	ErrInsecureDefaultSTPSecret  = errors.New("insecure configuration: default STP HMAC secret cannot be used in production")
+	ErrInsecureDatabaseURL       = errors.New("insecure configuration: database SSL mode cannot be disabled in production")
+	ErrDemoMerchantInProduction  = errors.New("insecure configuration: demo merchant seeding must be disabled in production")
+	ErrWeakJWTSecret             = errors.New("insecure configuration: JWT_SECRET must be set to at least 32 bytes in production")
+	ErrDevModeInProduction       = errors.New("insecure configuration: DEV_MODE cannot be enabled in production")
+	ErrInsecureCoDiWebhookSecret = errors.New("insecure configuration: CODI_WEBHOOK_SECRET must be set to at least 32 bytes in production")
 )
 
 // ValidateProductionConfig performs fail-fast security auditing on the runtime configuration.
@@ -55,6 +56,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	}
 	if len(cfg.JWTSecret) < 32 {
 		return ErrWeakJWTSecret
+	}
+
+	// 6. Webhook signing secrets
+	if len(cfg.CoDiWebhookSecret) < 32 {
+		return ErrInsecureCoDiWebhookSecret
 	}
 
 	return nil

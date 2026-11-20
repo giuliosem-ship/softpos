@@ -619,8 +619,9 @@ func TestCoDiQRAndWebhookConfirm(t *testing.T) {
 		"status": "APROBADO",
 		"banxico_approval_code": "AUT001"
 	}`
+	server.SetCoDiWebhookSecret(testCoDiWebhookSecret)
 	recWH := httptest.NewRecorder()
-	server.Router().ServeHTTP(recWH, httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/codi/confirm", strings.NewReader(webhookPayload)))
+	server.Router().ServeHTTP(recWH, signedCoDiRequest(testCoDiWebhookSecret, time.Now(), webhookPayload))
 	if recWH.Code != http.StatusOK {
 		t.Fatalf("expected 200 on CoDi webhook, got %d: %s", recWH.Code, recWH.Body.String())
 	}

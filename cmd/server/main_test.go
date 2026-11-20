@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
 	_ "softpos/pkg/store" // register mockpostgres driver
+	"softpos/pkg/stp"
 )
 
 func TestLoadConfigFromEnv(t *testing.T) {
@@ -198,5 +200,67 @@ func TestLoadConfigFromEnv_AttestationAndRateLimit(t *testing.T) {
 	cfg := LoadConfigFromEnv()
 	if cfg.AuthRateLimitPerMinute != 7 || cfg.PlayIntegritySecret != "pi_secret" || cfg.PlayIntegrityPackage != "mx.softpos.app" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestBuildServer_STPDevSecretOnlyInDevMode(t *testing.T) {
+	// The public dev secret is refused without DEV_MODE...
+	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: defaultSTPHMACSecret, JWTSecret: testJWTSecret}); !errors.Is(err, ErrDevSTPSecretOutsideDevMode) {
+		t.Fatalf("expected ErrDevSTPSecretOutsideDevMode, got %v", err)
+	}
+	abono := func(srv *api.Server, secret string) int {
+		signer := stp.NewSTPSigner(nil, nil, secret)
+		canonical := signer.BuildAbonoCanonicalString("646180123400000007", 10000, "STPDEV0001", "40012", "012180000118359719")
+		body := `{"cuentaBeneficiario":"646180123400000007","monto":100.00,"claveRastreo":"STPDEV0001","institucionOrdenante":"40012","cuentaOrdenante":"012180000118359719","firma":"` + signer.SignHMAC(canonical) + `"}`
+		rec := httptest.NewRecorder()
+		srv.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/stp/abono", strings.NewReader(body)))
+		return rec.Code
+	}
+	// ...without any STP secret (and no DEV_MODE) HMAC abonos signed with the dev secret are rejected...
+	noSecret, _, _, err := BuildServer(context.Background(), Config{JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := abono(noSecret, defaultSTPHMACSecret); code != http.StatusUnauthorized {
+		t.Fatalf("dev-signed abono without DEV_MODE: want 401, got %d", code)
+	}
+	// ...and only DEV_MODE falls back to it.
+	dev, _, _, err := BuildServer(context.Background(), Config{DevMode: true, SeedDemoMerchant: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := abono(dev, defaultSTPHMACSecret); code == http.StatusUnauthorized {
+		t.Fatalf("dev-signed abono in DEV_MODE must pass signature check, got %d", code)
+	}
+}
+
+func TestBuildServer_CoDiWebhookSecret(t *testing.T) {
+	body := `{"tracking_key":"BNXCMD0001","seller_clabe":"646180123400000007","buyer_clabe":"012180000118359719","amount_cents":11600,"timestamp":"2026-11-20T12:00:00Z","status":"APROBADO","banxico_approval_code":"A1"}`
+	post := func(srv *api.Server, secret string) int {
+		ts := time.Now().Unix()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/codi/confirm", strings.NewReader(body))
+		req.Header.Set(api.WebhookTimestampHeader, strconv.FormatInt(ts, 10))
+		req.Header.Set(api.WebhookSignatureHeader, api.SignWebhook([]byte(secret), ts, []byte(body)))
+		rec := httptest.NewRecorder()
+		srv.Router().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	off, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := post(off, "anything"); code != http.StatusServiceUnavailable {
+		t.Fatalf("no CODI_WEBHOOK_SECRET: want 503, got %d", code)
+	}
+	const secret = "cmd_codi_webhook_secret_32_bytes_long!"
+	on, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true, CoDiWebhookSecret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := post(on, "wrong_secret"); code != http.StatusUnauthorized {
+		t.Fatalf("wrong secret: want 401, got %d", code)
+	}
+	if code := post(on, secret); code != http.StatusOK {
+		t.Fatalf("valid signature: want 200, got %d", code)
 	}
 }

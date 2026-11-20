@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"softpos/pkg/fiscal"
@@ -278,12 +280,42 @@ type CoDiWebhookResponse struct {
 	NetAvailableCents int64  `json:"net_available_cents"`
 }
 
+// maxWebhookBody bounds webhook payloads read into memory.
+const maxWebhookBody = 1 << 20
+
+// HandleCoDiWebhookConfirm: POST /api/v1/webhooks/codi/confirm. Public route,
+// authenticated by an HMAC-SHA256 signature over timestamp + raw body
+// (VerifyWebhookSignature); stale timestamps and replayed signatures are rejected.
 func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request) {
-	bodyBytes, err := io.ReadAll(r.Body)
+	s.mu.RLock()
+	secret := s.codiWebhookSecret
+	s.mu.RUnlock()
+	if len(secret) == 0 {
+		writeError(w, http.StatusServiceUnavailable, "WEBHOOK_NOT_CONFIGURED")
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
 		http.Error(w, `{"error":"INVALID_BODY"}`, http.StatusBadRequest)
 		return
 	}
+
+	sig, err := VerifyWebhookSignature(secret, r.Header.Get(WebhookTimestampHeader), r.Header.Get(WebhookSignatureHeader), bodyBytes, time.Now(), WebhookTolerance)
+	if errors.Is(err, ErrWebhookStale) {
+		writeError(w, http.StatusUnauthorized, "STALE_TIMESTAMP")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_SIGNATURE")
+		return
+	}
+	replayKey := "webhook:codi:sig:" + hex.EncodeToString(sig)
+	if _, seen := s.idempotency.Get(replayKey); seen {
+		writeError(w, http.StatusConflict, "WEBHOOK_REPLAYED")
+		return
+	}
+	s.idempotency.Set(replayKey, http.StatusAccepted, []byte(`{}`), 2*WebhookTolerance)
 
 	conf, err := payments.ValidateCoDiConfirmation(bodyBytes)
 	if err != nil {
@@ -352,4 +384,43 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(respBytes)
+}
+
+// HandleDevCoDiSimulate: POST /api/v1/dev/codi/simulate-confirm (DEV_MODE
+// only, authenticated). Signs a CoDi confirmation for the caller's own CLABE
+// with the server secret and processes it, so the Web POS demo can simulate a
+// payment without holding the webhook secret.
+func (s *Server) HandleDevCoDiSimulate(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dev, secret := s.devMode, s.codiWebhookSecret
+	s.mu.RUnlock()
+	if !dev {
+		http.NotFound(w, r)
+		return
+	}
+	tenant, ok := requireTenant(w, r, "")
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY")
+		return
+	}
+	var probe struct {
+		SellerCLABE string `json:"seller_clabe"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON")
+		return
+	}
+	if clabe, found := s.GetMerchantCLABE(tenant); !found || clabe != probe.SellerCLABE {
+		writeError(w, http.StatusForbidden, "SELLER_CLABE_NOT_OWNED")
+		return
+	}
+	ts := time.Now().Unix()
+	signed, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "/api/v1/webhooks/codi/confirm", bytes.NewReader(body))
+	signed.Header.Set(WebhookTimestampHeader, strconv.FormatInt(ts, 10))
+	signed.Header.Set(WebhookSignatureHeader, SignWebhook(secret, ts, body))
+	s.HandleCoDiWebhookConfirm(w, signed)
 }

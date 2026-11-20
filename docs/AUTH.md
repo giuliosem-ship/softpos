@@ -133,6 +133,38 @@ returns an owner access token for an existing merchant through a synthetic
 user. The Web POS demo (`web/pos/app.js`) calls it at start-up;
 `SoftPOSClient.setAccessToken`/`verifyOTP` attach `Authorization` to every call.
 
+## Signed webhooks (MVP-06)
+
+Webhooks are public routes authenticated by signatures, never by JWT.
+
+**CoDi confirmation** — `POST /api/v1/webhooks/codi/confirm`:
+
+```
+X-Kerno-Timestamp: <unix seconds>
+X-Kerno-Signature: v1=<hex(HMAC-SHA256(CODI_WEBHOOK_SECRET, timestamp + "." + raw_body))>
+```
+
+- The MAC covers the **raw body bytes** (max 1 MiB) and the timestamp; the
+  comparison is constant-time (`hmac.Equal`).
+- Timestamp must be within ±5 min of the server clock → else `401 STALE_TIMESTAMP`.
+- Missing/malformed/wrong signature → `401 INVALID_SIGNATURE`; nothing is credited.
+- Each accepted signature is remembered for 10 min in the idempotency store
+  (Redis/PostgreSQL when configured): the same signature again → `409 WEBHOOK_REPLAYED`.
+  Provider retries must be re-signed with a fresh timestamp; they are then
+  idempotent on `tracking_key` (cached response, credited once).
+- No `CODI_WEBHOOK_SECRET` → `503 WEBHOOK_NOT_CONFIGURED` (fails closed).
+- `pkg/api.SignWebhook` / `VerifyWebhookSignature` implement the scheme.
+
+**STP abono** — `POST /api/v1/webhooks/stp/abono` keeps STP's own scheme
+(RSA, or HMAC over the canonical string, plus idempotency on `claveRastreo`).
+The well-known dev HMAC secret is only used when `DEV_MODE=true`: configuring
+it without `DEV_MODE` makes the server refuse to start, and without
+`STP_HMAC_SECRET` HMAC-signed abonos are rejected.
+
+`POST /api/v1/dev/codi/simulate-confirm` (DEV_MODE only, authenticated,
+caller's own CLABE only) signs a confirmation server-side so the Web POS demo
+can simulate a CoDi payment without holding the secret.
+
 ## Configuration
 
 | Env | Meaning |
@@ -142,6 +174,12 @@ user. The Web POS demo (`web/pos/app.js`) calls it at start-up;
 | `AUTH_RATE_LIMIT_PER_MINUTE` | Per-IP budget for `/api/v1/auth/*` (default 30). |
 | `PLAY_INTEGRITY_SECRET` | Enables attestation verification; empty → `503`. |
 | `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
+| `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
+| `STP_HMAC_SECRET` | STP HMAC secret. No default; the dev default is accepted only with `DEV_MODE`. Required in production. |
+
+Production guard (`APP_ENV=production`) refuses to start with `DEV_MODE`,
+`JWT_SECRET` < 32 bytes, `CODI_WEBHOOK_SECRET` < 32 bytes, or a missing/default
+`STP_HMAC_SECRET` (plus the existing vault/DB/demo checks).
 
 OTP delivery: only `auth.LogSender` exists (no SMS/WhatsApp provider yet).
 Outside `DEV_MODE` it logs a masked phone and **does not reveal the code**, so

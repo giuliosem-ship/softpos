@@ -107,7 +107,7 @@ func intentRequestHash(req CardPaymentIntentRequest) string {
 }
 
 var (
-	errProviderIDMismatch   = errors.New("card payment already bound to another provider payment id")
+	errProviderIDMismatch = errors.New("card payment already bound to another provider payment id")
 )
 
 // HandleCreateCardPaymentIntent: POST /api/v1/card-payments/intents (any

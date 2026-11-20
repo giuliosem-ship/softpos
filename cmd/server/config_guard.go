@@ -26,6 +26,7 @@ var (
 	ErrMissingDatabaseURL        = errors.New("insecure configuration: DATABASE_URL is required in production (without it all money state is in memory)")
 	ErrInsecureRedisPassword     = errors.New("insecure configuration: REDIS_PASSWORD must be set to at least 16 bytes when REDIS_ADDR is used in production")
 	ErrWeakPlayIntegritySecret   = errors.New("insecure configuration: PLAY_INTEGRITY_SECRET, when set, must be at least 32 bytes in production")
+	ErrInsecureAcquirerSecret    = errors.New("insecure configuration: ACQUIRER_WEBHOOK_SECRET must be set to at least 32 bytes in production when ACQUIRER_PROVIDER is set")
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
@@ -70,6 +71,7 @@ var ServerEnvVars = []EnvVar{
 	{Name: "DEFAULT_PLATFORM_FEE_BPS"},
 	{Name: "ALLOW_CASHIER_REFUNDS"},
 	{Name: "ACQUIRER_PROVIDER"},
+	{Name: "ACQUIRER_WEBHOOK_SECRET", Secret: true},
 	{Name: "OUTBOX_POLL_INTERVAL"},
 	{Name: "OUTBOX_BATCH_SIZE"},
 	{Name: "OUTBOX_PUBLISHER"},
@@ -106,7 +108,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 
 	// 0. No secret may still hold the .env.example placeholder.
 	for _, v := range []string{cfg.DatabaseURL, cfg.RedisPassword, cfg.JWTSecret, cfg.PlayIntegritySecret,
-		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys} {
+		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret} {
 		if isPlaceholder(v) {
 			return ErrPlaceholderSecret
 		}
@@ -166,7 +168,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 		return ErrWeakPlayIntegritySecret
 	}
 
-	// 7. Card processor: the mock approves without a processor.
+	// 7. Card processor: signed webhooks are the source of truth for card
+	// payments; the mock approves without a processor.
+	if cfg.AcquirerProvider != "" && len(cfg.AcquirerWebhookSecret) < minSecretLen {
+		return ErrInsecureAcquirerSecret
+	}
 	if cfg.AcquirerProvider == "mock" {
 		return ErrMockAcquirerInProduction
 	}

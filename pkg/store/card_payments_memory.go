@@ -161,6 +161,15 @@ func (t *memMoneyTx) allRefunds(cardPaymentID string) []CardRefundRecord {
 	return out
 }
 
+func (t *memMoneyTx) GetCardRefundByKeyForUpdate(_ context.Context, cardPaymentID, idempotencyKey string) (CardRefundRecord, bool, error) {
+	for _, r := range t.allRefunds(cardPaymentID) {
+		if r.IdempotencyKey == idempotencyKey {
+			return r, true, nil
+		}
+	}
+	return CardRefundRecord{}, false, nil
+}
+
 func (t *memMoneyTx) GetCardRefundByProviderForUpdate(_ context.Context, cardPaymentID, providerRefundID string) (CardRefundRecord, bool, error) {
 	if providerRefundID == "" {
 		return CardRefundRecord{}, false, nil

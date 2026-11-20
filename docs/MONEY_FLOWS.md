@@ -36,6 +36,18 @@ accumulator, settlement record) plus the processor fee (`acq_fee_<id>`: Dr
 `card_payment.captured`. Lock order: card payment row → operation key →
 settlement row → monthly-sales row → ledger accounts.
 
+Processor webhooks (`POST /api/v1/webhooks/acquirer/{provider}`, HMAC like
+CoDi, exactly-once key `acq:<provider>:evt:<event id>` + per refund /
+chargeback id): `payment.refunded` reuses the proportional refund reversal of
+the EMV refund below (journal `refund_<cp>_<refunded_total>`);
+`chargeback.opened` posts `chargeback_<cp>_<cb>` (Dr merchant `AVAILABLE`,
+which may go negative and then blocks payouts; Cr `ASSET:ACQUIRER_RECEIVABLE`;
+tax escrow and fee are not reversed: a dispute is not a refund) and outbox
+`card_payment.chargeback_opened`; `chargeback.reversed` posts the reverse.
+Refund requests (`POST /api/v1/card-payments/{id}/refunds`) only call the
+processor; the ledger moves on the webhook. Out-of-order events are ignored
+(regressions) or answered `409 EVENT_OUT_OF_ORDER` so the processor retries.
+
 ## Card settle (legacy, DEV_MODE only) — `POST /api/v1/payments/settle`
 
 `cmd/server` serves the legacy EMV authorize / settle / reverse endpoints only

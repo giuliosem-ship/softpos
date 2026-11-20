@@ -594,6 +594,9 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/card-payments/intents", s.HandleCreateCardPaymentIntent)
 	s.router.HandleFunc("GET /api/v1/card-payments/{id}", s.HandleGetCardPayment)
 	s.router.HandleFunc("POST /api/v1/card-payments/{id}/cancel", s.HandleCancelCardPayment)
+	s.router.HandleFunc("POST /api/v1/card-payments/{id}/refunds", s.HandleCreateCardRefund)
+	s.router.HandleFunc("POST /api/v1/webhooks/acquirer/{provider}", s.HandleAcquirerWebhook)
+	s.router.HandleFunc("POST /api/v1/dev/card-payments/{id}/simulate", s.HandleDevCardSimulate) // DEV_MODE + mock only
 
 	// Payments: legacy EMV (DEV_MODE only in cmd/server), CoDi QR & Tax-Split Settlement
 	s.router.HandleFunc("POST /api/v1/payments/emv/authorize", s.legacyCardOnly(s.HandleEMVAuthorize))

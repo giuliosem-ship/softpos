@@ -153,6 +153,12 @@ func isPublicRoute(r *http.Request) bool {
 	if method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/pos/") {
 		return true
 	}
+	// Processor webhooks (/api/v1/webhooks/acquirer/{provider}) are verified
+	// by their signature; one path segment only.
+	if method == http.MethodPost && strings.HasPrefix(r.URL.Path, acquirerWebhookPrefix) {
+		rest := strings.TrimPrefix(r.URL.Path, acquirerWebhookPrefix)
+		return rest != "" && !strings.Contains(rest, "/")
+	}
 	return publicRoutes[method+" "+r.URL.Path]
 }
 

@@ -88,6 +88,10 @@ type Config struct {
 	// "mock" (tests / DEV_MODE; rejected in production) or empty = card
 	// payments disabled (503). DEV_MODE defaults it to "mock".
 	AcquirerProvider string
+	// AcquirerWebhookSecret signs POST /api/v1/webhooks/acquirer/{provider}
+	// (ACQUIRER_WEBHOOK_SECRET, >= 32 bytes in production). DEV_MODE uses an
+	// ephemeral random secret when unset; otherwise the webhook answers 503.
+	AcquirerWebhookSecret string
 
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
@@ -178,6 +182,7 @@ func LoadConfigFromEnv() Config {
 	return Config{
 		AllowCashierRefunds:     cashierRefunds,
 		AcquirerProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("ACQUIRER_PROVIDER"))),
+		AcquirerWebhookSecret:   os.Getenv("ACQUIRER_WEBHOOK_SECRET"),
 		DefaultPlatformFeeBps:   feeBps,
 		HasDefaultFeeBps:        hasFee,
 		AuthRateLimitPerMinute:  authRate,
@@ -349,6 +354,23 @@ func buildAcquirerProvider(cfg Config) (acquirer.Provider, error) {
 	return p, nil
 }
 
+// resolveAcquirerWebhookSecret returns ACQUIRER_WEBHOOK_SECRET, or an
+// ephemeral random secret in DEV_MODE (used by the dev card simulation).
+func resolveAcquirerWebhookSecret(cfg Config) (string, error) {
+	if cfg.AcquirerWebhookSecret != "" || !cfg.DevMode {
+		if cfg.AcquirerWebhookSecret == "" {
+			slog.Warn("ACQUIRER_WEBHOOK_SECRET not set: processor webhooks disabled (503)")
+		}
+		return cfg.AcquirerWebhookSecret, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	slog.Warn("DEV_MODE: ACQUIRER_WEBHOOK_SECRET not set, using an ephemeral random secret")
+	return hex.EncodeToString(b), nil
+}
+
 // BuildServer instantiates and connects all infrastructure, repositories, and domain services.
 func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.RedisClient, error) {
 	stpSecret, codiSecret, err := resolveWebhookSecrets(cfg)
@@ -436,6 +458,14 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	} else if prov != nil {
 		server.SetAcquirerProvider(prov)
+		secret, err := resolveAcquirerWebhookSecret(cfg)
+		if err != nil {
+			if db != nil {
+				_ = db.Close()
+			}
+			return nil, nil, nil, err
+		}
+		server.SetAcquirerWebhookSecret(secret)
 	}
 	if codiSecret != "" {
 		server.SetCoDiWebhookSecret(codiSecret)

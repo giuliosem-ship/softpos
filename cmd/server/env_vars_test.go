@@ -184,6 +184,11 @@ func TestValidateProductionConfig_CoversEverySecret(t *testing.T) {
 			{func(c *Config) { c.VaultMasterKeyHex = "" }, ErrInsecureDefaultVaultKey},
 			{func(c *Config) { c.VaultMasterKeyHex = defaultVaultMasterKeyHex }, ErrInsecureDefaultVaultKey},
 		},
+		"ACQUIRER_WEBHOOK_SECRET": {
+			{func(c *Config) { c.AcquirerProvider, c.AcquirerWebhookSecret = "acme", "" }, ErrInsecureAcquirerSecret},
+			{func(c *Config) { c.AcquirerProvider, c.AcquirerWebhookSecret = "acme", "short" }, ErrInsecureAcquirerSecret},
+			{func(c *Config) { c.AcquirerWebhookSecret = "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME" }, ErrPlaceholderSecret},
+		},
 		"VAULT_PREVIOUS_KEYS": {
 			{func(c *Config) { c.VaultPreviousKeys = "v0:nothex" }, ErrInvalidVaultKey},
 		},

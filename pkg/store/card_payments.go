@@ -145,6 +145,7 @@ type CardPaymentTx interface {
 
 	CreateCardRefund(ctx context.Context, rec CardRefundRecord) (CardRefundRecord, bool, error)
 	GetCardRefundForUpdate(ctx context.Context, id string) (CardRefundRecord, bool, error)
+	GetCardRefundByKeyForUpdate(ctx context.Context, cardPaymentID, idempotencyKey string) (CardRefundRecord, bool, error)
 	GetCardRefundByProviderForUpdate(ctx context.Context, cardPaymentID, providerRefundID string) (CardRefundRecord, bool, error)
 	UpdateCardRefund(ctx context.Context, rec CardRefundRecord) error
 	// OpenRefundCents sums REQUESTED + PENDING refunds of a payment.
@@ -325,6 +326,10 @@ func (t *sqlMoneyTx) CreateCardRefund(ctx context.Context, r CardRefundRecord) (
 
 func (t *sqlMoneyTx) GetCardRefundForUpdate(ctx context.Context, id string) (CardRefundRecord, bool, error) {
 	return t.queryCardRefund(ctx, `id = $1`, id)
+}
+
+func (t *sqlMoneyTx) GetCardRefundByKeyForUpdate(ctx context.Context, cardPaymentID, idempotencyKey string) (CardRefundRecord, bool, error) {
+	return t.queryCardRefund(ctx, `card_payment_id = $1 AND idempotency_key = $2`, cardPaymentID, idempotencyKey)
 }
 
 func (t *sqlMoneyTx) GetCardRefundByProviderForUpdate(ctx context.Context, cardPaymentID, providerRefundID string) (CardRefundRecord, bool, error) {

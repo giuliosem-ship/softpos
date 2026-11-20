@@ -1164,6 +1164,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 27/27 (new: concurrent intents with one key -> one row, concurrent capture deliveries -> one posting); node --test 8/8.",
       "audit_notes": "Pending for MVP-15/16: signed webhook endpoint, refunds/chargebacks, payout reconciliation.",
       "priority": 75
+    },
+    {
+      "id": "MVP-15",
+      "component": "payments",
+      "title": "Signed processor webhooks, processor refunds and chargebacks",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/acquirer_webhook_test.go, cmd/server/card_payments_integration_test.go, cmd/server/env_vars_test.go",
+        "implementation": "pkg/api/handlers_acquirer_events.go, pkg/api/handlers_card_payments.go, pkg/api/middleware_auth.go, pkg/api/server.go, pkg/store/card_payments.go, pkg/store/card_payments_memory.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/ACQUIRER_INTEGRATION.md, docs/MONEY_FLOWS.md, docs/AUTH.md"
+      },
+      "spec": "POST /api/v1/webhooks/acquirer/{provider} (public, prefix-matched one segment): HMAC-SHA256 over timestamp + raw body with ACQUIRER_WEBHOOK_SECRET and a 5 min window (same scheme as CoDi) or the adapter's WebhookVerifier; ParseWebhookEvent -> normalized Event; exactly-once by provider event id in money_operations plus secondary keys per refund id and chargeback id. Events authorized/declined/canceled/captured (MVP-14) + refunded (shared postRefundReversal extracted from the EMV reverse; PARTIALLY_REFUNDED/REFUNDED; refund request SUCCEEDED), refund.failed (hold released), chargeback.opened (Dr merchant AVAILABLE, may go negative; Cr ASSET:ACQUIRER_RECEIVABLE; outbox card_payment.chargeback_opened with available_after_cents), chargeback.reversed. Out-of-order: regressions ignored, refund/chargeback before capture and reversal before opening -> 409 EVENT_OUT_OF_ORDER (nothing consumed, provider retries); conflicts -> 422 + ALERT log. POST /api/v1/card-payments/{id}/refunds (owner, cashier with ALLOW_CASHIER_REFUNDS; Idempotency-Key required; amount held against the remainder; provider call outside the tx; 202 PENDING / 502 unknown keeps REQUESTED / 502 rejected FAILED); ledger moves only on the webhook. DEV_MODE + mock: POST /api/v1/dev/card-payments/{id}/simulate (tap/cancel/refund signed server-side). ACQUIRER_WEBHOOK_SECRET added to ServerEnvVars (secret), .env.example and the production guard (>= 32 bytes when ACQUIRER_PROVIDER is set); DEV_MODE ephemeral secret.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 28/28 (new: concurrent duplicate/out-of-order signed webhooks: capture x4 + authorized x2 + refund x2 racing, duplicate chargebacks under two event ids -> posted once); node --test 8/8.",
+      "audit_notes": "Known limit documented: a refund webhook arriving before provider_refund_id is stored leaves the request PENDING (refund itself applied). payout.settled answered 422 UNSUPPORTED_EVENT until MVP-16.",
+      "priority": 76
     }
   ]
 }

@@ -103,6 +103,10 @@ type Config struct {
 	// production) or empty = no automatic identity check (operators review
 	// the documents manually). DEV_MODE defaults it to "mock".
 	KYCProvider string
+	// BootstrapOperatorPhone (BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE, E.164)
+	// is made a platform operator at boot (backoffice access, docs/BACKOFFICE.md).
+	// More operators are added with cmd/operatorctl; never through the API.
+	BootstrapOperatorPhone string
 
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
@@ -196,6 +200,7 @@ func LoadConfigFromEnv() Config {
 		AcquirerWebhookSecret:     os.Getenv("ACQUIRER_WEBHOOK_SECRET"),
 		AcquirerReconcileInterval: parseDurationEnv("ACQUIRER_RECONCILE_INTERVAL"),
 		KYCProvider:               strings.ToLower(strings.TrimSpace(os.Getenv("KYC_PROVIDER"))),
+		BootstrapOperatorPhone:    strings.TrimSpace(os.Getenv("BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE")),
 		DefaultPlatformFeeBps:     feeBps,
 		HasDefaultFeeBps:          hasFee,
 		AuthRateLimitPerMinute:    authRate,
@@ -531,6 +536,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		// Merchant onboarding (KYB) and encrypted KYC document blobs (bytea).
 		sqlKYB := store.NewSQLKYBRepository(db)
 		server.SetKYBRepository(sqlKYB, sqlKYB)
+		server.SetOperatorAuditRepository(store.NewSQLAuditRepository(db))
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
@@ -570,6 +576,18 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	_, _ = ledgerEngine.CreateAccount("ASSET:RBF_LOANS_RECEIVABLE", ledger.AccountAsset, "Platform RBF Loans")
 	_, _ = ledgerEngine.CreateAccount(api.AccountAcquirerFees, ledger.AccountExpense, "Card Processor Fees")
 	_, _ = ledgerEngine.CreateAccount(api.AccountBankOperating, ledger.AccountAsset, "Kerno Operating Bank Account (processor payouts)")
+
+	// Backoffice bootstrap operator (idempotent).
+	if cfg.BootstrapOperatorPhone != "" {
+		u, err := authSvc.GrantPlatformOperator(ctx, cfg.BootstrapOperatorPhone, "bootstrap:env")
+		if err != nil {
+			if db != nil {
+				_ = db.Close()
+			}
+			return nil, nil, nil, fmt.Errorf("BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE: %w", err)
+		}
+		slog.Info("backoffice bootstrap operator ensured", "user_id", u.ID)
+	}
 
 	// 6. Seed demo merchant if enabled
 	if cfg.SeedDemoMerchant {

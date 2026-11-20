@@ -1220,6 +1220,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 34/34 (new: sales backfill + unified listing/pagination/filters, sales endpoint over HTTP; auth contract grace subtest and concurrent rotation on PostgreSQL); node --test 8/8.",
       "audit_notes": "Legacy EMV (DEV_MODE) payments are not part of the sales view. Grace returns the same refresh token with a newly minted access token. docs/ANDROID_APP.md still notes the old PLAY_INTEGRITY_PACKAGE default (left for the Android batch to avoid conflicts).",
       "priority": 80
+    },
+    {
+      "id": "MVP-18",
+      "component": "backoffice",
+      "title": "Operator backoffice API, audit log and minimal web UI",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/backoffice_test.go, pkg/auth/service_test.go, pkg/auth/authtest/contract.go, cmd/operatorctl/main_test.go, cmd/server/backoffice_integration_test.go",
+        "implementation": "migrations/014_backoffice.*.sql, pkg/api/handlers_backoffice.go, pkg/api/backoffice_static.go, pkg/api/middleware_auth.go, pkg/api/server.go, pkg/api/handlers_settlement_account.go, pkg/api/handlers_acquirer_recon.go, pkg/auth/auth.go, pkg/auth/memory.go, pkg/auth/service.go, pkg/store/auth_store.go, pkg/store/backoffice.go, pkg/store/money_memory.go, pkg/payouts/reconciler.go, cmd/server/main.go, cmd/server/config_guard.go, cmd/operatorctl/*, web/backoffice/*, .env.example, docs/BACKOFFICE.md, docs/AUTH.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Platform operators (platform_operators) log in with OTP selecting merchant_id kerno:backoffice (auth.BackofficeScope, role operator; re-checked on refresh and every backoffice request); created only by BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE at boot or cmd/operatorctl add|remove|check, never an API. /api/v1/backoffice/*: merchants list by KYB status/block, detail (KYB + documents + settlement account), document download (decrypted, attachment), approve (CLABE + acquirer onboarding) / reject with reason, block/unblock (money operations 403 MERCHANT_BLOCKED), merchant ledger (balances + journal lines via store.JournalReader), cross-merchant payment search over the sales view, payouts list and retry of PENDING_RECONCILIATION (or RESERVED > 10 min) through payouts.Reconciler.ReconcilePayout, processor reconciliation report/resolve, audit log. Every operator action writes operator_audit_log (operator, action, merchant, target, before/after JSON summaries, detail); PII reads audited before serving (fail closed). Static UI web/backoffice (plain HTML/JS, no inline code, textContent only) at /backoffice/ with CSP, X-Frame-Options DENY, nosniff, no-referrer, no-store.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (20 packages); PGIntegration 35/35 (new: bootstrap operator reviews, downloads, approves and blocks on PostgreSQL with the audit trail in operator_audit_log; auth contract platform-operator subtest on PostgreSQL); node --test 8/8; DEV_MODE smoke: /backoffice/ CSP headers, OTP backoffice login, demo merchant APPROVED and card intent OK.",
+      "audit_notes": "No per-operator permissions or operator 2FA yet. Mutation audit rows are written after the change (a failed write is an ERROR ALERT). GET /api/v1/acquirer/reconciliation still accepts per-merchant operator memberships.",
+      "priority": 79
     }
   ]
 }

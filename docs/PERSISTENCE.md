@@ -48,6 +48,7 @@ same interfaces use in-memory implementations.
 | Users, memberships, OTP challenges, refresh tokens, attestation nonces (`docs/AUTH.md`) | `auth.Repository` | `store.SQLAuthRepository` (migrations 005, 006) | `auth.MemoryRepository` |
 | Merchant onboarding (KYB), KYC document metadata and encrypted blobs (migration 012, `docs/KYB.md`) | `store.KYBRepository`, `store.DocumentBlobStore` | `store.SQLKYBRepository` (`merchant_kyb`, `kyb_documents`, `kyb_document_blobs`) | `store.MemoryKYBRepository` |
 | Sales view: SPEI abonos and CoDi confirmations (`merchant_sales`, migration 013) merged with `card_payments` | `store.SalesRepository`, `MoneyTx.RecordSale` | `store.SQLMoneyStore` | `store.MemoryMoneyStore` |
+| Platform operators and the operator audit log (migration 014, `docs/BACKOFFICE.md`) | `auth.Repository` (operators), `store.OperatorAuditRepository` | `store.SQLAuthRepository`, `store.SQLAuditRepository` (`platform_operators`, `operator_audit_log`) | `auth.MemoryRepository`, `store.MemoryAuditRepository` |
 | Money unit of work: settlements, exactly-once keys, merchant tariff (`docs/MONEY_FLOWS.md`) | `store.MoneyStore` | `store.SQLMoneyStore` (`payment_settlements`, `money_operations`, `merchants.platform_fee_bps`, migration 007) | `store.MemoryMoneyStore` |
 
 Notes:
@@ -66,6 +67,10 @@ Notes:
   stores); `payment_settlements` no longer references `emv_payments` (card
   payments share it). Migration 011 adds `resolved_by` (operator user id)
   to reconciliation items.
+- Batch G: migration 012 (`merchant_kyb`, `kyb_documents`,
+  `kyb_document_blobs`, `docs/KYB.md`), 013 (`merchant_sales` + backfill,
+  `refresh_tokens.grace_sealed/grace_used_at`) and 014 (`platform_operators`,
+  `operator_audit_log`, `docs/BACKOFFICE.md`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements, SAT ingestion state.
 - Payment state change, ledger journal, RESICO monthly accumulator,

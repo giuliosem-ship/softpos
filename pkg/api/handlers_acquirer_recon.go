@@ -318,5 +318,6 @@ func (s *Server) HandleResolveReconciliationItem(w http.ResponseWriter, r *http.
 		return
 	}
 	slog.Info("acquirer reconciliation item resolved", "item_id", id, "operator", user)
+	s.auditOperatorAction(r, "reconciliation.resolve", "", strconv.FormatInt(id, 10), map[string]any{"status": "OPEN"}, map[string]any{"status": "RESOLVED"}, req.Note)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "RESOLVED"})
 }

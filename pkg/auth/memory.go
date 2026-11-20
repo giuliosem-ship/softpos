@@ -17,6 +17,7 @@ type MemoryRepository struct {
 	refresh     map[string]RefreshToken // id -> token
 	refreshHash map[string]string       // hash -> id
 	nonces      map[string]memNonce
+	operators   map[string]bool
 }
 
 type memNonce struct {
@@ -35,6 +36,7 @@ func NewMemoryRepository() *MemoryRepository {
 		refresh:     map[string]RefreshToken{},
 		refreshHash: map[string]string{},
 		nonces:      map[string]memNonce{},
+		operators:   map[string]bool{},
 	}
 }
 
@@ -211,6 +213,29 @@ func (r *MemoryRepository) ClaimRefreshGrace(_ context.Context, id string, now t
 	t.GraceUsedAt = &ts
 	r.refresh[id] = t
 	return true, nil
+}
+
+func (r *MemoryRepository) AddPlatformOperator(_ context.Context, userID, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[userID]; !ok {
+		return ErrUserNotFound
+	}
+	r.operators[userID] = true
+	return nil
+}
+
+func (r *MemoryRepository) RemovePlatformOperator(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.operators, userID)
+	return nil
+}
+
+func (r *MemoryRepository) IsPlatformOperator(_ context.Context, userID string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.operators[userID], nil
 }
 
 func (r *MemoryRepository) RevokeRefreshFamily(_ context.Context, familyID string, now time.Time) error {

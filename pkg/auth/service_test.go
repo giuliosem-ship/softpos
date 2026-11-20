@@ -417,3 +417,32 @@ func TestOTP_LockoutKeepsResendThrottle(t *testing.T) {
 		t.Fatalf("fresh code after lockout: %v", err)
 	}
 }
+
+func TestBackofficeScope_OnlyPlatformOperators(t *testing.T) {
+	svc, repo, sender, _ := newService(t)
+	ctx := context.Background()
+	if _, err := svc.RequestOTP(ctx, "+525540000001"); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := sender.LastCode("+525540000001")
+	if _, err := svc.VerifyOTP(ctx, "+525540000001", code, auth.BackofficeScope); !errors.Is(err, auth.ErrNotMember) {
+		t.Fatalf("non-operator: want ErrNotMember, got %v", err)
+	}
+	u, err := svc.GrantPlatformOperator(ctx, "+525540000002", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp := login(t, svc, sender, "+525540000002", auth.BackofficeScope)
+	if tp.MerchantID != auth.BackofficeScope || tp.Role != auth.RoleOperator || tp.UserID != u.ID {
+		t.Fatalf("backoffice session = %+v", tp)
+	}
+	claims, err := svc.ParseAccessToken(tp.AccessToken)
+	if err != nil || claims.MerchantID != auth.BackofficeScope || claims.Role != auth.RoleOperator {
+		t.Fatalf("claims = %+v %v", claims, err)
+	}
+	// Removing the operator ends the session at the next refresh.
+	_ = repo.RemovePlatformOperator(ctx, u.ID)
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrNotMember) {
+		t.Fatalf("refresh after removal: want ErrNotMember, got %v", err)
+	}
+}

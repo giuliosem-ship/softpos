@@ -37,6 +37,7 @@ type MemoryMoneyStore struct {
 	settlements map[string]SettlementRecord
 	operations  map[string]memOperation
 	journalIDs  map[string]bool
+	journals    []*ledger.JournalEntry // committed, in order (backoffice ledger view)
 	events      []MemoryOutboxEvent
 	payouts     map[string]PayoutRecord // by clave_rastreo
 	payoutKeys  map[string]string       // merchant_id + "\x00" + idempotency key -> clave
@@ -421,6 +422,7 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 			return fmt.Errorf("ledger post %s: %w", j.ID, err)
 		}
 		t.store.journalIDs[j.ID] = true
+		t.store.journals = append(t.store.journals, j)
 	}
 	// 3. RESICO accumulators.
 	for k, d := range t.salesDelta {

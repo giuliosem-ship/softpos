@@ -69,6 +69,8 @@ type Server struct {
 	docBlobs          store.DocumentBlobStore
 	docVault          *identity.DocumentVault
 	kycProvider       kyb.KYCProvider
+	auditRepo         store.OperatorAuditRepository
+	backofficeDir     string
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -105,6 +107,7 @@ func NewServer(
 		docBlobs:          kybMem,
 		docVault:          docVault,
 		kycProvider:       kyb.MockKYCProvider{},
+		auditRepo:         store.NewMemoryAuditRepository(),
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -678,6 +681,10 @@ func (s *Server) routes() {
 		}
 		http.StripPrefix("/pos/", http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
 	})
+	// Internal backoffice: API (platform operators) and static UI
+	s.backofficeRoutes()
+	s.router.HandleFunc("GET /backoffice/", s.serveBackofficeUI)
+
 	s.router.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/pos/", http.StatusFound)
 	})

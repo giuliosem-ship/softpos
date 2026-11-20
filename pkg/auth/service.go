@@ -225,18 +225,9 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, code, merchantID string)
 	if err != nil {
 		return TokenPair{}, err
 	}
-	var scope *Membership
-	if merchantID != "" {
-		for i := range memberships {
-			if memberships[i].MerchantID == merchantID {
-				scope = &memberships[i]
-			}
-		}
-		if scope == nil {
-			return TokenPair{}, ErrNotMember
-		}
-	} else if len(memberships) == 1 {
-		scope = &memberships[0]
+	scope, err := s.resolveScope(ctx, user.ID, memberships, merchantID)
+	if err != nil {
+		return TokenPair{}, err
 	}
 	familyID, err := randomID("fam_", 16)
 	if err != nil {
@@ -298,7 +289,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken, merchantID string) 
 	if merchantID != "" {
 		target = merchantID
 	}
-	scope, err := pickScope(memberships, target)
+	scope, err := s.resolveScope(ctx, old.UserID, memberships, target)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -326,6 +317,37 @@ func pickScope(memberships []Membership, target string) (*Membership, error) {
 		return &memberships[0], nil
 	}
 	return nil, nil
+}
+
+// resolveScope is pickScope plus the backoffice pseudo-tenant: target
+// BackofficeScope requires a platform operator and yields RoleOperator.
+func (s *Service) resolveScope(ctx context.Context, userID string, memberships []Membership, target string) (*Membership, error) {
+	if target != BackofficeScope {
+		return pickScope(memberships, target)
+	}
+	ok, err := s.repo.IsPlatformOperator(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotMember
+	}
+	return &Membership{UserID: userID, MerchantID: BackofficeScope, Role: RoleOperator}, nil
+}
+
+// GrantPlatformOperator makes the user of phone (created if needed) a
+// platform operator. Trusted tooling only (bootstrap, operatorctl).
+func (s *Service) GrantPlatformOperator(ctx context.Context, phone, createdBy string) (User, error) {
+	u, err := s.EnsureUser(ctx, phone)
+	if err != nil {
+		return User{}, err
+	}
+	return u, s.repo.AddPlatformOperator(ctx, u.ID, createdBy)
+}
+
+// IsPlatformOperator reports whether userID is a platform operator.
+func (s *Service) IsPlatformOperator(ctx context.Context, userID string) (bool, error) {
+	return s.repo.IsPlatformOperator(ctx, userID)
 }
 
 // graceOrRevoke handles a revoked token: the grace re-presentation when it
@@ -365,7 +387,7 @@ func (s *Service) refreshGrace(ctx context.Context, raw string, old RefreshToken
 	if err != nil {
 		return TokenPair{}, false
 	}
-	scope, err := pickScope(memberships, next.MerchantID)
+	scope, err := s.resolveScope(ctx, next.UserID, memberships, next.MerchantID)
 	if err != nil {
 		return TokenPair{}, false
 	}

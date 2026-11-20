@@ -165,6 +165,7 @@ func (s *Server) HandleReviewSettlementAccount(w http.ResponseWriter, r *http.Re
 		return
 	}
 	slog.Info("settlement account reviewed", "merchant_id", tenant, "status", req.Status, "role", role)
+	s.auditOperatorAction(r, "settlement_account.review", tenant, req.CLABE, nil, map[string]any{"status": req.Status}, string(role))
 	acct, _, _ := s.merchantRepo.GetSettlementAccount(r.Context(), tenant)
 	writeJSON(w, http.StatusOK, settlementAccountResponse(tenant, acct))
 }

@@ -249,6 +249,33 @@ func (r *SQLAuthRepository) RotateRefreshToken(ctx context.Context, oldID string
 	return tx.Commit()
 }
 
+func (r *SQLAuthRepository) AddPlatformOperator(ctx context.Context, userID, createdBy string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO platform_operators (user_id, created_by) VALUES ($1, $2)
+		ON CONFLICT (user_id) DO NOTHING`, userID, createdBy)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return auth.ErrUserNotFound
+		}
+		return fmt.Errorf("add platform operator: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLAuthRepository) RemovePlatformOperator(ctx context.Context, userID string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM platform_operators WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("remove platform operator: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLAuthRepository) IsPlatformOperator(ctx context.Context, userID string) (bool, error) {
+	var ok bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM platform_operators WHERE user_id = $1)`, userID).Scan(&ok); err != nil {
+		return false, fmt.Errorf("is platform operator: %w", err)
+	}
+	return ok, nil
+}
+
 func (r *SQLAuthRepository) RevokeRefreshFamily(ctx context.Context, familyID string, now time.Time) error {
 	if _, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = $1 WHERE family_id = $2 AND revoked_at IS NULL`, now, familyID); err != nil {
 		return fmt.Errorf("revoke refresh family: %w", err)

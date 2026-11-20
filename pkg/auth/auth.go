@@ -23,6 +23,11 @@ const (
 	RoleOperator Role = "operator" // internal Kerno operator (backoffice)
 )
 
+// BackofficeScope is the pseudo-merchant id of a platform operator session
+// (Kerno's internal backoffice): request it as merchant_id in OTP verify or
+// refresh. Only users listed as platform operators get it, with RoleOperator.
+const BackofficeScope = "kerno:backoffice"
+
 // Valid reports whether r is a known role.
 func (r Role) Valid() bool {
 	switch r {
@@ -122,6 +127,12 @@ type Repository interface {
 	// ClaimRefreshGrace atomically marks the grace re-presentation of the
 	// rotated token id as used; false if it was already used (or unknown).
 	ClaimRefreshGrace(ctx context.Context, id string, now time.Time) (bool, error)
+
+	// Platform operators (backoffice). Created only by trusted tooling
+	// (bootstrap env var, operatorctl), never through the public API.
+	AddPlatformOperator(ctx context.Context, userID, createdBy string) error
+	RemovePlatformOperator(ctx context.Context, userID string) error
+	IsPlatformOperator(ctx context.Context, userID string) (bool, error)
 
 	SaveAttestationNonce(ctx context.Context, n AttestationNonce) error
 	// ConsumeAttestationNonce atomically marks the nonce used; ok=false if it is

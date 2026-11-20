@@ -1,0 +1,18 @@
+# Keep secrets, local tooling and build outputs out of the Docker build context.
+.git
+.github
+.agent
+.venv
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cer
+mobile/
+tools/
+docs/
+**/*.test
+**/*.out
+coverage.txt
+.DS_Store

@@ -1094,6 +1094,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 20/20 PASS; node --test web/pos/softpos_sdk.test.js 8/8; DEV_MODE binary smoke: dev-session, authorize, settle (client fee/rbf ignored), payout to seeded verified CLABE, partial refund, simulated CoDi confirm.",
       "audit_notes": "No real KMS client wired (interface + adapter only). Stored CSDs are not re-wrapped automatically on rotation (RewrapCSD exists, no batch job/endpoint). docker-compose still ships the public dev key with DEV_MODE=true (Batch D).",
       "priority": 70
+    },
+    {
+      "id": "MVP-10",
+      "component": "ci",
+      "title": "CI pipeline and pinned Go toolchain",
+      "status": "completed",
+      "files": {
+        "tests": ".github/workflows/ci.yml (yaml.safe_load), mobile/android/gradlew (Kotlin suite via wrapper)",
+        "implementation": ".github/workflows/ci.yml, Dockerfile, .dockerignore, mobile/android/gradlew, mobile/android/gradlew.bat, mobile/android/gradle/wrapper/*, cmd/server/main.go (time/tzdata)"
+      },
+      "spec": "GitHub Actions on push/PR to main: go (setup-go from go.mod 1.27.1, GOTOOLCHAIN=local, toolchain check, go vet, go test -race -count=1), postgres-integration (postgres:16 service, TEST_DATABASE_URL, -run PGIntegration), web-pos (node 22, node --test web/pos/softpos_sdk.test.js), kotlin (temurin 17 + gradle/actions/setup-gradle wrapper validation + ./gradlew :app:test), docker (buildx build, no push). Actions pinned to major tags. Dockerfile: golang:1.27.1-alpine builder with GOTOOLCHAIN=local, go.sum copied + go mod verify, no missing internal/ dir, alpine:3.22 runtime, numeric non-root user 10001, only web/pos copied (migrations and tzdata embedded). .dockerignore keeps .env/keys/tooling out of the build context. Gradle 9.8.2 wrapper added; the Kotlin/JVM module builds on Gradle 9 without changes.",
+      "test_results": "python yaml.safe_load OK (actionlint not installed); JAVA_HOME=openjdk@17 ./gradlew :app:test 78/78 PASS; go vet ./... clean; go test -race -count=1 ./... OK. Docker build and the GitHub Actions run itself not executed locally (no Docker, no runner).",
+      "audit_notes": "Docker image build only syntax-reviewed locally; first CI run on GitHub will be its real validation. gofmt not enforced (pre-existing unformatted files in phase-2 packages). No APK job: the module is Kotlin/JVM, not Android (F9).",
+      "priority": 71
     }
   ]
 }

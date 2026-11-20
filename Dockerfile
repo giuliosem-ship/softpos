@@ -1,38 +1,43 @@
-# Multi-stage Dockerfile for SoftPOS Hybrid Fiscal & Payment Platform
-# Stage 1: Build the Go executable binary
-FROM golang:alpine AS builder
+# syntax=docker/dockerfile:1
+# Multi-stage build for the Kerno (SoftPOS) server.
+#
+# Stage 1: build a static binary with the exact Go toolchain pinned in go.mod
+# (go 1.27.1). GOTOOLCHAIN=local forbids silently downloading another toolchain.
+FROM golang:1.27.1-alpine AS builder
 
-WORKDIR /app
+ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
 
-# Copy dependency definitions and sources
-COPY go.mod ./
-COPY pkg/ ./pkg/
-COPY internal/ ./internal/
+WORKDIR /src
+
+# Dependencies first (cached layer), then sources.
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
 COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+COPY migrations/ ./migrations/
 
-# Build static executable binary
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/softpos-server ./cmd/server
+# Migrations are embedded in the binary (migrations.FS); time/tzdata is
+# embedded too, so the runtime image needs no zoneinfo package.
+RUN go build -trimpath -ldflags="-s -w" -o /out/softpos-server ./cmd/server
 
-# Stage 2: Minimal runtime image
-FROM alpine:3.20
+# Stage 2: minimal runtime, non-root.
+FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10001 app && adduser -S -D -H -u 10001 -G app app
 
 WORKDIR /app
 
-# Copy binary, schema migrations, and frontend static assets
-COPY --from=builder /app/softpos-server /app/softpos-server
-COPY migrations/ /app/migrations/
-COPY web/ /app/web/
+COPY --from=builder /out/softpos-server /app/softpos-server
+# Only the Web POS static assets are served (STATIC_DIR=/app/web/pos).
+COPY --chown=root:root web/pos/ /app/web/pos/
 
-RUN chown -R appuser:appgroup /app
-
-USER appuser
+USER 10001:10001
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost:8080/healthz || exit 1
+    CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 
 ENTRYPOINT ["/app/softpos-server"]

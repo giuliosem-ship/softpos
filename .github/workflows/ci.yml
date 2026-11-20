@@ -1,0 +1,107 @@
+# Continuous integration for Kerno (SoftPOS). Every push and pull request to
+# main must be green before merging (see AGENTS.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never let `go` download a different toolchain than the one pinned in go.mod.
+  GOTOOLCHAIN: local
+
+jobs:
+  go:
+    name: Go (vet + race tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod # go 1.27.1
+          cache: true
+      - name: Verify toolchain
+        run: go version | grep -q 'go1.27.1' || { go version; echo "expected go1.27.1"; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  postgres-integration:
+    name: Go integration (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: softpos
+          POSTGRES_PASSWORD: softpos_ci_only
+          POSTGRES_DB: softpos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U softpos -d softpos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Throwaway CI database; not a real secret.
+      TEST_DATABASE_URL: postgres://softpos:softpos_ci_only@localhost:5432/softpos_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: PGIntegration tests
+        run: go test -race -count=1 -run PGIntegration -v ./...
+
+  web-pos:
+    name: Web POS SDK (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: node --test
+        run: node --test web/pos/softpos_sdk.test.js
+
+  kotlin:
+    name: Kotlin module tests (JDK 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Validates gradle-wrapper.jar against the official checksums and caches.
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Gradle test
+        run: ./gradlew --no-daemon :app:test
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: kerno/softpos-server:ci

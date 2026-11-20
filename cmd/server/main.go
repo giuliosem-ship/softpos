@@ -19,6 +19,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// Embedded IANA zoneinfo: RESICO months are computed in
+	// America/Mexico_City and the runtime image ships no tzdata package.
+	_ "time/tzdata"
 
 	"softpos/migrations"
 	"softpos/pkg/api"

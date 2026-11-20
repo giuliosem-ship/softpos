@@ -20,7 +20,7 @@ func TestPGIntegration_BuildServerTwiceOnRealPostgres(t *testing.T) {
 		DatabaseURL:      dsn,
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
-		JWTSecret:        testJWTSecret,
+		JWTSecret:        testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 
 	for boot := 1; boot <= 2; boot++ {
@@ -46,7 +46,7 @@ func TestBuildServer_FailsFastOnUnreachableDatabase(t *testing.T) {
 		SQLDriver:     "pgx",
 		DatabaseURL:   "postgres://nobody:nothing@127.0.0.1:1/none?sslmode=disable&connect_timeout=1",
 		STPHMACSecret: "test_secret",
-		JWTSecret:     testJWTSecret,
+		JWTSecret:     testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 	if _, _, _, err := BuildServer(context.Background(), cfg); err == nil {
 		t.Fatalf("expected BuildServer to fail on unreachable database")

@@ -1080,6 +1080,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 20/20 PASS (new: settlement gate, 10 concurrent payouts -> exactly 3 of 30000 on 100000, partial+full refund zeroing escrow/fees/receivable/accumulator); node --test web/pos/softpos_sdk.test.js 8/8.",
       "audit_notes": "Ownership verification is a stub (PENDING until an operator marks it); no 2FA on settlement-account changes; operator role is per-merchant membership (no global backoffice role). Refunds do not reverse the RBF holdback and may drive the available balance negative. Virtual CLABEs are not registered in STP yet and use a fixed 646/180 prefix.",
       "priority": 69
+    },
+    {
+      "id": "MVP-09",
+      "component": "identity",
+      "title": "Vault master key from env/KMS",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/identity/key_provider_test.go, pkg/identity/csd_vault_test.go, cmd/server/main_test.go, cmd/server/config_guard_test.go (+ VaultMasterKeyHex in cmd/server test configs)",
+        "implementation": "pkg/identity/key_provider.go, pkg/identity/csd_vault.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, docs/AUTH.md, README.md"
+      },
+      "spec": "identity.KeyProvider (WrapDEK/UnwrapDEK) with StaticKeyProvider (env keyring: VAULT_MASTER_KEY_HEX active + VAULT_MASTER_KEY_ID default v1 + VAULT_PREVIOUS_KEYS id:hex,...) and KMSKeyProvider over a KMSClient interface (no SDK yet). Envelopes carry KeyID (AES-256-GCM wrap, nonce prepended, key id as AAD); legacy envelopes (no KeyID, separate IV) open with any held key; CSDVaultService.RewrapCSD migrates/rotates. NewServer has no hardcoded key (ephemeral random until SetCSDKeyProvider). BuildServer: no key outside DEV_MODE -> ErrMissingVaultKey, public dev key outside DEV_MODE -> ErrDevVaultKeyOutsideDevMode, DEV_MODE without key -> dev key (old dev CSDs keep decrypting). Production guard also rejects malformed active/previous keys (ErrInvalidVaultKey). ISR float -> isr_rate_bps was done in MVP-07.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... 16/16 packages ok; TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 20/20 PASS; node --test web/pos/softpos_sdk.test.js 8/8; DEV_MODE binary smoke: dev-session, authorize, settle (client fee/rbf ignored), payout to seeded verified CLABE, partial refund, simulated CoDi confirm.",
+      "audit_notes": "No real KMS client wired (interface + adapter only). Stored CSDs are not re-wrapped automatically on rotation (RewrapCSD exists, no batch job/endpoint). docker-compose still ships the public dev key with DEV_MODE=true (Batch D).",
+      "priority": 70
     }
   ]
 }

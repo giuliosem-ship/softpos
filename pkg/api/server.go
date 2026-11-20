@@ -24,8 +24,6 @@ import (
 	"softpos/pkg/stp"
 )
 
-const defaultVaultMasterKeyHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-
 type Merchant struct {
 	ID       string `json:"id"`
 	RFC      string `json:"rfc"`
@@ -70,7 +68,9 @@ func NewServer(
 	blacklistService *identity.BlacklistService,
 	stpSigner *stp.STPSigner,
 ) *Server {
-	vault, _ := identity.NewCSDVaultService(defaultVaultMasterKeyHex)
+	// Ephemeral per-process vault key until SetCSDKeyProvider installs the
+	// configured one (VAULT_MASTER_KEY_HEX / KMS): never a hardcoded key.
+	vault, _ := identity.NewCSDVaultServiceWithProvider(identity.NewEphemeralKeyProvider())
 	primaryPAC := pac.NewMockPACClient(false, "")
 	fallbackPAC := pac.NewMockPACClient(false, "")
 
@@ -235,10 +235,30 @@ func (s *Server) SetStaticDir(dir string) {
 	s.staticDir = dir
 }
 
+// SetCSDKeyProvider replaces the CSD vault master-key provider. Call at boot,
+// before any CSD is stored (envelopes made with the previous provider would
+// only decrypt if it held their key ids).
+func (s *Server) SetCSDKeyProvider(p identity.KeyProvider) error {
+	vault, err := identity.NewCSDVaultServiceWithProvider(p)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.csdVault = vault
+	return nil
+}
+
+func (s *Server) vault() *identity.CSDVaultService {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.csdVault
+}
+
 // RegisterMerchantCSD encrypts and stores a merchant's CSD certificate and private key in the envelope-encrypted vault.
 // The merchant must already be registered.
 func (s *Server) RegisterMerchantCSD(merchantID string, keyDER []byte, certDER []byte) error {
-	enc, err := s.csdVault.StoreCSD(merchantID, certDER, keyDER, "vault-managed")
+	enc, err := s.vault().StoreCSD(merchantID, certDER, keyDER, "vault-managed")
 	if err != nil {
 		return err
 	}
@@ -261,7 +281,7 @@ func (s *Server) getMerchantCSD(merchantID string) (identity.DecryptedCSD, error
 	if err := json.Unmarshal(csdBytes, &enc); err != nil {
 		return identity.DecryptedCSD{}, fmt.Errorf("corrupt encrypted CSD: %w", err)
 	}
-	return s.csdVault.DecryptCSDForSigning(enc)
+	return s.vault().DecryptCSDForSigning(enc)
 }
 
 // RegisterMerchant ensures ledger accounts are created before committing merchant state (Prepare-Commit pattern).

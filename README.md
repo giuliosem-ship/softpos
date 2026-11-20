@@ -68,7 +68,7 @@ DEV_MODE=true go run ./cmd/server
 open http://localhost:8080/pos/
 ```
 
-Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados); ver [`docs/AUTH.md`](docs/AUTH.md).
+Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes) y `VAULT_MASTER_KEY_HEX` (llave maestra de 32 bytes de la bóveda CSD; ver [`docs/AUTH.md`](docs/AUTH.md)). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados); ver [`docs/AUTH.md`](docs/AUTH.md).
 
 Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md).
 

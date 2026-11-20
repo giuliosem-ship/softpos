@@ -45,7 +45,7 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		DatabaseURL:       pgtest.URL(t),
 		STPHMACSecret:     "test_secret",
 		CoDiWebhookSecret: "restart_codi_webhook_secret_32_bytes!",
-		JWTSecret:         testJWTSecret,
+		JWTSecret:         testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 
 	// ---- Boot 1: create state ----

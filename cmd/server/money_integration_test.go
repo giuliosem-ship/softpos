@@ -65,7 +65,7 @@ func TestPGIntegration_ConcurrentMoneyPostingIsExactlyOnce(t *testing.T) {
 		DatabaseURL:       pgtest.URL(t),
 		STPHMACSecret:     "test_secret",
 		CoDiWebhookSecret: "money_codi_webhook_secret_32_bytes!!",
-		JWTSecret:         testJWTSecret,
+		JWTSecret:         testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 	srv, db, _, err := BuildServer(context.Background(), cfg)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestPGIntegration_ConcurrentMoneyPostingIsExactlyOnce(t *testing.T) {
 // payouts that cannot overdraw, and proportional partial/full refunds on real
 // PostgreSQL.
 func TestPGIntegration_PayoutsAndRefunds(t *testing.T) {
-	cfg := Config{SQLDriver: "pgx", DatabaseURL: pgtest.URL(t), STPHMACSecret: "test_secret", JWTSecret: testJWTSecret}
+	cfg := Config{SQLDriver: "pgx", DatabaseURL: pgtest.URL(t), STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex}
 	srv, db, _, err := BuildServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)

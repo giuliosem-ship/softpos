@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
+	"softpos/pkg/identity"
 	_ "softpos/pkg/store" // register mockpostgres driver
 	"softpos/pkg/stp"
 )
@@ -46,7 +50,7 @@ func TestBuildServer_InMemoryAndMockDB(t *testing.T) {
 		Port:             8080,
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
-		JWTSecret:        testJWTSecret,
+		JWTSecret:        testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 	srvMem, dbMem, rdMem, err := BuildServer(ctx, cfgMem)
 	if err != nil {
@@ -78,7 +82,7 @@ func TestBuildServer_InMemoryAndMockDB(t *testing.T) {
 		MigrationsDir:    tmpDir,
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
-		JWTSecret:        testJWTSecret,
+		JWTSecret:        testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 	srvSQL, dbSQL, _, err := BuildServer(ctx, cfgSQL)
 	if err != nil {
@@ -109,7 +113,7 @@ func TestServerLifecycle_GracefulShutdown(t *testing.T) {
 		Port:             0, // ephemeral
 		SeedDemoMerchant: true,
 		STPHMACSecret:    "test_secret",
-		JWTSecret:        testJWTSecret,
+		JWTSecret:        testJWTSecret, VaultMasterKeyHex: testVaultKeyHex,
 	}
 
 	srv, _, _, err := BuildServer(ctx, cfg)
@@ -132,6 +136,9 @@ func TestServerLifecycle_GracefulShutdown(t *testing.T) {
 }
 
 const testJWTSecret = "cmd_server_test_jwt_secret_32_bytes_min"
+
+// testVaultKeyHex is a throwaway 32-byte CSD vault master key for tests.
+const testVaultKeyHex = "7e1f3c5a9b2d4e6f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7"
 
 func TestBuildServer_RequiresJWTSecretUnlessDevMode(t *testing.T) {
 	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret"}); !errors.Is(err, ErrMissingJWTSecret) {
@@ -168,7 +175,7 @@ func asMerchant(t *testing.T, srv *api.Server, merchantID string, req *http.Requ
 }
 
 func TestBuildServer_MountsAuthAndDevSession(t *testing.T) {
-	srv, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	srv, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex, SeedDemoMerchant: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +212,7 @@ func TestLoadConfigFromEnv_AttestationAndRateLimit(t *testing.T) {
 
 func TestBuildServer_STPDevSecretOnlyInDevMode(t *testing.T) {
 	// The public dev secret is refused without DEV_MODE...
-	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: defaultSTPHMACSecret, JWTSecret: testJWTSecret}); !errors.Is(err, ErrDevSTPSecretOutsideDevMode) {
+	if _, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: defaultSTPHMACSecret, JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex}); !errors.Is(err, ErrDevSTPSecretOutsideDevMode) {
 		t.Fatalf("expected ErrDevSTPSecretOutsideDevMode, got %v", err)
 	}
 	abono := func(srv *api.Server, secret string) int {
@@ -217,7 +224,7 @@ func TestBuildServer_STPDevSecretOnlyInDevMode(t *testing.T) {
 		return rec.Code
 	}
 	// ...without any STP secret (and no DEV_MODE) HMAC abonos signed with the dev secret are rejected...
-	noSecret, _, _, err := BuildServer(context.Background(), Config{JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	noSecret, _, _, err := BuildServer(context.Background(), Config{JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex, SeedDemoMerchant: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +252,7 @@ func TestBuildServer_CoDiWebhookSecret(t *testing.T) {
 		srv.Router().ServeHTTP(rec, req)
 		return rec.Code
 	}
-	off, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true})
+	off, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex, SeedDemoMerchant: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +260,7 @@ func TestBuildServer_CoDiWebhookSecret(t *testing.T) {
 		t.Fatalf("no CODI_WEBHOOK_SECRET: want 503, got %d", code)
 	}
 	const secret = "cmd_codi_webhook_secret_32_bytes_long!"
-	on, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, SeedDemoMerchant: true, CoDiWebhookSecret: secret})
+	on, _, _, err := BuildServer(context.Background(), Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex, SeedDemoMerchant: true, CoDiWebhookSecret: secret})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,5 +269,78 @@ func TestBuildServer_CoDiWebhookSecret(t *testing.T) {
 	}
 	if code := post(on, secret); code != http.StatusOK {
 		t.Fatalf("valid signature: want 200, got %d", code)
+	}
+}
+
+func TestBuildServer_VaultKeyFromEnvOnly(t *testing.T) {
+	base := Config{STPHMACSecret: "test_secret", JWTSecret: testJWTSecret}
+	if _, _, _, err := BuildServer(context.Background(), base); !errors.Is(err, ErrMissingVaultKey) {
+		t.Fatalf("no VAULT_MASTER_KEY_HEX outside DEV_MODE: want ErrMissingVaultKey, got %v", err)
+	}
+	devKey := base
+	devKey.VaultMasterKeyHex = defaultVaultMasterKeyHex
+	if _, _, _, err := BuildServer(context.Background(), devKey); !errors.Is(err, ErrDevVaultKeyOutsideDevMode) {
+		t.Fatalf("public dev key outside DEV_MODE: want ErrDevVaultKeyOutsideDevMode, got %v", err)
+	}
+	short := base
+	short.VaultMasterKeyHex = "abcd"
+	if _, _, _, err := BuildServer(context.Background(), short); err == nil {
+		t.Fatal("short vault key must be rejected")
+	}
+
+	// The configured key is the one used: a CSD stored by one server opens on
+	// another with the same key (and the same envelope fails with another key).
+	cfg := base
+	cfg.VaultMasterKeyHex = testVaultKeyHex
+	cfg.SeedDemoMerchant = true
+	srv1, _, _, err := BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, cert, _ := generateSelfSignedCSD()
+	if err := srv1.RegisterMerchantCSD("merch_demo_01", priv, cert); err != nil {
+		t.Fatal(err)
+	}
+	p, err := buildVaultKeyProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, _ := identity.NewCSDVaultServiceWithProvider(p)
+	enc, err := vault.StoreCSD("m", cert, priv, "pwd")
+	if err != nil || enc.KeyID != "v1" {
+		t.Fatalf("envelope key id: %q %v", enc.KeyID, err)
+	}
+	rotated := cfg
+	rotated.VaultMasterKeyHex = strings.Repeat("ab", 32)
+	rotated.VaultKeyID = "v2"
+	rotated.VaultPreviousKeys = "v1:" + testVaultKeyHex
+	p2, err := buildVaultKeyProvider(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, _ := identity.NewCSDVaultServiceWithProvider(p2)
+	if _, err := v2.DecryptCSDForSigning(enc); err != nil {
+		t.Fatalf("rotated keyring must decrypt v1 envelopes: %v", err)
+	}
+
+	// DEV_MODE without a key uses the dev key (legacy dev envelopes keep working).
+	dev := Config{STPHMACSecret: "test_secret", DevMode: true}
+	pd, err := buildVaultKeyProvider(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy envelope (pre key-id format) sealed with the old hardcoded key.
+	tmpP, _ := identity.NewStaticKeyProvider("tmp", defaultVaultMasterKeyHex, nil)
+	tmpVault, _ := identity.NewCSDVaultServiceWithProvider(tmpP)
+	legacyEnc, _ := tmpVault.StoreCSD("m", cert, priv, "pwd")
+	dek, _ := tmpP.UnwrapDEK(context.Background(), legacyEnc.KeyID, legacyEnc.EncryptedDEK)
+	master, _ := hex.DecodeString(defaultVaultMasterKeyHex)
+	block, _ := aes.NewCipher(master)
+	gcm, _ := cipher.NewGCM(block)
+	legacyEnc.KeyID, legacyEnc.IV = "", make([]byte, 12)
+	legacyEnc.EncryptedDEK = gcm.Seal(nil, legacyEnc.IV, dek, nil)
+	devVault, _ := identity.NewCSDVaultServiceWithProvider(pd)
+	if _, err := devVault.DecryptCSDForSigning(legacyEnc); err != nil {
+		t.Fatalf("dev key must open envelopes made with the old hardcoded key: %v", err)
 	}
 }

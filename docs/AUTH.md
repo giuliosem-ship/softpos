@@ -185,11 +185,26 @@ can simulate a CoDi payment without holding the secret.
 | `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
 | `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
 | `STP_HMAC_SECRET` | STP HMAC secret. No default; the dev default is accepted only with `DEV_MODE`. Required in production. |
+| `VAULT_MASTER_KEY_HEX` | Active 32-byte (64 hex) master key of the CSD vault. Required unless `DEV_MODE=true` (then the public dev key is used, so old dev envelopes keep decrypting); the dev key is refused without `DEV_MODE`. |
+| `VAULT_MASTER_KEY_ID` | Key id written into new envelopes (default `v1`; `dev` for the dev key). |
+| `VAULT_PREVIOUS_KEYS` | Retired keys still accepted for decryption: `id:hex,id:hex` (rotation). |
 | `ALLOW_CASHIER_REFUNDS` | `true` lets cashiers refund settled payments (default: owner-only). |
 
 Production guard (`APP_ENV=production`) refuses to start with `DEV_MODE`,
-`JWT_SECRET` < 32 bytes, `CODI_WEBHOOK_SECRET` < 32 bytes, or a missing/default
-`STP_HMAC_SECRET` (plus the existing vault/DB/demo checks).
+`JWT_SECRET` < 32 bytes, `CODI_WEBHOOK_SECRET` < 32 bytes, a missing/default
+`STP_HMAC_SECRET`, a missing/default/malformed `VAULT_MASTER_KEY_HEX` or a
+malformed `VAULT_PREVIOUS_KEYS` (plus the DB/demo checks).
+
+CSD vault keys (MVP-09): `NewServer` no longer has a hardcoded key (it starts
+with an ephemeral random one); `cmd/server` installs an
+`identity.KeyProvider` built from the variables above
+(`identity.StaticKeyProvider`). Each envelope stores the `KeyID` that wrapped
+its DEK (AES-256-GCM, key id as AAD); envelopes without `KeyID` are the legacy
+format and are opened with any held key. Rotation: set the new key as active,
+move the old one to `VAULT_PREVIOUS_KEYS`, re-wrap stored CSDs with
+`CSDVaultService.RewrapCSD`, then drop the old key. `identity.KMSKeyProvider`
+adapts any KMS behind the `identity.KMSClient` interface (Encrypt/Decrypt); no
+cloud SDK is wired yet.
 
 OTP delivery: only `auth.LogSender` exists (no SMS/WhatsApp provider yet).
 Outside `DEV_MODE` it logs a masked phone and **does not reveal the code**, so

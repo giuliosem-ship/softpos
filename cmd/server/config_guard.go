@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"strings"
+
+	"softpos/pkg/identity"
 )
 
 const (
@@ -12,6 +14,7 @@ const (
 
 var (
 	ErrInsecureDefaultVaultKey   = errors.New("insecure configuration: default vault master key cannot be used in production")
+	ErrInvalidVaultKey           = errors.New("insecure configuration: VAULT_MASTER_KEY_HEX must be a valid 32-byte hex key (VAULT_PREVIOUS_KEYS too)")
 	ErrInsecureDefaultSTPSecret  = errors.New("insecure configuration: default STP HMAC secret cannot be used in production")
 	ErrInsecureDatabaseURL       = errors.New("insecure configuration: database SSL mode cannot be disabled in production")
 	ErrDemoMerchantInProduction  = errors.New("insecure configuration: demo merchant seeding must be disabled in production")
@@ -33,6 +36,18 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	// 1. Vault Master Key validation
 	if cfg.VaultMasterKeyHex == "" || cfg.VaultMasterKeyHex == defaultVaultMasterKeyHex {
 		return ErrInsecureDefaultVaultKey
+	}
+	if _, err := identity.DecodeMasterKeyHex(cfg.VaultMasterKeyHex); err != nil {
+		return ErrInvalidVaultKey
+	}
+	if ring, err := identity.ParseKeyring(cfg.VaultPreviousKeys); err != nil {
+		return ErrInvalidVaultKey
+	} else {
+		for _, h := range ring {
+			if _, err := identity.DecodeMasterKeyHex(h); err != nil || h == defaultVaultMasterKeyHex {
+				return ErrInvalidVaultKey
+			}
+		}
 	}
 
 	// 2. STP HMAC Secret validation

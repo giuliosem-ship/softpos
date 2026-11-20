@@ -1,17 +1,21 @@
 package identity
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 )
 
 var ErrCSDVault = errors.New("CSD cryptographic operation failed")
 
+// EncryptedCSD is an envelope: fields sealed with a per-CSD DEK, and the DEK
+// wrapped by a KeyProvider under KeyID. Envelopes without KeyID are the legacy
+// format (DEK sealed with the master key using IV).
 type EncryptedCSD struct {
 	MerchantID        string
+	KeyID             string `json:",omitempty"`
 	EncryptedCER      []byte
 	EncryptedKey      []byte
 	EncryptedPassword []byte
@@ -27,18 +31,25 @@ type DecryptedCSD struct {
 }
 
 type CSDVaultService struct {
-	masterKey []byte
+	keys KeyProvider
 }
 
+// NewCSDVaultService builds a vault over a single static master key (key id "v1").
 func NewCSDVaultService(masterKeyHex string) (*CSDVaultService, error) {
-	masterKey, err := hex.DecodeString(masterKeyHex)
+	p, err := NewStaticKeyProvider("v1", masterKeyHex, nil)
 	if err != nil {
 		return nil, ErrCSDVault
 	}
-	if len(masterKey) != 32 {
+	return &CSDVaultService{keys: p}, nil
+}
+
+// NewCSDVaultServiceWithProvider builds a vault whose DEKs are wrapped by p
+// (env keyring or KMS).
+func NewCSDVaultServiceWithProvider(p KeyProvider) (*CSDVaultService, error) {
+	if p == nil {
 		return nil, ErrCSDVault
 	}
-	return &CSDVaultService{masterKey: masterKey}, nil
+	return &CSDVaultService{keys: p}, nil
 }
 
 // sealWithUniqueNonce generates a fresh 12-byte random nonce per field and prepends it to the AES-GCM ciphertext.
@@ -99,47 +110,55 @@ func (v *CSDVaultService) StoreCSD(merchantID string, cerBytes []byte, keyBytes 
 		return EncryptedCSD{}, ErrCSDVault
 	}
 
-	// Dedicated 12-byte IV used exclusively for wrapping the DEK with the master key
-	dekIV := make([]byte, 12)
-	if _, err := rand.Read(dekIV); err != nil {
-		return EncryptedCSD{}, ErrCSDVault
-	}
-
-	blockMaster, err := aes.NewCipher(v.masterKey)
+	keyID, wrappedDEK, err := v.keys.WrapDEK(context.Background(), dek)
 	if err != nil {
 		return EncryptedCSD{}, ErrCSDVault
 	}
-	gcmMaster, err := cipher.NewGCM(blockMaster)
-	if err != nil {
-		return EncryptedCSD{}, ErrCSDVault
-	}
-
-	encryptedDEK := gcmMaster.Seal(nil, dekIV, dek, nil)
 
 	return EncryptedCSD{
 		MerchantID:        merchantID,
+		KeyID:             keyID,
 		EncryptedCER:      encryptedCER,
 		EncryptedKey:      encryptedKey,
 		EncryptedPassword: encryptedPassword,
-		EncryptedDEK:      encryptedDEK,
-		IV:                dekIV,
+		EncryptedDEK:      wrappedDEK,
 	}, nil
 }
 
-func (v *CSDVaultService) DecryptCSDForSigning(enc EncryptedCSD) (DecryptedCSD, error) {
-	blockMaster, err := aes.NewCipher(v.masterKey)
-	if err != nil {
-		return DecryptedCSD{}, ErrCSDVault
+// unwrapDEK returns the plaintext DEK of an envelope (current or legacy format).
+func (v *CSDVaultService) unwrapDEK(enc EncryptedCSD) ([]byte, error) {
+	wrapped := enc.EncryptedDEK
+	if enc.KeyID == "" { // legacy: IV stored apart from the sealed DEK
+		if len(enc.IV) != 12 {
+			return nil, ErrCSDVault
+		}
+		wrapped = append(append([]byte(nil), enc.IV...), enc.EncryptedDEK...)
 	}
-	gcmMaster, err := cipher.NewGCM(blockMaster)
-	if err != nil {
-		return DecryptedCSD{}, ErrCSDVault
+	dek, err := v.keys.UnwrapDEK(context.Background(), enc.KeyID, wrapped)
+	if err != nil || len(dek) != 32 {
+		return nil, ErrCSDVault
 	}
-	if len(enc.IV) != gcmMaster.NonceSize() {
-		return DecryptedCSD{}, ErrCSDVault
-	}
+	return dek, nil
+}
 
-	dek, err := gcmMaster.Open(nil, enc.IV, enc.EncryptedDEK, nil)
+// RewrapCSD re-wraps the DEK of enc with the provider's active key (key
+// rotation / legacy migration). Field ciphertexts are untouched.
+func (v *CSDVaultService) RewrapCSD(enc EncryptedCSD) (EncryptedCSD, error) {
+	dek, err := v.unwrapDEK(enc)
+	if err != nil {
+		return EncryptedCSD{}, err
+	}
+	defer clear(dek)
+	keyID, wrapped, err := v.keys.WrapDEK(context.Background(), dek)
+	if err != nil {
+		return EncryptedCSD{}, ErrCSDVault
+	}
+	enc.KeyID, enc.EncryptedDEK, enc.IV = keyID, wrapped, nil
+	return enc, nil
+}
+
+func (v *CSDVaultService) DecryptCSDForSigning(enc EncryptedCSD) (DecryptedCSD, error) {
+	dek, err := v.unwrapDEK(enc)
 	if err != nil {
 		return DecryptedCSD{}, ErrCSDVault
 	}

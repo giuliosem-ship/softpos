@@ -48,6 +48,18 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 		t.Errorf("expected ErrInsecureDefaultVaultKey, got: %v", err)
 	}
 
+	// 2b. Reject malformed vault keys (active or previous)
+	shortVault := prodCfg
+	shortVault.VaultMasterKeyHex = "a1b2c3"
+	if err := ValidateProductionConfig(shortVault, "production"); !errors.Is(err, ErrInvalidVaultKey) {
+		t.Errorf("expected ErrInvalidVaultKey for a short key, got: %v", err)
+	}
+	badPrev := prodCfg
+	badPrev.VaultPreviousKeys = "v0:nothex"
+	if err := ValidateProductionConfig(badPrev, "production"); !errors.Is(err, ErrInvalidVaultKey) {
+		t.Errorf("expected ErrInvalidVaultKey for a bad previous key, got: %v", err)
+	}
+
 	// 3. Reject default STP HMAC secret
 	badSTPCfg := prodCfg
 	badSTPCfg.STPHMACSecret = "softpos_dev_secret_key_12345678"

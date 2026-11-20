@@ -38,7 +38,9 @@ type Config struct {
 	MigrationsDir     string
 	RedisAddr         string
 	RedisPassword     string
-	VaultMasterKeyHex string
+	VaultMasterKeyHex string // VAULT_MASTER_KEY_HEX: active 32-byte CSD vault master key
+	VaultKeyID        string // VAULT_MASTER_KEY_ID: id stored in envelopes (default "v1")
+	VaultPreviousKeys string // VAULT_PREVIOUS_KEYS: "id:hex,..." retired keys kept for decryption
 	STPHMACSecret     string
 	STPBaseURL        string
 	SeedDemoMerchant  bool
@@ -179,6 +181,8 @@ func LoadConfigFromEnv() Config {
 		RedisAddr:              os.Getenv("REDIS_ADDR"),
 		RedisPassword:          os.Getenv("REDIS_PASSWORD"),
 		VaultMasterKeyHex:      os.Getenv("VAULT_MASTER_KEY_HEX"),
+		VaultKeyID:             os.Getenv("VAULT_MASTER_KEY_ID"),
+		VaultPreviousKeys:      os.Getenv("VAULT_PREVIOUS_KEYS"),
 		STPHMACSecret:          hmacSecret,
 		STPBaseURL:             os.Getenv("STP_BASE_URL"),
 		SeedDemoMerchant:       seedDemo,
@@ -229,6 +233,45 @@ func buildAuthService(cfg Config, repo auth.Repository) (*auth.Service, error) {
 		return nil, fmt.Errorf("auth service: %w", err)
 	}
 	return svc, nil
+}
+
+var (
+	// ErrMissingVaultKey is returned when VAULT_MASTER_KEY_HEX is unset outside DEV_MODE.
+	ErrMissingVaultKey = errors.New("VAULT_MASTER_KEY_HEX is required (32 bytes hex) unless DEV_MODE=true")
+	// ErrDevVaultKeyOutsideDevMode is returned when the public dev vault key is configured without DEV_MODE.
+	ErrDevVaultKeyOutsideDevMode = errors.New("VAULT_MASTER_KEY_HEX is the public dev key; set a real key or DEV_MODE=true")
+)
+
+// buildVaultKeyProvider returns the CSD vault master-key provider from the
+// environment keyring. The well-known dev key is only accepted with DEV_MODE
+// (it keeps dev databases' existing CSD envelopes decryptable). A KMS-backed
+// identity.KMSKeyProvider plugs in here once a KMS is chosen.
+func buildVaultKeyProvider(cfg Config) (identity.KeyProvider, error) {
+	keyHex, keyID := cfg.VaultMasterKeyHex, cfg.VaultKeyID
+	switch {
+	case keyHex == "" && !cfg.DevMode:
+		return nil, ErrMissingVaultKey
+	case keyHex == "":
+		slog.Warn("DEV_MODE: VAULT_MASTER_KEY_HEX not set, using the public dev vault key")
+		keyHex = defaultVaultMasterKeyHex
+		if keyID == "" {
+			keyID = "dev"
+		}
+	case keyHex == defaultVaultMasterKeyHex && !cfg.DevMode:
+		return nil, ErrDevVaultKeyOutsideDevMode
+	}
+	if keyID == "" {
+		keyID = "v1"
+	}
+	previous, err := identity.ParseKeyring(cfg.VaultPreviousKeys)
+	if err != nil {
+		return nil, fmt.Errorf("VAULT_PREVIOUS_KEYS: %w", err)
+	}
+	p, err := identity.NewStaticKeyProvider(keyID, keyHex, previous)
+	if err != nil {
+		return nil, fmt.Errorf("vault key: %w", err)
+	}
+	return p, nil
 }
 
 // ErrDevSTPSecretOutsideDevMode is returned when the well-known dev STP HMAC
@@ -328,6 +371,16 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetAuthService(authSvc)
+	vaultKeys, err := buildVaultKeyProvider(cfg)
+	if err == nil {
+		err = server.SetCSDKeyProvider(vaultKeys)
+	}
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, err
+	}
 	server.SetDevMode(cfg.DevMode)
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)

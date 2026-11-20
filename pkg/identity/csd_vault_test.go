@@ -98,6 +98,7 @@ func TestTamperedPayloadFails(t *testing.T) {
 
 	tampered := EncryptedCSD{
 		MerchantID:        encrypted.MerchantID,
+		KeyID:             encrypted.KeyID,
 		EncryptedCER:      encrypted.EncryptedCER,
 		EncryptedKey:      tamperedKey,
 		EncryptedPassword: encrypted.EncryptedPassword,

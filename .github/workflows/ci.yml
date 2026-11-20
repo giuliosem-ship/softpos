@@ -98,6 +98,14 @@ jobs:
       # Release = R8 minify + resource shrinking, unsigned (no keys in CI yet).
       - name: Unit tests, lint, debug and release APKs
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease
+      # The DEV tap simulator must never ship: R8 has to strip it from release.
+      - name: Release APK carries no DEV simulator
+        run: |
+          d=$(mktemp -d)
+          unzip -q app/build/outputs/apk/release/app-release-unsigned.apk 'classes*.dex' -d "$d"
+          if grep -l -a -E 'api/v1/dev/card-payments|MockTapToPay' "$d"/classes*.dex; then
+            echo "release APK references the DEV card simulator"; exit 1
+          fi
 
   docker:
     name: Docker image build

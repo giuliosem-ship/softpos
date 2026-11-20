@@ -1,78 +1,40 @@
-# SoftPOS Hybrid Fiscal & Payment Platform (Mexico)
+# Kerno (SoftPOS) — plataforma de cobro y apartado fiscal para PyMEs en México
 
-Plataforma híbrida de pagos y automatización fiscal para comercios en México:
-- **Frontend / Punto de Cobro:** Tap-to-Phone (NFC / SoftPOS) y QR Dinámico (SPEI).
-- **Core Ledger:** Motor contable de partida doble inmutable con splits automáticos en T+0.
-- **Bóveda Fiscal:** Cálculo y apartado automático de ISR (1.0% a 2.5% RESICO) e IVA (16%), y timbrado CFDI 4.0.
-- **Financiamiento RBF:** Revenue-Based Financing con amortización automática vía deducciones porcentuales de ventas diarias.
-- **STP Concentradora:** Cuentas CLABE virtuales de 18 dígitos y conciliación inmediata con CEP de Banxico.
+Objetivo del producto: un comercio PyME (inicialmente RESICO persona física) cobra con tarjeta contactless en su Android y por SPEI, ve cuánto es suyo y cuánto es de impuestos, recibe su dinero en su cuenta y emite CFDI 4.0.
 
----
+## Estado actual (2026-11-20)
 
-## 🤖 Engineering Autonomous Loop (Multi-Model TDD)
+**Prototipo con la Fase 1 del MVP (cimientos) cerrada. No mueve dinero real.**
 
-Este repositorio cuenta con un orquestador de desarrollo autónomo multi-modelo que coordina tres IAs especializadas:
+- **Hecho (Fase 1, MVP-01..13):** persistencia PostgreSQL con migraciones embebidas; login OTP + JWT con tenant tomado del token; webhooks firmados; posteo de dinero atómico y exactly-once (pago + asiento + acumulado RESICO + outbox en una transacción); payouts solo a la CLABE de liquidación verificada, con `Idempotency-Key` obligatoria y reconciliador de recuperación; outbox con leases; secretos fuera del repo (`.env.example`); CI en GitHub Actions.
+- **No existe todavía:** procesador de tarjetas real (la "autorización" EMV es simulada), PAC real (solo `MockPACClient`), STP/CEP reales (el servidor usa mocks), proveedor OTP real, KMS real, app Android distribuible (el módulo es Kotlin/JVM, sin APK), conciliación diaria (`cmd/reconciler` es un stub), backoffice.
+- Módulos de fase 2 implementados pero **no integrados** al servidor: `iso8583`, `crypto` (DUKPT/HSM simulado), `clearing` (STEC/MIF), `disputes`, `rbf`.
 
-| Rol | Agente / Modelo | Responsabilidad |
-| :--- | :--- | :--- |
-| **Architect & Orchestrator** | **Antigravity (Gemini 3.8 Flash)** | Define especificaciones, contratos de tipos, arquitectura regulatoria y escribe suites de tests TDD (Fase RED). |
-| **The Coder** | **Qwen 2.5 Coder 14B** *(vía LM Studio)* | Implementa el código para que todos los tests pasen (Fase GREEN). Cuenta con auto-healing en caso de errores en tests. |
-| **The Auditor & Critic** | **Gemma 4** *(vía LM Studio)* | Audita la solución: busca condiciones de carrera, precisión numérica (evitar floats en dinero), edge cases del SAT y limpieza de código. |
+El inventario completo, los gaps por funcionalidad y el plan por fases están en [`docs/KERNO_MVP_GAP_ANALYSIS.md`](docs/KERNO_MVP_GAP_ANALYSIS.md) (backlog vivo). Estado del loop: [`tools/loop/HANDOFF.md`](tools/loop/HANDOFF.md).
 
-El orquestador gestiona el **hot-swapping en caliente** en LM Studio (`lms load` / `lms unload`) en **~5-8 segundos**, garantizando que tu Apple M4 Pro nunca supere el límite de memoria unificada.
+## Estructura
 
----
+- `cmd/server` — servidor HTTP: configuración por entorno (`.env.example`), guard de producción, migraciones, dispatcher del outbox y reconciliador de payouts.
+- `pkg/` — dominio: `ledger` (partida doble en centavos `int64`), `fiscal` (RESICO, CFDI 4.0), `stp` (CLABE, firmas, cliente y mocks), `payments` (EMV TLV, CoDi), `payouts`, `outbox`, `auth`, `identity` (RFC/CURP, 69-B, bóveda CSD), `store` (PostgreSQL + equivalentes en memoria), `api` (rutas REST).
+- `migrations/` — esquema SQL versionado (embebido en el binario).
+- `web/pos/` — Web POS de demostración (simulación de tap, QR SPEI/CoDi, desglose fiscal). Web NFC no lee tarjetas EMV: es solo demo.
+- `mobile/android/` — lógica Kotlin/JVM de la futura app (sin Android Gradle Plugin todavía).
+- `docs/` — `PERSISTENCE.md`, `AUTH.md`, `MONEY_FLOWS.md`, gap analysis y especificaciones objetivo.
 
-## 🚀 Comandos del Loop
+## Ejecución
 
-El estado del backlog y las tareas se gestionan en [`tools/loop/tasks.json`](file:///Users/giuliosemino/fin_pltfm/SoftPOS/tools/loop/tasks.json).
-
+### Local (Go 1.27.1)
 ```bash
-# 1. Ver el estado del backlog y tareas completadas
-python3 tools/loop/loop_runner.py --status
-
-# 2. Ejecutar la siguiente tarea pendiente del backlog
-python3 tools/loop/loop_runner.py --step
-
-# 3. Ejecutar una tarea específica por ID
-python3 tools/loop/loop_runner.py --task TASK-001
-
-# 4. Cambiar manualmente de modelo en LM Studio
-python3 tools/loop/loop_runner.py --swap qwen
-python3 tools/loop/loop_runner.py --swap gemma
-
-# 5. Ejecutar la suite completa de pruebas unitarias
-PYTHONPATH=. python3 -m unittest discover -s tests -p "test_*.py"
-```
-
----
-
-## 📁 Estado Actual de la Base de Código
-
-1. **`internal/` & `pkg/`**: Motores de dominio de partida doble (`Money`, `Account`, `JournalEntry`), generador/validador de CLABEs STP, cálculo de impuestos RESICO Persona Física (Art. 113-E y 113-J LISR), bóveda de certificados CSD con cifrado envolvente AES-GCM, validador SAT 69-B y timbrado multi-PAC.
-2. **`pkg/store/` & `migrations/`**: Capa de persistencia relacional PostgreSQL con bloqueo pesimista a nivel de fila (`SELECT ... FOR UPDATE`), ejecutor transaccional de migraciones y cliente Redis RESP para caché de idempotencia.
-3. **`cmd/server/main.go`**: Punto de entrada ejecutable que carga variables de entorno, conecta bases de datos, corre migraciones, siembra cuentas del ledger y comercio demo, y expone el servidor HTTP con apagado elegante (*graceful shutdown*).
-4. **`web/pos/`**: Frontend y SDK móvil para Punto de Cobro con lectura Tap-to-Phone (NFC EMV L2 contactless), generación y confirmación de QR dinámico CoDi/SPEI, desglose fiscal RESICO en tiempo real y timbrado CFDI 4.0.
-
----
-
-## 🚀 Ejecución del Servidor y Punto de Cobro
-
-### 1. Ejecución Local (Go)
-```bash
-# Compilar y arrancar el servidor en modo desarrollo (DEV_MODE: secreto JWT efímero,
-# códigos OTP en el log y sesión demo para el Punto de Cobro)
+# Modo desarrollo: secreto JWT efímero, códigos OTP en el log y sesión demo
 DEV_MODE=true go run ./cmd/server
-
-# Abrir el Punto de Cobro en el navegador
 open http://localhost:8080/pos/
 ```
 
-Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes) y `VAULT_MASTER_KEY_HEX` (llave maestra de 32 bytes de la bóveda CSD; ver [`docs/AUTH.md`](docs/AUTH.md)). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados); ver [`docs/AUTH.md`](docs/AUTH.md).
+Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes) y `VAULT_MASTER_KEY_HEX` (llave de 32 bytes de la bóveda CSD; ver [`docs/AUTH.md`](docs/AUTH.md)). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados). Con `APP_ENV=production` el guard rechaza secretos ausentes, débiles, de ejemplo o de dev.
 
-Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md).
+Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md). Flujos de dinero (settle, devoluciones, abonos, payouts y su recuperación): [`docs/MONEY_FLOWS.md`](docs/MONEY_FLOWS.md).
 
-### 2. Infraestructura con Docker Compose (PostgreSQL + Redis + Server)
+### Docker Compose (PostgreSQL + Redis + servidor)
 ```bash
 cp .env.example .env   # .env está en .gitignore; reemplaza cada CHANGE_ME (openssl rand -hex 32)
 docker compose up --build
@@ -80,15 +42,18 @@ docker compose up --build
 
 `docker-compose.yml` no contiene secretos ni activa `DEV_MODE`: toda la configuración sale de `.env`. `.env.example` documenta cada variable que lee el servidor.
 
-### 3. Validación y Pruebas
+## Validación
+
+La misma que corre el CI (`.github/workflows/ci.yml`) y que se exige antes de cada push (ver [`AGENTS.md`](AGENTS.md) §2):
+
 ```bash
-# Pruebas Go completas con detector de condiciones de carrera (-race)
-go test -v -race ./...
-
-# Pruebas del SDK JavaScript del Punto de Cobro (EMV TLV, Web NFC, CoDi)
+go vet ./...
+go test -race -count=1 ./...
+TEST_DATABASE_URL=postgres://… go test -race -count=1 -run PGIntegration ./...   # PostgreSQL 16 real
 node --test web/pos/softpos_sdk.test.js
-
-# Pruebas unitarias de Python
-PYTHONPATH=. python3 -m unittest discover -s tests -p "test_*.py"
+(cd mobile/android && JAVA_HOME=<jdk17> ./gradlew :app:test)
 ```
 
+## Proceso de desarrollo
+
+El backlog (`tools/loop/tasks.json`) se ejecuta por lotes con Claude Code: subagente implementador (RED → GREEN) y subagente auditor independiente (AUDIT) por lote, un commit por tarea. El orquestador multi-modelo de LM Studio (`tools/loop/loop_runner.py`) queda como herramienta legacy opcional.

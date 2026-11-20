@@ -1136,6 +1136,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages with tests); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 26/26 PASS (new: PayoutRecordsIdempotentAndStateMachine, OutboxPoisonEventDeadLettersOnLeaseExpiry, PayoutIdempotencyKey, PayoutRecoveryResolvesUnknownAndCrashedPayouts, PayoutReconcilerWorkerRuns; OutboxClaimRetryAndSkipLocked extended with lease-owner checks).",
       "audit_notes": "Real STP consulta-de-orden client not implemented (interface + mocks; the server's MockSTPClient answers). GET /disbursements/{clave} and CEP tracking still use the in-memory CEPReconciler, not the payouts table. Fixed in passing: time-based clave de rastreo collided under concurrency (flaky TestDisbursement_ConcurrentPayoutsCannotOverdraw, duplicate journal 500).",
       "priority": 73
+    },
+    {
+      "id": "MVP-13",
+      "component": "docs",
+      "title": "Docs and process alignment",
+      "status": "completed",
+      "files": {
+        "tests": "n/a (documentation; full validation re-run)",
+        "implementation": "AGENTS.md, .agent/rules/loop_validation_and_push.md, tools/loop/HANDOFF.md, README.md, docs/KERNO_MVP_GAP_ANALYSIS.md, docs/PRODUCTION_IMPLEMENTATION_SPEC.md, web/pos/tech_roadmap.html"
+      },
+      "spec": "AGENTS.md §2 rewritten: loop executed by Claude Code per batch (implementer subagent RED->GREEN + independent auditor subagent AUDIT, [MVP-NN-audit] fixes), LM Studio loop_runner.py legacy/optional, full validation before push (go vet, go test -race, PGIntegration on real Postgres, node --test, Kotlin ./gradlew :app:test), push to origin main after validation (owner's decision), CI must be green, living-backlog pruning in the same batch. HANDOFF.md: Phase 1 (MVP-01..13) summary, validation and Phase 2 next steps. README: honest state (prototype, Phase 1 foundations done, no real processor/PAC/STP), removed nonexistent internal/ and Python tests dir. tech_roadmap.html: 'Producción Bancaria' badge and 'Listo para Producción' wording replaced (no redesign); production spec marked as target design. Gap analysis pruned: Toolchain Go removed; CI/CD and secrets rows reduced to CD/branch protection and deployment secrets; F6 payout rows reduced to post-liquidation returns + real STP status client; §1 Operación, §2, §3, §7 (Fase 1 closed) and §9 updated.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 26/26; node --test 8/8; ./gradlew :app:test 78/78.",
+      "audit_notes": "tools/loop/*.py untouched. Other web/pos pages (overview, economics) left as-is (product narrative, no README-level status claims).",
+      "priority": 74
     }
   ]
 }

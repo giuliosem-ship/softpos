@@ -633,7 +633,7 @@
 
     <!-- Hero -->
     <section class="hero">
-      <div class="badge-pill">Auditoría Real vs. Producción Bancaria • Loops 1 a 7 Validados (100% en main)</div>
+      <div class="badge-pill">Prototipo • Fase 1 del MVP cerrada • Sin procesador, PAC ni STP reales (ver docs/KERNO_MVP_GAP_ANALYSIS.md)</div>
       <h1>Roadmap de Ingeniería: Cierre de Gaps (Backend, Seguridad y Apps)</h1>
       <p class="hero-lead">
         Auditoría exhaustiva del código fuente Go, Web POS SDK y Android Kotlin nativo. Este tablero desglosa con alta resolución cada hito de persistencia SQL, criptografía HSM/DUKPT, switch adquirente ISO 8583, compensación STEC, reglas CVM mexicanas, blindaje PCI MPoC (FLAG_SECURE / SAF) y atestación Play Integrity.
@@ -643,7 +643,7 @@
     <!-- Readiness Scoreboard -->
     <section class="readiness-banner">
       <div class="readiness-stat">
-        <span class="readiness-label">Avance Global hacia Producción</span>
+        <span class="readiness-label">Avance del checklist técnico (no mide preparación para producción)</span>
         <span class="readiness-value" style="color: var(--accent-blue);" id="readinessPct">98%</span>
         <div class="progress-track">
           <div class="progress-fill" id="readinessBar"></div>
@@ -1276,7 +1276,7 @@
     </section>
 
     <footer>
-      <p>SoftPOS Hybrid Fiscal & Payment Platform (México) • Tablero Técnico de Ingeniería & Producción</p>
+      <p>SoftPOS Hybrid Fiscal & Payment Platform (México) • Tablero Técnico de Ingeniería (prototipo)</p>
     </footer>
 
   </div>
@@ -1340,7 +1340,7 @@
 
         readinessPct.textContent = pct + "%";
         readinessBar.style.width = pct + "%";
-        gapsRemainingCount.textContent = remaining === 0 ? "¡Listo para Producción!" : `${remaining} Entregables`;
+        gapsRemainingCount.textContent = remaining === 0 ? "Checklist completo (prototipo)" : `${remaining} Entregables`;
       }
 
       // Initialize status badges for all cards

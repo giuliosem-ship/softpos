@@ -2,7 +2,8 @@
 
 **Documento:** `docs/PRODUCTION_IMPLEMENTATION_SPEC.md`  
 **Rol:** Technical Lead — Infraestructura de Pagos FinTech & Adquirencia  
-**Versión:** 2.0.0 (Producción Bancaria / PCI MPoC / Banxico / SAT)
+**Versión:** 2.0.0 (especificación objetivo: PCI MPoC / Banxico / SAT)  
+**Estado:** diseño objetivo, **no** descripción del código actual. El repositorio es un prototipo con la Fase 1 del MVP cerrada y sin certificaciones (MPoC, marcas) ni integraciones reales; ver `docs/KERNO_MVP_GAP_ANALYSIS.md`.
 
 ---
 

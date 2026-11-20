@@ -1,39 +1,29 @@
 # Engineering Loop Handoff Checkpoint
-**Updated at:** 2026-11-03T20:48:00.000000
-**Progress:** 61/61 tasks completed | LM Studio & Qwen 2.5 Coder 14B Connector Configured 🎉
+**Actualizado:** 2026-11-20 — **Fase 1 del MVP cerrada** (MVP-01..13, Lotes A–D)
+**Estado real:** prototipo con cimientos de MVP. No hay procesador de tarjetas, PAC ni STP reales: los rieles externos siguen simulados (ver `docs/KERNO_MVP_GAP_ANALYSIS.md`).
 
-## Recent Git Commits
-```text
-7d86b55 feat(android-saf): Android Encrypted Store-and-Forward (SAF) Offline Queue in Kotlin [AND-22]
-9127ba7 feat(android-integrity): Android Google Play Integrity Client Handshake & Nonce Verifier in Kotlin [AND-21]
-d53bc34 feat(android-security): Android Window Security Guard & Accessibility Keylogger Detector in Kotlin [AND-20]
-726d50e feat(disputes-engine): Chargeback Dispute Lifecycle & Dynamic Rolling Reserve Engine in Go [TASK-GO-030]
-808d7a6 feat(clearing-interchange): Banxico & ABM Multilateral Interchange Fee (MIF) Calculator in Go [TASK-GO-029]
-```
+## Cómo se trabaja ahora
+- El loop lo ejecuta Claude Code por lotes: subagente implementador (RED → GREEN) + subagente auditor independiente (AUDIT), un commit por tarea (`[MVP-NN]`, correcciones de auditoría `[MVP-NN-audit]`). Detalle en `AGENTS.md` §2.
+- `tools/loop/loop_runner.py` (LM Studio, Qwen/Gemma) queda como herramienta legacy opcional.
+- Validación completa antes de push: `go vet`, `go test -race`, integración PostgreSQL (`-run PGIntegration`), `node --test` y tests Kotlin; después, CI verde en GitHub.
 
-## LM Studio Preset & Qwen 2.5 Coder 14B Integration (Paridad Sabino SAM)
-- **Preset de LM Studio (`~/.lmstudio/config-presets/SoftPOS-Payment-Coder.preset.json`):**
-  - Configurado con `contextLength=16384`, `flashAttention=true`, `offloadRatio=1` (100% GPU en M4 Pro 24 GB).
-  - Parámetros de muestreo determinista: `temperature=0.15`, `min_p=0.05`, `top_p=0.92`, `top_k=20`, `repeat_penalty=1.05`, `max_tokens=4096`.
-  - System Prompt institucional inquebrantable de SoftPOS: Zero-Lazy Coding, aritmética determinista (int64/Long cents sin floats), sanitización de memoria PCI MPoC (`ByteArray.fill(0)`), reglas CVM contactless México ($1,000 MXN vs CDCVM sin límite), y tipado estricto en Go y Kotlin.
-- **Conector Orquestador (`tools/loop/models_manager.py` / `lms_manager.py`):**
-  - Implementación de `LMStudioManager` con gestión secuencial de VRAM (`lms unload --all` antes de cargar modelos de 14B).
-  - Método directo `ask_qwen_coder()` y fallback de esquemas JSON con soporte para streaming y bloques `<think>`.
-  - CLI interactivo `tools/loop/lms_consult.py` para consultas de arquitectura e ingeniería.
-  - Suite de pruebas unitarias `tools/loop/test_lms_qwen_connector.py` (4/4 tests PASS).
+## Fase 1 — resumen (cimientos seguros)
+| Lote | Tareas | Resultado |
+|---|---|---|
+| A | MVP-01..03 | Driver `pgx`, migraciones versionadas embebidas, todo el estado de comercios/pagos/CoDi/CSD/acumulado/ledger en PostgreSQL, tests contra Postgres 16 real, dispatcher del outbox con backoff y apagado ordenado. |
+| B | MVP-04..06 | Usuarios por teléfono, OTP, JWT de acceso + refresh rotativo, JWT montado en `/api/v1/*`, tenant desde el token (anti-IDOR), webhooks CoDi/STP firmados, `DEV_MODE` explícito. |
+| C | MVP-07..09 | `settle` con montos del servidor y posteo atómico (`store.MoneyStore`), webhooks exactly-once, payouts solo a la CLABE verificada, reversa proporcional en devoluciones, llave de la bóveda CSD desde el entorno. |
+| D | MVP-10..13 | CI en GitHub Actions + toolchain Go 1.27.1 fijado (Dockerfile no-root, wrapper Gradle 9.8.2); secretos fuera de `docker-compose.yml` (`.env.example`, guard que cubre todo secreto leído); payouts con `Idempotency-Key` obligatoria y reconciliador de recuperación (resultado desconocido / caída); outbox con dueño de lease, reclamo = intento y timeout por publicación; mes RESICO en `America/Mexico_City`; docs y proceso alineados. |
 
-## Validation & Main Branch Status
-- Full backend suite (`go test -v ./...`): PASS (0 issues)
-- Android test suite (`gradle :app:test`): PASS (79/79 unit tests)
-- Web POS SDK suite (`node --test web/pos/softpos_sdk.test.js`): PASS (7/7 tests)
-- LM Studio connector suite (`python3 tools/loop/test_lms_qwen_connector.py`): PASS (4/4 tests)
-- Auto-push to `origin main`: READY
+## Validación al cierre de la Fase 1 (Lote D, local)
+- `go vet ./...` limpio; `go test -race -count=1 ./...`: todos los paquetes OK.
+- `TEST_DATABASE_URL=… go test -race -count=1 -run PGIntegration ./...` contra PostgreSQL 16 (`embedded-postgres`): 26/26.
+- `node --test web/pos/softpos_sdk.test.js`: 8/8.
+- `cd mobile/android && ./gradlew :app:test` (JDK 17, Gradle 9.8.2): 78/78.
+- No ejecutado localmente: `docker build` / `docker compose up` (sin Docker) ni el workflow de GitHub Actions (su primera corrida es la validación real).
 
-## Project Milestones Completed
-- **Loop 1:** Ledger Engine de partida doble, idempotencia y segregación fiscal RESICO/IVA.
-- **Loop 2:** Persistencia SQL PostgreSQL para RBF, pagos EMV y Transactional Outbox.
-- **Loop 3:** Módulos Android Kotlin nativos: CVM ($1,000 MXN vs CDCVM), PIN-on-Glass aleatorizado (PCI SCRP) y formateador ISO 9564.
-- **Loop 4:** Switch financiero adquirente ISO 8583, TLV DE 55 y verificación ARQC/ARPC.
-- **Loop 5:** Criptografía bancaria HSM, derivador DUKPT ANSI X9.24 y traducción de PIN PEK a ZPK.
-- **Loop 6:** Compensación bancaria STEC (PROSA/E-Global), tasas de intercambio MIF Banxico y motor de contracargos/reserva dinámica.
-- **Loop 7:** Blindaje móvil PCI MPoC (`FLAG_SECURE`), handshake Play Integrity y cola offline SAF cifrada.
+## Qué sigue — Fase 2 (gap analysis §7)
+- Rieles reales: procesador con Tap to Pay on Android (backend + webhooks firmados), STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).
+- Payout automático diario y conciliador real (procesador y STP vs. ledger; `cmd/reconciler` sigue siendo un stub).
+- Publicador real del outbox; proveedor OTP real; KMS real para la bóveda; verificación real de titularidad de la CLABE de liquidación.
+- En paralelo (Fase 3): app Android real (AGP + Compose + SDK del procesador) y PAC real con CFDI validado.

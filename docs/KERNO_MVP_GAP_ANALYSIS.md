@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote C (MVP-07..09) aplicado: montos de `settle` derivados en el servidor y posteo de dinero atómico (pago + asiento + acumulado RESICO + outbox en una transacción, webhooks exactly-once), dispersión solo a la CLABE de liquidación verificada, reversa proporcional en devoluciones, CLABE virtual asignada por el servidor y llave de la bóveda CSD desde el entorno con id de llave (antes, Lote B: usuarios, OTP, JWT, tenant desde el token y webhooks firmados; Lote A: PostgreSQL, migraciones, repositorios SQL y outbox).
+**Última actualización:** 2026-11-20 — Lote D (MVP-10..13) aplicado; Fase 1 cerrada
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -15,12 +15,12 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 |---|---|---|
 | Lógica de dominio (ledger, RESICO, CLABE, CFDI XML, ISO 8583, DUKPT, STEC, MIF, disputas) | 🟢 Avanzado | Librerías puras con tests unitarios sólidos. |
 | Integración en el servidor HTTP | 🟡 Parcial | Solo ledger, pagos EMV/CoDi, CFDI, STP, RBF están ruteados. ISO 8583, HSM/DUKPT, clearing y disputas **no están conectados** a ninguna ruta. |
-| Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Lote C: pago + asiento + acumulado RESICO + evento de outbox en una sola transacción (`store.MoneyStore`, ver `docs/MONEY_FLOWS.md`). Falta: publicador real del outbox y RBF en DB. Sin DB todo sigue en memoria (modo dev). |
+| Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Lote C: pago + asiento + acumulado RESICO + evento de outbox en una sola transacción (`store.MoneyStore`, ver `docs/MONEY_FLOWS.md`). Lote D: payouts persistidos (`payouts`, migración 009) y outbox con leases por dueño. Falta: publicador real del outbox y RBF en DB. Sin DB todo sigue en memoria (modo dev). |
 | Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Lote C: montos de `settle` y CLABE de dispersión ya no vienen del cliente; llave de la bóveda desde el entorno. Falta: proveedor OTP real, CORS/TLS/gateway, KMS real y verificación real de titularidad de la CLABE de liquidación. |
 | Cobro con tarjeta real | 🔴 Bloqueante | No hay kernel EMV ni autorización contra emisor; el backend "aprueba" al parsear TLV. |
 | App Android | 🔴 Bloqueante | Es un **módulo Kotlin/JVM** (sin Android Gradle Plugin, sin Activity/Compose, sin `android.nfc`). No genera APK. |
 | Integraciones externas | 🔴 Bloqueante | PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
-| Operación (CI/CD, observabilidad, conciliación) | 🔴 | Sin CI, `cmd/reconciler` es un stub, sin métricas ni backoffice. |
+| Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Falta: despliegue (CD) e infraestructura, conciliación diaria (`cmd/reconciler` es un stub), métricas/alertas y backoffice. |
 
 **Conclusión:** el proyecto está en etapa de *"motor de dominio prototipado"*, no de MVP. Estimo que lo construido cubre ~25–30 % del trabajo de un MVP que cobre dinero real, y gran parte del código más sofisticado (switch ISO 8583, DUKPT, STEC, MIF) **no es necesario para el MVP** si se cobra con tarjeta a través de un proveedor certificado.
 
@@ -33,8 +33,9 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | `go test -race -count=1 ./...` (Go 1.24 local, directiva bajada temporalmente desde 1.27.1 en una copia) | ✅ 14/14 paquetes OK, sin data races |
 | Cobertura (`go test -cover`) | api 62 %, stp 61 %, payments 67 %, rbf 71 %, fiscal 75 %, pac 79 %, store 79 %, ledger 80 %, identity 83 %, disputes 82 %, iso8583 84 %, clearing 88 %, crypto 89 %, cmd/server 60 % |
 | `node --test web/pos/softpos_sdk.test.js` | ✅ 7/7 |
-| Tests Android | Último reporte en `build/test-results` (1-nov): 78 tests, 0 fallos. No se re-ejecutó (no hay `gradlew` ni Gradle en el entorno); el HANDOFF reporta 79 tras AND-22. |
-| Arranque con `DATABASE_URL` | ✅ (Lote A, 2026-11-20; migraciones 005–008 en Lotes B y C) arranca, aplica migraciones 001–004 y conserva el estado tras reiniciar contra PostgreSQL 16 real (`embedded-postgres`, `TEST_DATABASE_URL=… go test -run PGIntegration ./...`). Si la DB no responde o una migración falla, aborta con error explícito. `docker compose up` no se re-ejecutó (sin Docker en el entorno). |
+| Tests Android | ✅ (Lote D, 2026-11-20) 78/78 con `./gradlew :app:test` (wrapper Gradle 9.8.2 agregado, JDK 17); el build no requirió cambios para Gradle 9. |
+| CI (`.github/workflows/ci.yml`) | Workflow creado en el Lote D y validado sintácticamente (YAML); su primera corrida en GitHub y el `docker build` no se ejecutaron localmente (sin runner ni Docker). |
+| Arranque con `DATABASE_URL` | ✅ (Lote A, 2026-11-20; migraciones 005–008 en Lotes B y C, 009 en el Lote D) arranca, aplica migraciones 001–004 y conserva el estado tras reiniciar contra PostgreSQL 16 real (`embedded-postgres`, `TEST_DATABASE_URL=… go test -run PGIntegration ./...`). Si la DB no responde o una migración falla, aborta con error explícito. `docker compose up` no se re-ejecutó (sin Docker en el entorno). |
 | `POST /api/v1/disbursements` y `GET /api/v1/merchants/{id}/balances` sin token | ✅ (Lote B, 2026-11-20) `401` sin token y `403` con token de otro comercio; una dispersión exige rol `owner`. |
 
 ---
@@ -50,7 +51,8 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 - `identity`: RFC/CURP, parser CSF, lista 69-B + worker de ingesta, bóveda CSD AES-GCM envolvente, verificador Play Integrity.
 - `iso8583`, `crypto` (DUKPT, traducción PIN, HSM simulado), `clearing` (STEC, MIF), `disputes` (contracargos, reserva dinámica), `rbf`: implementados y testeados, **no integrados**.
 - `store`: driver `pgx`, repos SQL (ledger, comercios, RBF, pagos EMV, CoDi, outbox, idempotencia) con implementaciones en memoria equivalentes para modo sin DB, runner de migraciones versionadas (`schema_migrations`, embebidas en el binario), tests de integración contra Postgres real (`pkg/store/pgtest`), cliente Redis RESP propio.
-- `outbox`: dispatcher con `FOR UPDATE SKIP LOCKED`, backoff exponencial, lease y apagado ordenado; arranca desde `cmd/server`.
+- `outbox`: dispatcher con `FOR UPDATE SKIP LOCKED`, backoff exponencial, lease con dueño (reclamo = intento, resultado solo del dueño), timeout por publicación y apagado ordenado; arranca desde `cmd/server`.
+- `payouts`: asientos de reserva/compensación de dispersiones y reconciliador de recuperación contra el estado de la orden en STP (arranca desde `cmd/server`).
 - `api`: rutas REST + servidor estático del Web POS; idempotencia con clave por tenant; middleware JWT montado con lista pública, rate limit por IP en `/auth/*`, webhook CoDi con firma HMAC.
 - `auth`: usuarios por teléfono, membresías usuario↔comercio con rol, OTP (hash, expiración, intentos, reenvío), access JWT HS256 y refresh opaco rotativo con detección de reuso; repos SQL y en memoria.
 
@@ -58,7 +60,7 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 
 **Web POS (`web/pos`)** — demo funcional con simulación de tap, CoDi y desglose fiscal, más páginas de narrativa (overview, economics, roadmap).
 
-**Tooling** — orquestador multi-modelo (LM Studio, Qwen/Gemma/DeepSeek) con ciclo RED→GREEN→AUDIT.
+**Tooling** — CI en GitHub Actions; loop por lotes con Claude Code (implementador + auditor independiente, RED→GREEN→AUDIT); el orquestador multi-modelo de LM Studio queda como legacy opcional.
 
 ---
 
@@ -148,7 +150,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Expiración y montos no coincidentes | P2 | S | Qué pasa si pagan de más/menos o después de expirar. |
 
 ### F5 — Ledger persistente, saldos y conciliación
-**Existe:** motor de partida doble, repo SQL con bloqueo pesimista, driver `pgx` y migraciones versionadas 001–008 embebidas (`schema_migrations`), estado de comercios/pagos EMV/CoDi/CSD/acumulado mensual en PostgreSQL (repos en memoria solo sin `DATABASE_URL`), tests de integración contra Postgres real, outbox con dispatcher activo, idempotencia SQL/Redis; desde el Lote C, unidad de trabajo `store.MoneyStore` (pago + `payment_settlements` + asiento + acumulado + evento en una transacción, claves exactly-once en `money_operations`, errores de posteo → rollback y 5xx) y `settle` con monto del pago autorizado y comisión por tarifa del comercio (`platform_fee_bps`). (El estado RBF sigue en memoria, pero RBF queda fuera del MVP.)
+**Existe:** motor de partida doble, repo SQL con bloqueo pesimista, driver `pgx` y migraciones versionadas 001–009 embebidas (`schema_migrations`), estado de comercios/pagos EMV/CoDi/CSD/acumulado mensual en PostgreSQL (repos en memoria solo sin `DATABASE_URL`), tests de integración contra Postgres real, outbox con dispatcher activo, idempotencia SQL/Redis; desde el Lote C, unidad de trabajo `store.MoneyStore` (pago + `payment_settlements` + asiento + acumulado + evento en una transacción, claves exactly-once en `money_operations`, errores de posteo → rollback y 5xx) y `settle` con monto del pago autorizado y comisión por tarifa del comercio (`platform_fee_bps`); desde el Lote D, mes del acumulado RESICO calculado en `America/Mexico_City` (tzdata embebido). (El estado RBF sigue en memoria, pero RBF queda fuera del MVP.)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
@@ -157,14 +159,14 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Conciliación diaria | P1 | M | `cmd/reconciler/main.go` es un stub (crea un ledger vacío y sale). Falta: ledger vs. reporte del procesador, ledger vs. estado de cuenta STP, reporte de diferencias. |
 
 ### F6 — Liquidación (payout) al comercio
-**Existe:** `POST /api/v1/disbursements` (solo `owner`, solo a la CLABE de liquidación registrada y `VERIFIED`; saldo y débito en una transacción con bloqueo; asiento compensatorio solo si STP rechaza la orden; si el resultado es desconocido —timeout, 5xx— los fondos quedan reservados, `202 PENDING_RECONCILIATION`), alta de la CLABE de liquidación (`PUT /api/v1/merchants/{id}/settlement-account`) con revisión de operador, reconciliación CEP.
+**Existe:** `POST /api/v1/disbursements` (solo `owner`, solo a la CLABE de liquidación registrada y `VERIFIED`; `Idempotency-Key` obligatoria por comercio —misma clave y cuerpo reproduce el resultado, otro cuerpo `409`—; fila en `payouts` + saldo y débito en una transacción con bloqueo; asiento compensatorio solo si STP rechaza la orden; si el resultado es desconocido —timeout, 5xx— los fondos quedan reservados, `202 PENDING_RECONCILIATION`), reconciliador de recuperación (Lote D: payouts `RESERVED`/`PENDING_RECONCILIATION` viejos se resuelven contra el estado de la orden en STP: liquidada → `SETTLED`, rechazada/inexistente → compensación única, desconocida → se conserva y alerta), alta de la CLABE de liquidación (`PUT /api/v1/merchants/{id}/settlement-account`) con revisión de operador, reconciliación CEP.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
 | Verificación real de titularidad de la CLABE | P0 | S | El verificador es un stub (`PendingAccountVerifier`): la cuenta queda `PENDING` hasta que un `operator` la marca. Falta consulta de titularidad (RFC del titular = RFC del comercio) vía STP/banco o proveedor KYB, 2FA al cambiarla y rol de backoffice global (hoy `operator` es por comercio). |
-| STP real no cableado | P0 | S | `STP_BASE_URL` se lee pero nunca se usa; el servidor siempre instancia `MockSTPClient` y `MockCEPProvider`. |
+| STP real no cableado | P0 | S | `STP_BASE_URL` se lee pero nunca se usa; el servidor siempre instancia `MockSTPClient` y `MockCEPProvider`. Falta también el cliente real de consulta de estado de orden (`stp.OrderStatusClient`) que usa el reconciliador de payouts. |
 | Payout automático programado | P1 | M | Barrido diario/T+0 del saldo disponible (neto de apartado fiscal) en vez de dispersión manual por API. |
-| Devoluciones SPEI y estados finales | P1 | M | Manejar órdenes devueltas/rechazadas por STP (webhook de estado), revertir asiento y reintentar. Incluye resolver las dispersiones con resultado desconocido (`disbursement.dispatch_unknown`, fondos reservados) y las que quedan debitadas si el proceso cae entre el débito y `registraOrden` (solo queda `disbursement.requested`); y `Idempotency-Key` en `POST /disbursements` (un doble envío hoy dispersa dos veces). |
+| Devoluciones SPEI después de liquidar | P1 | S | Las dispersiones con resultado desconocido o interrumpidas ya se resuelven (Lote D). Falta: webhook de estado de STP para órdenes devueltas **después** de liquidarse (revertir asiento y reintentar) y llevar `GET /disbursements/{clave}` y el seguimiento CEP a la tabla `payouts` (hoy siguen en memoria). |
 | Fondos de terceros | P1 | — | Definir con asesoría legal dónde y bajo qué figura se custodia el saldo del comercio entre cobro y payout. |
 
 ### F7 — Apartado fiscal RESICO / IVA
@@ -216,11 +218,10 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 ### F11 — Plataforma y operación
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| CI/CD | P0 | S | No hay `.github/workflows`. Pipeline: `go vet`, `go test -race`, tests Kotlin, lint, build de imagen y APK. La regla de "push automático a main" desde un agente local debería sustituirse por PR + CI obligatoria. |
-| Toolchain Go | P1 | S | `go 1.27.1` en `go.mod` obliga a ese toolchain exacto; fijarlo en CI y Dockerfile. |
-| Gestión de secretos | P0 | S | `docker-compose.yml` lleva secretos y llave maestra de ejemplo en texto plano. Usar KMS/Secrets Manager; el guard debe cubrir todas las llaves usadas realmente. |
+| CD y protección de `main` | P1 | S | El CI existe desde el Lote D (`go vet`, `go test -race`, Postgres 16, Web POS, Kotlin, imagen Docker). Falta: despliegue continuo a staging/prod, publicar la imagen, lint/`gofmt` (hay archivos sin formato en paquetes de fase 2), build de APK (bloqueado por F9) y exigir CI verde en `main` (protección de rama). |
+| Secretos en despliegue | P1 | S | Desde el Lote D no hay secretos en el repo (`.env` ignorado, `.env.example` con placeholders) y el guard de producción cubre cada secreto leído (test que lo amarra al código). Falta inyectarlos desde un Secrets Manager/KMS en el despliegue y definir su rotación. |
 | Infraestructura de despliegue | P0 | M | Postgres administrado con backups/PITR, Redis administrado, TLS, dominio, entornos dev/staging/prod. |
-| Observabilidad | P1 | S | Logs estructurados existen; faltan métricas, trazas, alertas (fallos de webhook, descuadres de conciliación, payouts atascados). |
+| Observabilidad | P1 | S | Logs estructurados existen (los payouts sin resolver ya emiten `ERROR` `ALERT payout unresolved`); faltan métricas, trazas y alertas enrutadas (fallos de webhook, descuadres de conciliación, payouts atascados, eventos `FAILED` del outbox). |
 | Backoffice interno | P1 | M | Revisar altas KYB, buscar pagos, ver ledger por comercio, reintentar payouts/timbrados, bloquear comercio. |
 | Tests de integración E2E | P1 | M | Cobro → webhook → ledger → payout → CFDI contra sandboxes reales. Hoy todo es unitario con mocks. |
 
@@ -251,14 +252,16 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - Contratos/sandboxes: procesador, STP, PAC, proveedor KYC.
 - Validación fiscal del modelo RESICO y del apartado; asesoría legal sobre custodia de fondos y PLD.
 
-**Fase 1 — Cimientos seguros (≈3–4 semanas)**
-- ~~Driver Postgres + tests de integración reales; todo el estado a DB; outbox worker activo.~~ ✅ Lote A (2026-11-20); transacción única pago+asiento+acumulado y eventos en el outbox ✅ Lote C. Pendiente: publicador real del outbox.
-- ~~Usuarios, login OTP, JWT montado, tenant desde token, webhooks firmados~~ ✅ Lote B (2026-11-20). Pendiente: proveedor OTP real y KMS real para la bóveda (la llave ya sale del entorno desde el Lote C).
-- ~~Corregir `settle`/`disbursements`/refund (montos desde el servidor, transacción única pago+asiento).~~ ✅ Lote C (2026-11-20). Pendiente: verificación real de titularidad de la CLABE de liquidación.
-- CI con `go test -race`, tests Kotlin y build de imagen; secretos fuera del repo.
+**Fase 1 — Cimientos seguros ✅ cerrada (Lotes A–D, MVP-01..13, 2026-11-20)**
+- ~~Driver Postgres + tests de integración reales; todo el estado a DB; outbox worker activo.~~ ✅ Lote A; transacción única pago+asiento+acumulado y eventos en el outbox ✅ Lote C; outbox con leases por dueño y timeout ✅ Lote D.
+- ~~Usuarios, login OTP, JWT montado, tenant desde token, webhooks firmados~~ ✅ Lote B; llave de la bóveda desde el entorno ✅ Lote C.
+- ~~Corregir `settle`/`disbursements`/refund (montos desde el servidor, transacción única pago+asiento).~~ ✅ Lote C; payouts idempotentes y recuperación de resultados desconocidos/caídas ✅ Lote D.
+- ~~CI con `go test -race`, tests Kotlin y build de imagen; secretos fuera del repo.~~ ✅ Lote D.
+- Queda de la Fase 1, pasa a la Fase 2: publicador real del outbox, proveedor OTP real, KMS real para la bóveda, verificación real de titularidad de la CLABE de liquidación y CD/protección de `main`.
 
 **Fase 2 — Rieles de cobro y payout (≈4–6 semanas)**
-- Integración procesador (backend + webhooks) y STP real (abonos, órdenes, CEP, devoluciones).
+- Integración procesador (backend + webhooks) y STP real (abonos, órdenes, consulta de estado para el reconciliador de payouts, CEP, devoluciones).
+- Pendientes heredados de la Fase 1 (ver arriba).
 - Payout automático diario; conciliador real (procesador y STP vs. ledger).
 
 **Fase 3 — App y fiscal (≈5–7 semanas, en paralelo con fase 2)**
@@ -287,6 +290,6 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 ## 9. Observaciones sobre el proceso de desarrollo
 
-- El loop autónomo produce módulos pequeños, aislados y con tests verdes, pero **optimiza tareas, no flujos**: ninguna tarea del backlog exigía "un cobro real llega al ledger persistente y se liquida". Recomiendo que el siguiente backlog se defina por **flujos E2E con criterio de aceptación de integración** (p. ej. "abono SPEI en sandbox STP → saldo en Postgres → payout → CEP conciliado").
-- Los documentos (`HANDOFF.md`, `README`, `tech_roadmap.html`) describen el sistema como "producción bancaria" y "cierre MPoC"; el estado real es de prototipo. Conviene alinear la documentación para no generar expectativas erróneas con socios o inversionistas.
-- El push automático a `main` sin revisión humana es riesgoso en un sistema que moverá dinero; migrar a PR + CI + revisión.
+- Atendido en la Fase 1: el backlog `MVP-NN` se definió por flujos y cada lote trae tests de integración contra PostgreSQL real (p. ej. abono SPEI → saldo → payout → recuperación). Falta llevar esos criterios E2E a **sandboxes reales** (procesador, STP, PAC) en la Fase 2.
+- Atendido en el Lote D: `README`, `HANDOFF.md`, `AGENTS.md` y el tablero `tech_roadmap.html` describen el estado real (prototipo, Fase 1 cerrada, sin rieles reales). `docs/PRODUCTION_IMPLEMENTATION_SPEC.md` queda marcado como diseño objetivo.
+- Atendido parcialmente: el proceso ahora es Claude Code con subagente implementador + auditor independiente por lote, validación completa antes de push y CI en GitHub que debe quedar verde (`AGENTS.md` §2). El push directo a `main` se mantiene por decisión del dueño; cuando haya más colaboradores o dinero real, conviene PR + CI obligatoria (protección de rama, ver F11).

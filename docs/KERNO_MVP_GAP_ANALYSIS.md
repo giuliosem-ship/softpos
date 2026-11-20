@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote D (MVP-10..13) aplicado; Fase 1 cerrada
+**Última actualización:** 2026-11-20 — Lote E (MVP-14..16) aplicado
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -17,10 +17,10 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | Integración en el servidor HTTP | 🟡 Parcial | Solo ledger, pagos EMV/CoDi, CFDI, STP, RBF están ruteados. ISO 8583, HSM/DUKPT, clearing y disputas **no están conectados** a ninguna ruta. |
 | Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Lote C: pago + asiento + acumulado RESICO + evento de outbox en una sola transacción (`store.MoneyStore`, ver `docs/MONEY_FLOWS.md`). Lote D: payouts persistidos (`payouts`, migración 009) y outbox con leases por dueño. Falta: publicador real del outbox y RBF en DB. Sin DB todo sigue en memoria (modo dev). |
 | Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Lote C: montos de `settle` y CLABE de dispersión ya no vienen del cliente; llave de la bóveda desde el entorno. Falta: proveedor OTP real, CORS/TLS/gateway, KMS real y verificación real de titularidad de la CLABE de liquidación. |
-| Cobro con tarjeta real | 🔴 Bloqueante | No hay kernel EMV ni autorización contra emisor; el backend "aprueba" al parsear TLV. |
+| Cobro con tarjeta real | 🔴 Bloqueante | Lote E (camino A): puerto `acquirer.Provider` con adaptador mock, modelo persistente `card_payments`, intents para el SDK Tap to Pay, webhooks firmados del procesador (captura → split en ledger, devoluciones, contracargos) y conciliación de sus liquidaciones; los endpoints EMV que "aprueban" al parsear TLV quedan solo con `DEV_MODE`. Falta elegir y contratar el procesador, su adaptador real y su SDK en la app. |
 | App Android | 🔴 Bloqueante | Es un **módulo Kotlin/JVM** (sin Android Gradle Plugin, sin Activity/Compose, sin `android.nfc`). No genera APK. |
-| Integraciones externas | 🔴 Bloqueante | PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
-| Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Falta: despliegue (CD) e infraestructura, conciliación diaria (`cmd/reconciler` es un stub), métricas/alertas y backoffice. |
+| Integraciones externas | 🔴 Bloqueante | Procesador de tarjetas: solo `acquirer.MockProvider`. PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
+| Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Lote E: conciliación de liquidaciones del procesador (reporte de diferencias para operador, alertas `ERROR`, worker en `cmd/server` y `cmd/reconciler` de una pasada). Falta: despliegue (CD) e infraestructura, conciliación contra el estado de cuenta STP/bancario, métricas/alertas enrutadas y backoffice. |
 
 **Conclusión:** el proyecto está en etapa de *"motor de dominio prototipado"*, no de MVP. Estimo que lo construido cubre ~25–30 % del trabajo de un MVP que cobre dinero real, y gran parte del código más sofisticado (switch ISO 8583, DUKPT, STEC, MIF) **no es necesario para el MVP** si se cobra con tarjeta a través de un proveedor certificado.
 
@@ -52,7 +52,8 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 - `iso8583`, `crypto` (DUKPT, traducción PIN, HSM simulado), `clearing` (STEC, MIF), `disputes` (contracargos, reserva dinámica), `rbf`: implementados y testeados, **no integrados**.
 - `store`: driver `pgx`, repos SQL (ledger, comercios, RBF, pagos EMV, CoDi, outbox, idempotencia) con implementaciones en memoria equivalentes para modo sin DB, runner de migraciones versionadas (`schema_migrations`, embebidas en el binario), tests de integración contra Postgres real (`pkg/store/pgtest`), cliente Redis RESP propio.
 - `outbox`: dispatcher con `FOR UPDATE SKIP LOCKED`, backoff exponencial, lease con dueño (reclamo = intento, resultado solo del dueño), timeout por publicación y apagado ordenado; arranca desde `cmd/server`.
-- `payouts`: asientos de reserva/compensación de dispersiones y reconciliador de recuperación contra el estado de la orden en STP (arranca desde `cmd/server`).
+- `payouts`: asientos de reserva/compensación de dispersiones y reconciliador de recuperación contra el estado de la orden en STP (arranca desde `cmd/server`); vigilante de liquidaciones del procesador (`AcquirerSettlementWatcher`, también en `cmd/reconciler`).
+- `acquirer` (Lote E): puerto agnóstico `Provider` hacia el procesador certificado (intent, estado, captura, devolución, cancelación con llaves de idempotencia; eventos de webhook normalizados) y `MockProvider` determinista; ver `docs/ACQUIRER_INTEGRATION.md`.
 - `api`: rutas REST + servidor estático del Web POS; idempotencia con clave por tenant; middleware JWT montado con lista pública, rate limit por IP en `/auth/*`, webhook CoDi con firma HMAC.
 - `auth`: usuarios por teléfono, membresías usuario↔comercio con rol, OTP (hash, expiración, intentos, reenvío), access JWT HS256 y refresh opaco rotativo con detección de reuso; repos SQL y en memoria.
 
@@ -127,17 +128,13 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Gestión de miembros y permisos | P2 | S | Roles `owner`/`cashier`/`operator` en el modelo, pero no hay endpoints para invitar cajeros ni permisos finos ni rol de backoffice en uso. Los access tokens no se pueden revocar antes de expirar. |
 
 ### F3 — Cobro con tarjeta contactless (Tap to Phone)
-**Existe:** parser TLV, motor de estados de pago, reglas CVM, orquestador de tap con auto-reversa, adaptador multi-riel (`WhiteLabelTapProvider`), simulador en Web POS.
+**Existe:** parser TLV, motor de estados de pago, reglas CVM, orquestador de tap con auto-reversa, adaptador multi-riel (`WhiteLabelTapProvider`), simulador en Web POS. Desde el Lote E (ver `docs/ACQUIRER_INTEGRATION.md`): puerto `acquirer.Provider` + mock (aprobado / declinado `…51` / timeout `…52`), tabla `card_payments` con máquina de estados, `provider_payment_id`, llave de idempotencia del intent, comisión y fecha de liquidación del procesador; `POST /api/v1/card-payments/intents` (devuelve `client_secret` para el SDK) y `GET /api/v1/card-payments/{id}`; el estado solo cambia con webhooks firmados `POST /api/v1/webhooks/acquirer/{provider}` (HMAC + ventana, exactly-once por id de evento, tolerancia a desorden), la captura postea el split existente (tarifa, apartado fiscal, RESICO) + comisión del procesador en una transacción con outbox; conciliación de payouts del procesador (`ASSET:ACQUIRER_RECEIVABLE` → `ASSET:BANK_OPERATING`, faltantes / diferencias de monto o comisión / duplicados / no liquidados) con reporte para `operator`. Los endpoints EMV legacy (`authorize`/`settle`/`reverse`) responden `410` salvo con `DEV_MODE`.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Sin proveedor de adquirencia integrado | P0 | L | Elegir y contratar procesador con Tap to Pay on Android en MX; integrar su SDK en la app y su API en backend (crear cobro, capturar, webhooks de estado). |
-| La autorización no es real | P0 | — | `PaymentEngine.Authorize` aprueba si el TLV trae ARQC/TC, sin consultar emisor (`pkg/payments/emv.go:252`). Con camino A, este endpoint se reemplaza por la confirmación del procesador (webhook firmado). |
+| Sin proveedor de adquirencia integrado | P0 | L | Elegir y contratar procesador con Tap to Pay on Android en MX; implementar su adaptador real de `acquirer.Provider` (API, formato y firma de sus webhooks, reporte de liquidaciones → `payout.settled`; checklist en `docs/ACQUIRER_INTEGRATION.md` §6) e integrar su SDK en la app. El resto del flujo backend ya existe con el mock (Lote E). |
 | `IsoDepEmvReader` no es un kernel EMV | — (fase 2) | — | Solo envía SELECT PPSE y espera PAN y 9F26 en esa respuesta; no hace SELECT AID / GPO / READ RECORD / GENERATE AC, y marca `Approved` localmente. Útil solo como referencia. |
 | Web NFC no sirve para tarjetas | P1 | S | El SDK web usa `NDEFReader`, que lee etiquetas NDEF, no tarjetas EMV ISO-DEP. El Web POS debe quedar como demo o como canal solo-SPEI; documentarlo. |
-| Modelo de pago persistente y conciliable | P0 | M | Guardar `provider_payment_id`, estado, monto, comisión del procesador, fecha de liquidación del procesador; idempotencia por intento de cobro. |
-| Webhooks del procesador | P0 | M | Recepción firmada de `authorized / captured / refunded / chargeback / settled` → posteo en ledger vía outbox. |
-| Liquidación del procesador a Kerno | P1 | M | Conciliar los depósitos del procesador (T+n) contra pagos capturados; hoy solo existe `ASSET:ACQUIRER_RECEIVABLE` sin proceso. |
 
 ### F4 — Cobro por transferencia SPEI (CLABE / QR)
 **Existe:** CLABE virtual, webhook `stp/abono` con verificación de firma, generador "CoDi QR", cliente HTTP STP.
@@ -154,9 +151,9 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Persona moral declarada por el cliente | P1 | S | `settle` ya no acepta montos del cliente, pero `is_persona_moral` (que deja el ISR fuera del apartado) sigue viniendo del body. Debe salir del receptor del CFDI / RFC validado. |
+| Persona moral declarada por el cliente | P1 | S | `settle` ya no acepta montos del cliente, pero `is_persona_moral` (que deja el ISR fuera del apartado) sigue viniendo del body (también en `POST /api/v1/card-payments/intents`). Debe salir del receptor del CFDI / RFC validado. |
 | Publicador real del outbox | P1 | S | Desde el Lote C los flujos de dinero encolan `payment.*`, `codi.confirmed`, `spei.abono_received` y `disbursement.*` en la misma transacción, pero solo hay publicadores `log`/`noop`. Falta un publicador real (webhook/broker/PAC). |
-| Conciliación diaria | P1 | M | `cmd/reconciler/main.go` es un stub (crea un ledger vacío y sale). Falta: ledger vs. reporte del procesador, ledger vs. estado de cuenta STP, reporte de diferencias. |
+| Conciliación diaria | P1 | M | Desde el Lote E existe la conciliación procesador ↔ ledger (payouts del procesador contra capturas, `NOT_SETTLED`, reporte `GET /api/v1/acquirer/reconciliation` para `operator`; `cmd/reconciler` ya no es un stub). Falta: ledger vs. estado de cuenta STP, depósito del procesador vs. estado de cuenta bancario real y asientos de corrección de las diferencias desde backoffice. |
 
 ### F6 — Liquidación (payout) al comercio
 **Existe:** `POST /api/v1/disbursements` (solo `owner`, solo a la CLABE de liquidación registrada y `VERIFIED`; `Idempotency-Key` obligatoria por comercio —misma clave y cuerpo reproduce el resultado, otro cuerpo `409`—; fila en `payouts` + saldo y débito en una transacción con bloqueo; asiento compensatorio solo si STP rechaza la orden; si el resultado es desconocido —timeout, 5xx— los fondos quedan reservados, `202 PENDING_RECONCILIATION`), reconciliador de recuperación (Lote D: payouts `RESERVED`/`PENDING_RECONCILIATION` viejos se resuelven contra el estado de la orden en STP: liquidada → `SETTLED`, rechazada/inexistente → compensación única, desconocida → se conserva y alerta), alta de la CLABE de liquidación (`PUT /api/v1/merchants/{id}/settlement-account`) con revisión de operador, reconciliación CEP.
@@ -208,13 +205,12 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Telemetría y crash reporting | P1 | S | Crashlytics/Sentry sin datos sensibles. |
 
 ### F10 — Devoluciones, cancelaciones y comprobante
-**Existe:** `POST /api/v1/payments/emv/reverse`: void y devolución total o parcial (acotada al saldo reembolsable, solo `owner` salvo `ALLOW_CASHIER_REFUNDS`) que revierte proporcionalmente disponible, apartado IVA/ISR, comisión y acumulado RESICO en una transacción (el barrido RBF no se revierte).
+**Existe:** desde el Lote E, `POST /api/v1/card-payments/{id}/refunds` (solo `owner` salvo `ALLOW_CASHIER_REFUNDS`, `Idempotency-Key` obligatoria, monto retenido contra el saldo reembolsable): la solicitud va al procesador y el ledger solo se mueve con su webhook `payment.refunded` (reversión proporcional); contracargos `chargeback.opened`/`reversed` reflejados en el ledger (débito del disponible del comercio, que puede quedar negativo) con evento de outbox para notificarlo. Legacy (solo `DEV_MODE`): `POST /api/v1/payments/emv/reverse`: void y devolución total o parcial (acotada al saldo reembolsable, solo `owner` salvo `ALLOW_CASHIER_REFUNDS`) que revierte proporcionalmente disponible, apartado IVA/ISR, comisión y acumulado RESICO en una transacción (el barrido RBF no se revierte).
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Devolución vía procesador | P0 | S | Con camino A, el refund se solicita al procesador y se refleja al recibir su webhook. |
 | Comprobante de venta | P1 | S | No existe ticket/recibo (solo en la demo web). Enviar por SMS/WhatsApp/email con PAN enmascarado, autorización y enlace de autofactura. |
-| Contracargos | P1 | S | Reflejar en ledger el aviso del procesador y notificar al comercio (el motor `disputes` puede reutilizarse en su parte contable). |
+| Notificación y defensa de contracargos | P1 | S | Desde el Lote E el contracargo se refleja en el ledger y encola `card_payment.chargeback_opened`; falta entregar el aviso al comercio (depende del publicador real del outbox, F5) y el flujo para enviar evidencia al procesador. |
 
 ### F11 — Plataforma y operación
 | Gap | Sev. | Esf. | Detalle / evidencia |
@@ -243,7 +239,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 1. **Cadena de fraude cerrada en lo esencial (Lote C):** `settle` toma el monto del pago autorizado y la comisión de la tarifa, el posteo es atómico y exactly-once, las dispersiones van solo a la CLABE de liquidación verificada y las devoluciones revierten apartado y comisión. Queda: verificación real de titularidad de esa CLABE (hoy la marca un operador) y 2FA al cambiarla (ver F6).
 2. **La bóveda CSD ya no usa llave hardcodeada** (Lote C); falta KMS real y re-cifrado al rotar (ver F2).
 3. **La app Android no es una app**: hay que migrar el módulo a Android y construir toda la UI.
-4. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks.
+4. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks. Para el procesador, el flujo backend completo (intent, webhooks firmados, devoluciones, contracargos, conciliación) ya existe sobre el puerto `acquirer.Provider` (Lote E); falta el adaptador real.
 
 ---
 
@@ -262,9 +258,9 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - Queda de la Fase 1, pasa a la Fase 2: publicador real del outbox, proveedor OTP real, KMS real para la bóveda, verificación real de titularidad de la CLABE de liquidación y CD/protección de `main`.
 
 **Fase 2 — Rieles de cobro y payout (≈4–6 semanas)**
-- Integración procesador (backend + webhooks) y STP real (abonos, órdenes, consulta de estado para el reconciliador de payouts, CEP, devoluciones).
+- ~~Integración procesador (backend + webhooks)~~ ✅ Lote E sobre el puerto `acquirer.Provider` con mock (MVP-14..16); falta el adaptador del procesador elegido. STP real (abonos, órdenes, consulta de estado para el reconciliador de payouts, CEP, devoluciones).
 - Pendientes heredados de la Fase 1 (ver arriba).
-- Payout automático diario; conciliador real (procesador y STP vs. ledger).
+- Payout automático diario; conciliador real: procesador vs. ledger ✅ Lote E; falta STP/banco vs. ledger.
 
 **Fase 3 — App y fiscal (≈5–7 semanas, en paralelo con fase 2)**
 - Módulo Android real con Compose + SDK Tap to Pay del procesador + pantallas MVP.

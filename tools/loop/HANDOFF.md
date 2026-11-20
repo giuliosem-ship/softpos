@@ -1,5 +1,5 @@
 # Engineering Loop Handoff Checkpoint
-**Actualizado:** 2026-11-20 — **Fase 1 del MVP cerrada** (MVP-01..13, Lotes A–D)
+**Actualizado:** 2026-11-20 — Fase 1 cerrada (MVP-01..13, Lotes A–D); Fase 2 en curso: Lote E backend (MVP-14..16)
 **Estado real:** prototipo con cimientos de MVP. No hay procesador de tarjetas, PAC ni STP reales: los rieles externos siguen simulados (ver `docs/KERNO_MVP_GAP_ANALYSIS.md`).
 
 ## Cómo se trabaja ahora
@@ -22,8 +22,14 @@
 - `cd mobile/android && ./gradlew :app:test` (JDK 17, Gradle 9.8.2): 78/78.
 - No ejecutado localmente: `docker build` / `docker compose up` (sin Docker) ni el workflow de GitHub Actions (su primera corrida es la validación real).
 
+## Fase 2 — Lote E (backend del procesador, camino A)
+- MVP-14: puerto `acquirer.Provider` + `MockProvider`, `card_payments` (migración 010), `POST /api/v1/card-payments/intents` / `GET /{id}` / `POST /{id}/cancel`; captura confirmada por el procesador → split existente + comisión del procesador en `MoneyStore`; endpoints EMV legacy solo con `DEV_MODE`.
+- MVP-15: webhook firmado `POST /api/v1/webhooks/acquirer/{provider}` (exactly-once, tolerante a desorden), devoluciones vía procesador (`POST /{id}/refunds`, el ledger se mueve con el webhook), contracargos en ledger + outbox, `ACQUIRER_WEBHOOK_SECRET` en el guard.
+- MVP-16: conciliación de payouts del procesador (`ASSET:ACQUIRER_RECEIVABLE` → `ASSET:BANK_OPERATING`, reporte de diferencias para `operator`, alertas), vigilante de capturas no liquidadas (worker + `cmd/reconciler`).
+- Validación: `go vet` limpio, `go test -race` OK, PGIntegration 29/29, `node --test` 8/8. Contrato para Android en `docs/ACQUIRER_INTEGRATION.md` §2.
+
 ## Qué sigue — Fase 2 (gap analysis §7)
-- Rieles reales: procesador con Tap to Pay on Android (backend + webhooks firmados), STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).
-- Payout automático diario y conciliador real (procesador y STP vs. ledger; `cmd/reconciler` sigue siendo un stub).
+- Rieles reales: adaptador del procesador elegido (el flujo backend ya existe sobre el puerto) + su SDK en la app, STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).
+- Payout automático diario y conciliación STP/banco vs. ledger (la del procesador ya existe).
 - Publicador real del outbox; proveedor OTP real; KMS real para la bóveda; verificación real de titularidad de la CLABE de liquidación.
 - En paralelo (Fase 3): app Android real (AGP + Compose + SDK del procesador) y PAC real con CFDI validado.

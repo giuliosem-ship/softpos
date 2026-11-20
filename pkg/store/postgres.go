@@ -471,16 +471,27 @@ func (r *SQLMerchantRepository) AddMonthlySalesCents(ctx context.Context, mercha
 	var newSales int64
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			newSales = amountCents
+			// No row yet, so FOR UPDATE locked nothing: a concurrent first
+			// increment may insert the same key. Upsert-add so neither is lost.
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO merchant_monthly_sales (merchant_id, year_month, accumulated_cents, updated_at)
 				VALUES ($1, $2, $3, $4)
-			`, merchantID, yearMonth, newSales, now)
+				ON CONFLICT (merchant_id, year_month) DO UPDATE
+				SET accumulated_cents = merchant_monthly_sales.accumulated_cents + EXCLUDED.accumulated_cents,
+				    updated_at = EXCLUDED.updated_at
+			`, merchantID, yearMonth, amountCents, now)
 			if err != nil {
 				if isForeignKeyViolation(err) {
 					return 0, ErrMerchantNotFound
 				}
 				return 0, fmt.Errorf("failed to insert monthly sales: %w", err)
+			}
+			if err := tx.QueryRowContext(ctx, `
+				SELECT accumulated_cents
+				FROM merchant_monthly_sales
+				WHERE merchant_id = $1 AND year_month = $2
+			`, merchantID, yearMonth).Scan(&newSales); err != nil {
+				return 0, fmt.Errorf("failed to read monthly sales after insert: %w", err)
 			}
 		} else {
 			return 0, fmt.Errorf("failed to lock monthly sales row: %w", err)

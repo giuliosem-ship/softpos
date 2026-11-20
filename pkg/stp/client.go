@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -210,6 +211,7 @@ type MockSTPClient struct {
 	signer        *STPSigner
 	seq           atomic.Int64
 	rejectMessage string
+	orders        sync.Map // claveRastreo -> STPOrderID (accepted orders, for QueryOrderStatus)
 }
 
 func NewMockSTPClient(signer *STPSigner, rejectMessage string) *MockSTPClient {
@@ -261,6 +263,7 @@ func (m *MockSTPClient) RegisterOrder(ctx context.Context, order STPOrderRequest
 	}
 
 	id := m.seq.Add(1)
+	m.orders.Store(order.ClaveRastreo, id)
 	return &STPOrderResponse{
 		STPOrderID:   id,
 		ClaveRastreo: order.ClaveRastreo,

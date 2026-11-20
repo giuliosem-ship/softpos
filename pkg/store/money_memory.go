@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -37,9 +38,14 @@ type MemoryMoneyStore struct {
 	operations  map[string]memOperation
 	journalIDs  map[string]bool
 	events      []MemoryOutboxEvent
+	payouts     map[string]PayoutRecord // by clave_rastreo
+	payoutKeys  map[string]string       // merchant_id + "\x00" + idempotency key -> clave
 }
 
-var _ MoneyStore = (*MemoryMoneyStore)(nil)
+var (
+	_ MoneyStore       = (*MemoryMoneyStore)(nil)
+	_ PayoutRepository = (*MemoryMoneyStore)(nil)
+)
 
 // NewMemoryMoneyStore builds the in-memory unit of work. processor and
 // merchants are resolved at the start of every transaction so later Set* calls
@@ -52,6 +58,48 @@ func NewMemoryMoneyStore(le *ledger.LedgerEngine, processor func() payments.Paym
 		settlements: make(map[string]SettlementRecord),
 		operations:  make(map[string]memOperation),
 		journalIDs:  make(map[string]bool),
+		payouts:     make(map[string]PayoutRecord),
+		payoutKeys:  make(map[string]string),
+	}
+}
+
+// ListPayoutsForRecovery implements PayoutRepository.
+func (s *MemoryMoneyStore) ListPayoutsForRecovery(_ context.Context, olderThan time.Time, limit int) ([]PayoutRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []PayoutRecord
+	for _, p := range s.payouts {
+		if (p.Status == PayoutReserved || p.Status == PayoutPendingReconciliation) && !p.UpdatedAt.After(olderThan) {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.Before(out[j].UpdatedAt)
+		}
+		return out[i].ClaveRastreo < out[j].ClaveRastreo
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// Payout returns a committed payout (tests / dev inspection).
+func (s *MemoryMoneyStore) Payout(claveRastreo string) (PayoutRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.payouts[claveRastreo]
+	return p, ok
+}
+
+// SetPayoutUpdatedAt backdates a committed payout (tests of the reconciler's age filter).
+func (s *MemoryMoneyStore) SetPayoutUpdatedAt(claveRastreo string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.payouts[claveRastreo]; ok {
+		p.UpdatedAt = at
+		s.payouts[claveRastreo] = p
 	}
 }
 
@@ -75,6 +123,7 @@ func (s *MemoryMoneyStore) InTx(ctx context.Context, fn func(tx MoneyTx) error) 
 		claimed:     make(map[string]bool),
 		pendingBal:  make(map[string]int64),
 		salesDelta:  make(map[[2]string]int64),
+		payouts:     make(map[string]PayoutRecord),
 	}
 	if err := fn(tx); err != nil {
 		return err
@@ -101,6 +150,70 @@ type memMoneyTx struct {
 	pendingBal  map[string]int64
 	salesDelta  map[[2]string]int64
 	events      []MemoryOutboxEvent
+	payouts     map[string]PayoutRecord
+}
+
+func payoutKey(merchantID, idemKey string) string { return merchantID + "\x00" + idemKey }
+
+func (t *memMoneyTx) lookupPayout(clave string) (PayoutRecord, bool) {
+	if p, ok := t.payouts[clave]; ok {
+		return p, true
+	}
+	p, ok := t.store.payouts[clave]
+	return p, ok
+}
+
+func (t *memMoneyTx) CreatePayout(_ context.Context, p PayoutRecord) (PayoutRecord, bool, error) {
+	k := payoutKey(p.MerchantID, p.IdempotencyKey)
+	if clave, ok := t.store.payoutKeys[k]; ok {
+		existing, _ := t.lookupPayout(clave)
+		return existing, false, nil
+	}
+	for _, q := range t.payouts {
+		if payoutKey(q.MerchantID, q.IdempotencyKey) == k {
+			return q, false, nil
+		}
+	}
+	if _, dup := t.lookupPayout(p.ClaveRastreo); dup {
+		return PayoutRecord{}, false, fmt.Errorf("failed to insert payout: duplicate clave_rastreo %s", p.ClaveRastreo)
+	}
+	if p.Status == "" {
+		p.Status = PayoutReserved
+	}
+	now := time.Now().UTC()
+	p.CreatedAt, p.UpdatedAt = now, now
+	t.payouts[p.ClaveRastreo] = p
+	return p, true, nil
+}
+
+func (t *memMoneyTx) SetPayoutRemainingBalance(_ context.Context, clave string, cents int64) error {
+	p, ok := t.lookupPayout(clave)
+	if !ok {
+		return ErrPayoutStateConflict
+	}
+	p.RemainingBalanceCents = cents
+	t.payouts[clave] = p
+	return nil
+}
+
+func (t *memMoneyTx) GetPayoutForUpdate(_ context.Context, clave string) (PayoutRecord, bool, error) {
+	p, ok := t.lookupPayout(clave)
+	return p, ok, nil
+}
+
+func (t *memMoneyTx) SetPayoutStatus(_ context.Context, clave string, from, to PayoutStatus, stpOrderID int64, lastError string) error {
+	p, ok := t.lookupPayout(clave)
+	if !ok || p.Status != from {
+		return ErrPayoutStateConflict
+	}
+	p.Status = to
+	if stpOrderID != 0 {
+		p.STPOrderID = stpOrderID
+	}
+	p.LastError = lastError
+	p.UpdatedAt = time.Now().UTC()
+	t.payouts[clave] = p
+	return nil
 }
 
 func (t *memMoneyTx) GetPaymentForUpdate(_ context.Context, paymentID string) (*payments.Payment, error) {
@@ -320,6 +433,10 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 	}
 	for k, op := range t.operations {
 		t.store.operations[k] = op
+	}
+	for clave, p := range t.payouts {
+		t.store.payouts[clave] = p
+		t.store.payoutKeys[payoutKey(p.MerchantID, p.IdempotencyKey)] = clave
 	}
 	t.store.events = append(t.store.events, t.events...)
 	return nil

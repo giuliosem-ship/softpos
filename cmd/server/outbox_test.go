@@ -28,6 +28,20 @@ func TestLoadConfigFromEnv_OutboxSettings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFromEnv_PayoutRecoveryAndPublishTimeout(t *testing.T) {
+	t.Setenv("OUTBOX_PUBLISH_TIMEOUT", "5s")
+	t.Setenv("PAYOUT_RECONCILE_INTERVAL", "30s")
+	t.Setenv("PAYOUT_RECONCILE_AFTER", "15m")
+	cfg := LoadConfigFromEnv()
+	if cfg.OutboxPublishTimeout != 5*time.Second || cfg.PayoutReconcileInterval != 30*time.Second || cfg.PayoutReconcileAfter != 15*time.Minute {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestStartPayoutReconciler_NoDBIsNoop(t *testing.T) {
+	StartPayoutReconciler(context.Background(), Config{}, nil, nil)() // must not block
+}
+
 func TestStartOutboxDispatcher_NoDBIsNoop(t *testing.T) {
 	wait, err := StartOutboxDispatcher(context.Background(), Config{}, nil)
 	if err != nil {

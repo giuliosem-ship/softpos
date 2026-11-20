@@ -2,15 +2,18 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"softpos/pkg/auth"
-	"softpos/pkg/ledger"
+	"softpos/pkg/payouts"
 	"softpos/pkg/store"
 	"softpos/pkg/stp"
 )
@@ -29,7 +32,7 @@ type DisbursementRequest struct {
 type DisbursementResponse struct {
 	STPOrderID            int64  `json:"stp_order_id"`
 	ClaveRastreo          string `json:"clave_rastreo"`
-	Status                string `json:"status"`     // "DISPATCHED"
+	Status                string `json:"status"`     // "DISPATCHED" (or "SETTLED" on a replay after recovery)
 	CEPStatus             string `json:"cep_status"` // "PENDING_CEP"
 	AmountCents           int64  `json:"amount_cents"`
 	DestinationCLABE      string `json:"destination_clabe"`
@@ -49,6 +52,17 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !requireRole(w, r, auth.RoleOwner) { // cashiers cannot move money out
+		return
+	}
+	// Every payout needs a merchant-scoped Idempotency-Key: a retried request
+	// replays the stored outcome instead of paying twice.
+	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idemKey == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_IDEMPOTENCY_KEY")
+		return
+	}
+	if len(idemKey) > maxIdempotencyKeyLen {
+		writeError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY")
 		return
 	}
 
@@ -97,47 +111,84 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := nowUTC()
-	claveRastreo := fmt.Sprintf("SPEI%d", now.UnixNano())
+	claveRastreo, err := newClaveRastreo()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CLAVE_RASTREO_UNAVAILABLE")
+		return
+	}
 	beneficiary := req.BeneficiaryName
 	if beneficiary == "" {
 		beneficiary = merchant.Name
 	}
-	accountID := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant)
-	debit := func(journalID, description string, amount int64, fromAvailable bool) *ledger.JournalEntry {
-		avail := ledger.Entry{AccountID: accountID, Direction: ledger.Debit, Money: ledger.NewMoney(amount, "MXN")}
-		conc := ledger.Entry{AccountID: "ASSET:STP_CONCENTRATOR", Direction: ledger.Credit, Money: ledger.NewMoney(amount, "MXN")}
-		if !fromAvailable { // compensation: put the money back
-			avail.Direction, conc.Direction = ledger.Credit, ledger.Debit
-		}
-		j, _ := ledger.NewJournalEntry(journalID, now, description, []ledger.Entry{avail, conc},
-			map[string]string{"clave_rastreo": claveRastreo, "merchant_id": tenant})
-		return j
+	payout := store.PayoutRecord{
+		ClaveRastreo:     claveRastreo,
+		MerchantID:       tenant,
+		IdempotencyKey:   idemKey,
+		RequestHash:      disbursementRequestHash(req),
+		AmountCents:      req.AmountCents,
+		DestinationCLABE: acct.CLABE,
+		BeneficiaryName:  beneficiary,
+		BeneficiaryRFC:   merchant.RFC,
+		Concept:          req.Concept,
+		FechaOperacion:   now.Format("20060102"),
+		Status:           store.PayoutReserved,
 	}
+	accountID := payouts.AvailableAccount(tenant)
 
-	// 3. Balance check + debit under the ledger row lock, in one transaction
-	// (two concurrent payouts cannot both spend the same balance). Funds are
-	// reserved before calling STP and returned if the dispatch fails.
-	var remaining int64
+	// 3. Payout row (idempotency) + balance check + debit under the ledger row
+	// lock, in one transaction: two concurrent payouts cannot both spend the
+	// same balance, and a duplicate key never debits twice. Funds are reserved
+	// before calling STP; the row lets the payout reconciler finish the job if
+	// this process dies before or during registraOrden.
+	var replay *store.PayoutRecord
 	err = s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
-		bals, err := tx.LockAccountBalances(ctx, accountID, "ASSET:STP_CONCENTRATOR")
+		existing, created, err := tx.CreatePayout(ctx, payout)
+		if err != nil {
+			return err
+		}
+		if !created {
+			if existing.RequestHash != payout.RequestHash {
+				return errIdempotencyKeyReused
+			}
+			replay = &existing
+			return nil
+		}
+		bals, err := tx.LockAccountBalances(ctx, accountID, payouts.ConcentratorAccount)
 		if err != nil {
 			return err
 		}
 		if bals[accountID] < req.AmountCents {
 			return errInsufficientFunds
 		}
-		if err := tx.PostJournal(ctx, debit("disb_"+claveRastreo, "Disbursement SPEI to "+acct.CLABE, req.AmountCents, true)); err != nil {
+		jnl, err := payouts.ReservationJournal(payout, now)
+		if err != nil {
 			return err
 		}
-		remaining = bals[accountID] - req.AmountCents
+		if err := tx.PostJournal(ctx, jnl); err != nil {
+			return err
+		}
+		payout.RemainingBalanceCents = bals[accountID] - req.AmountCents
+		if err := tx.SetPayoutRemainingBalance(ctx, claveRastreo, payout.RemainingBalanceCents); err != nil {
+			return err
+		}
 		return tx.EnqueueEvent(ctx, "disbursement.requested", claveRastreo, map[string]any{
 			"clave_rastreo": claveRastreo, "merchant_id": tenant, "amount_cents": req.AmountCents, "destination_clabe": acct.CLABE,
 		})
 	})
+	if errors.Is(err, errIdempotencyKeyReused) {
+		writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED")
+		return
+	}
 	if err != nil {
 		writeMoneyError(w, "disbursement", err)
 		return
 	}
+	if replay != nil {
+		w.Header().Set("Idempotent-Replayed", "true")
+		writePayoutOutcome(w, *replay)
+		return
+	}
+	remaining := payout.RemainingBalanceCents
 
 	// 4. Sign and dispatch outbound order via STP registraOrden client. The
 	// call is detached from the client connection: a disconnect must not
@@ -149,24 +200,28 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 	defer cancelDispatch()
 	stpResp, err := stpClient.RegisterOrder(dctx, stp.STPOrderRequest{
 		ClaveRastreo:        claveRastreo,
-		FechaOperacion:      now.Format("20060102"),
+		FechaOperacion:      payout.FechaOperacion,
 		AmountCents:         req.AmountCents,
 		NombreBeneficiario:  beneficiary,
 		CuentaBeneficiario:  acct.CLABE,
 		RfcCurpBeneficiario: merchant.RFC,
 		ConceptoPago:        req.Concept,
 	})
+	cctx := context.WithoutCancel(ctx)
 	if err != nil && dispatchOutcomeUnknown(err) {
 		// The order may have been registered (timeout, reset, 5xx): returning
 		// the funds could pay the merchant twice. Keep the reservation and
-		// leave it to CEP/STP reconciliation.
-		cctx := context.WithoutCancel(ctx)
+		// leave it to the payout reconciler (STP order status).
+		dispatchErr := err
 		if eerr := s.moneyStore().InTx(cctx, func(tx store.MoneyTx) error {
+			if err := tx.SetPayoutStatus(cctx, claveRastreo, store.PayoutReserved, store.PayoutPendingReconciliation, 0, dispatchErr.Error()); err != nil {
+				return err
+			}
 			return tx.EnqueueEvent(cctx, "disbursement.dispatch_unknown", claveRastreo, map[string]any{
-				"clave_rastreo": claveRastreo, "merchant_id": tenant, "amount_cents": req.AmountCents, "error": err.Error(),
+				"clave_rastreo": claveRastreo, "merchant_id": tenant, "amount_cents": req.AmountCents, "error": dispatchErr.Error(),
 			})
 		}); eerr != nil {
-			slog.Error("disbursement dispatch outcome unknown and event not recorded", "clave_rastreo", claveRastreo, "error", eerr)
+			slog.Error("disbursement dispatch outcome unknown and not recorded; payout stays RESERVED for the reconciler", "clave_rastreo", claveRastreo, "error", eerr)
 		}
 		slog.Error("disbursement dispatch outcome unknown; funds stay reserved pending reconciliation", "clave_rastreo", claveRastreo, "error", err)
 		s.cepReconciler.TrackDisbursement(stp.DisbursementRecord{
@@ -176,26 +231,30 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 			DestinationCLABE:      acct.CLABE,
 			BeneficiaryName:       beneficiary,
 			Concept:               req.Concept,
-			FechaOperacion:        now.Format("20060102"),
+			FechaOperacion:        payout.FechaOperacion,
 			Status:                stp.StatusPendingCEP,
 			RemainingBalanceCents: remaining,
 			CreatedAt:             now,
 		})
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"status":        "PENDING_RECONCILIATION",
-			"clave_rastreo": claveRastreo,
-			"amount_cents":  req.AmountCents,
-		})
+		payout.Status = store.PayoutPendingReconciliation
+		writePayoutOutcome(w, payout)
 		return
 	}
 	if err != nil {
 		// Definitive rejection (STP answered, or the order never left):
-		// compensate the reservation; if even that fails the journal stays and
-		// must be resolved by reconciliation (logged loudly).
-		cctx := context.WithoutCancel(ctx)
+		// compensate the reservation in the same transaction as the status
+		// change; if that fails the payout stays RESERVED and the reconciler
+		// resolves it (logged loudly).
 		dispatchErr := err
 		cerr := s.moneyStore().InTx(cctx, func(tx store.MoneyTx) error {
-			if err := tx.PostJournal(cctx, debit("disb_rev_"+claveRastreo, "Disbursement dispatch failed "+claveRastreo, req.AmountCents, false)); err != nil {
+			if err := tx.SetPayoutStatus(cctx, claveRastreo, store.PayoutReserved, store.PayoutFailed, 0, dispatchErr.Error()); err != nil {
+				return err
+			}
+			jnl, err := payouts.CompensationJournal(payout, nowUTC(), "dispatch failed")
+			if err != nil {
+				return err
+			}
+			if err := tx.PostJournal(cctx, jnl); err != nil {
 				return err
 			}
 			return tx.EnqueueEvent(cctx, "disbursement.failed", claveRastreo, map[string]any{
@@ -203,13 +262,20 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 			})
 		})
 		if cerr != nil {
-			slog.Error("disbursement compensation failed; manual reconciliation required", "clave_rastreo", claveRastreo, "error", cerr)
+			slog.Error("disbursement compensation failed; payout left to the reconciler", "clave_rastreo", claveRastreo, "error", cerr)
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"error":  "STP_DISPATCH_FAILED",
 			"detail": err.Error(),
 		})
 		return
+	}
+
+	if eerr := s.moneyStore().InTx(cctx, func(tx store.MoneyTx) error {
+		return tx.SetPayoutStatus(cctx, claveRastreo, store.PayoutReserved, store.PayoutDispatched, stpResp.STPOrderID, "")
+	}); eerr != nil {
+		// STP has the order; the reconciler will confirm it from STP.
+		slog.Error("disbursement dispatched but status not recorded; payout stays RESERVED for the reconciler", "clave_rastreo", claveRastreo, "error", eerr)
 	}
 
 	// 5. Track disbursement for automatic Banxico CEP reconciliation
@@ -221,22 +287,74 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 		DestinationCLABE:      acct.CLABE,
 		BeneficiaryName:       beneficiary,
 		Concept:               req.Concept,
-		FechaOperacion:        now.Format("20060102"),
+		FechaOperacion:        payout.FechaOperacion,
 		Status:                stp.StatusPendingCEP,
 		RemainingBalanceCents: remaining,
 		CreatedAt:             now,
 	})
 
-	writeJSON(w, http.StatusOK, DisbursementResponse{
-		STPOrderID:            stpResp.STPOrderID,
-		ClaveRastreo:          claveRastreo,
-		Status:                "DISPATCHED",
-		CEPStatus:             string(stp.StatusPendingCEP),
-		AmountCents:           req.AmountCents,
-		DestinationCLABE:      acct.CLABE,
-		RemainingBalanceCents: remaining,
-		Timestamp:             now.Format(time.RFC3339),
-	})
+	payout.Status = store.PayoutDispatched
+	payout.STPOrderID = stpResp.STPOrderID
+	payout.CreatedAt = now
+	writePayoutOutcome(w, payout)
+}
+
+// maxIdempotencyKeyLen matches payouts.idempotency_key VARCHAR(255).
+const maxIdempotencyKeyLen = 255
+
+var errIdempotencyKeyReused = errors.New("idempotency key reused with a different request")
+
+// disbursementRequestHash fingerprints the client-controlled fields of a
+// payout request; the same Idempotency-Key with a different fingerprint is a
+// 409 instead of a replay.
+func disbursementRequestHash(req DisbursementRequest) string {
+	b, _ := json.Marshal([]any{req.AmountCents, req.DestinationCLABE, req.BeneficiaryName, req.Concept})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// newClaveRastreo returns a unique SPEI tracking key: "KRN" + 24 uppercase
+// hex chars (27 <= 30, alphanumeric). Random, so concurrent requests can never
+// collide (time-based keys did on coarse clocks).
+func newClaveRastreo() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "KRN" + strings.ToUpper(hex.EncodeToString(b)), nil
+}
+
+// writePayoutOutcome renders a payout's current state (fresh or replayed).
+func writePayoutOutcome(w http.ResponseWriter, p store.PayoutRecord) {
+	switch p.Status {
+	case store.PayoutDispatched, store.PayoutSettled:
+		ts := p.CreatedAt
+		if ts.IsZero() {
+			ts = nowUTC()
+		}
+		writeJSON(w, http.StatusOK, DisbursementResponse{
+			STPOrderID:            p.STPOrderID,
+			ClaveRastreo:          p.ClaveRastreo,
+			Status:                string(p.Status),
+			CEPStatus:             string(stp.StatusPendingCEP),
+			AmountCents:           p.AmountCents,
+			DestinationCLABE:      p.DestinationCLABE,
+			RemainingBalanceCents: p.RemainingBalanceCents,
+			Timestamp:             ts.UTC().Format(time.RFC3339),
+		})
+	case store.PayoutFailed:
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":         "STP_DISPATCH_FAILED",
+			"detail":        p.LastError,
+			"clave_rastreo": p.ClaveRastreo,
+		})
+	default: // RESERVED (in flight / interrupted) or PENDING_RECONCILIATION
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":        string(store.PayoutPendingReconciliation),
+			"clave_rastreo": p.ClaveRastreo,
+			"amount_cents":  p.AmountCents,
+		})
+	}
 }
 
 // stpDispatchTimeout bounds a registraOrden call detached from the request.

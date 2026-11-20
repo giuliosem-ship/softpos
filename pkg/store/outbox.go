@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -108,8 +109,9 @@ func (r *SQLOutboxRepository) FetchPendingEventsWithLock(ctx context.Context, li
 	return events, nil
 }
 
-// MarkPublished marks an event as successfully delivered.
-func (r *SQLOutboxRepository) MarkPublished(ctx context.Context, eventID int64) error {
+// MarkPublishedUnleased marks an event as delivered regardless of its lease
+// (legacy FetchPendingEventsWithLock flow; the dispatcher uses MarkPublished).
+func (r *SQLOutboxRepository) MarkPublishedUnleased(ctx context.Context, eventID int64) error {
 	now := time.Now().UTC()
 	query := `UPDATE outbox_events SET status = 'PUBLISHED', updated_at = $1 WHERE id = $2`
 	_, err := r.db.ExecContext(ctx, query, now, eventID)
@@ -137,21 +139,31 @@ func (r *SQLOutboxRepository) MarkFailed(ctx context.Context, eventID int64, err
 	return nil
 }
 
-// ClaimDueEvents atomically claims up to limit events for dispatch and marks
-// them PROCESSING. An event is due when it is PENDING with next_attempt_at <= now,
-// or PROCESSING with a lease older than lease (its dispatcher crashed). Rows are
-// locked with FOR UPDATE SKIP LOCKED, so concurrent dispatchers never claim the
-// same event. Events are returned ordered by id.
-func (r *SQLOutboxRepository) ClaimDueEvents(ctx context.Context, limit int, now time.Time, lease time.Duration) ([]OutboxEvent, error) {
+// ErrLeaseLost is returned by MarkPublished / MarkRetry when the event is no
+// longer PROCESSING under the caller's lease (it expired and was reclaimed by
+// another dispatcher, or already finished). The caller's result is discarded.
+var ErrLeaseLost = errors.New("outbox event lease lost")
+
+// LeaseExpiredError is the last_error recorded when a lease expires.
+const LeaseExpiredError = "lease expired before the dispatcher recorded a result (crash or hung publish)"
+
+// ClaimDueEvents atomically claims up to limit events for dispatch, marks them
+// PROCESSING and records owner as the lease holder. An event is due when it is
+// PENDING with next_attempt_at <= now, or PROCESSING with a lease older than
+// lease (its dispatcher crashed or hung). Reclaiming an expired lease counts as
+// a failed attempt (retry_count + 1), so an event that crashes or hangs every
+// dispatcher eventually becomes FAILED instead of looping forever; events
+// dead-lettered that way are not returned. Rows are locked with FOR UPDATE
+// SKIP LOCKED, so concurrent dispatchers never claim the same event. Events
+// are returned ordered by id.
+func (r *SQLOutboxRepository) ClaimDueEvents(ctx context.Context, limit int, now time.Time, lease time.Duration, owner string) ([]OutboxEvent, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 	now = now.UTC()
 	rows, err := r.db.QueryContext(ctx, `
-		UPDATE outbox_events
-		SET status = 'PROCESSING', updated_at = $1
-		WHERE id IN (
-			SELECT id FROM outbox_events
+		WITH due AS (
+			SELECT id, status AS prev_status FROM outbox_events
 			WHERE retry_count < max_retries
 			  AND ((status = 'PENDING' AND next_attempt_at <= $1)
 			    OR (status = 'PROCESSING' AND updated_at <= $2))
@@ -159,9 +171,19 @@ func (r *SQLOutboxRepository) ClaimDueEvents(ctx context.Context, limit int, now
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, event_type, aggregate_id, payload_json, status,
-		          retry_count, max_retries, last_error, created_at, updated_at
-	`, now, now.Add(-lease), limit)
+		UPDATE outbox_events o
+		SET retry_count = o.retry_count + CASE WHEN due.prev_status = 'PROCESSING' THEN 1 ELSE 0 END,
+		    status = CASE WHEN due.prev_status = 'PROCESSING' AND o.retry_count + 1 >= o.max_retries
+		                  THEN 'FAILED' ELSE 'PROCESSING' END,
+		    last_error = CASE WHEN due.prev_status = 'PROCESSING' THEN $5 ELSE o.last_error END,
+		    lease_owner = CASE WHEN due.prev_status = 'PROCESSING' AND o.retry_count + 1 >= o.max_retries
+		                       THEN '' ELSE $4 END,
+		    updated_at = $1
+		FROM due
+		WHERE o.id = due.id
+		RETURNING o.id, o.event_type, o.aggregate_id, o.payload_json, o.status,
+		          o.retry_count, o.max_retries, o.last_error, o.created_at, o.updated_at
+	`, now, now.Add(-lease), limit, owner, LeaseExpiredError)
 	if err != nil {
 		return nil, fmt.Errorf("failed to claim outbox events: %w", err)
 	}
@@ -175,6 +197,9 @@ func (r *SQLOutboxRepository) ClaimDueEvents(ctx context.Context, limit int, now
 			&ev.RetryCount, &ev.MaxRetries, &ev.LastError, &ev.CreatedAt, &ev.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan claimed outbox event: %w", err)
 		}
+		if ev.Status != "PROCESSING" {
+			continue // dead-lettered on reclaim
+		}
 		ev.PayloadJSON = payload
 		events = append(events, ev)
 	}
@@ -185,21 +210,36 @@ func (r *SQLOutboxRepository) ClaimDueEvents(ctx context.Context, limit int, now
 	return events, nil
 }
 
+// MarkPublished records a successful delivery. It only applies while the
+// event is PROCESSING under owner's lease (ErrLeaseLost otherwise).
+func (r *SQLOutboxRepository) MarkPublished(ctx context.Context, eventID int64, owner string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE outbox_events SET status = 'PUBLISHED', lease_owner = '', updated_at = $1
+		WHERE id = $2 AND status = 'PROCESSING' AND lease_owner = $3
+	`, time.Now().UTC(), eventID, owner)
+	if err != nil {
+		return fmt.Errorf("failed to mark outbox event published: %w", err)
+	}
+	return requireRowAffected(res, ErrLeaseLost)
+}
+
 // MarkRetry records a failed delivery attempt: increments retry_count, stores
 // the error and schedules the next attempt; the event becomes FAILED (dead
-// letter) once retry_count reaches max_retries.
-func (r *SQLOutboxRepository) MarkRetry(ctx context.Context, eventID int64, errMsg string, nextAttemptAt time.Time) error {
-	_, err := r.db.ExecContext(ctx, `
+// letter) once retry_count reaches max_retries. It only applies while the
+// event is PROCESSING under owner's lease (ErrLeaseLost otherwise).
+func (r *SQLOutboxRepository) MarkRetry(ctx context.Context, eventID int64, owner, errMsg string, nextAttemptAt time.Time) error {
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE outbox_events
 		SET retry_count = retry_count + 1,
 		    last_error = $1,
 		    status = CASE WHEN retry_count + 1 >= max_retries THEN 'FAILED' ELSE 'PENDING' END,
 		    next_attempt_at = $2,
+		    lease_owner = '',
 		    updated_at = $3
-		WHERE id = $4
-	`, errMsg, nextAttemptAt.UTC(), time.Now().UTC(), eventID)
+		WHERE id = $4 AND status = 'PROCESSING' AND lease_owner = $5
+	`, errMsg, nextAttemptAt.UTC(), time.Now().UTC(), eventID, owner)
 	if err != nil {
 		return fmt.Errorf("failed to schedule outbox retry: %w", err)
 	}
-	return nil
+	return requireRowAffected(res, ErrLeaseLost)
 }

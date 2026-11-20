@@ -29,6 +29,7 @@ import (
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/outbox"
+	"softpos/pkg/payouts"
 	"softpos/pkg/store"
 	"softpos/pkg/stp"
 )
@@ -79,6 +80,12 @@ type Config struct {
 	OutboxPollInterval time.Duration // OUTBOX_POLL_INTERVAL, default 2s
 	OutboxBatchSize    int           // OUTBOX_BATCH_SIZE, default 50
 	OutboxPublisher    string        // OUTBOX_PUBLISHER: "log" (default) | "noop"
+	// OutboxPublishTimeout bounds each publish (OUTBOX_PUBLISH_TIMEOUT, default 30s).
+	OutboxPublishTimeout time.Duration
+
+	// Payout recovery (only runs when DatabaseURL is set).
+	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
+	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
 }
 
 func LoadConfigFromEnv() Config {
@@ -163,33 +170,36 @@ func LoadConfigFromEnv() Config {
 	}
 
 	return Config{
-		AllowCashierRefunds:    cashierRefunds,
-		DefaultPlatformFeeBps:  feeBps,
-		HasDefaultFeeBps:       hasFee,
-		AuthRateLimitPerMinute: authRate,
-		PlayIntegritySecret:    os.Getenv("PLAY_INTEGRITY_SECRET"),
-		CoDiWebhookSecret:      os.Getenv("CODI_WEBHOOK_SECRET"),
-		PlayIntegrityPackage:   integrityPkg,
-		DevMode:                devMode,
-		JWTSecret:              os.Getenv("JWT_SECRET"),
-		AuthAccessTTL:          parseDurationEnv("AUTH_ACCESS_TTL"),
-		AuthRefreshTTL:         parseDurationEnv("AUTH_REFRESH_TTL"),
-		OutboxPollInterval:     outboxPoll,
-		OutboxBatchSize:        outboxBatch,
-		OutboxPublisher:        os.Getenv("OUTBOX_PUBLISHER"),
-		Port:                   port,
-		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		SQLDriver:              sqlDriver,
-		MigrationsDir:          migrationsDir,
-		RedisAddr:              os.Getenv("REDIS_ADDR"),
-		RedisPassword:          os.Getenv("REDIS_PASSWORD"),
-		VaultMasterKeyHex:      os.Getenv("VAULT_MASTER_KEY_HEX"),
-		VaultKeyID:             os.Getenv("VAULT_MASTER_KEY_ID"),
-		VaultPreviousKeys:      os.Getenv("VAULT_PREVIOUS_KEYS"),
-		STPHMACSecret:          hmacSecret,
-		STPBaseURL:             os.Getenv("STP_BASE_URL"),
-		SeedDemoMerchant:       seedDemo,
-		StaticDir:              staticDir,
+		AllowCashierRefunds:     cashierRefunds,
+		DefaultPlatformFeeBps:   feeBps,
+		HasDefaultFeeBps:        hasFee,
+		AuthRateLimitPerMinute:  authRate,
+		PlayIntegritySecret:     os.Getenv("PLAY_INTEGRITY_SECRET"),
+		CoDiWebhookSecret:       os.Getenv("CODI_WEBHOOK_SECRET"),
+		PlayIntegrityPackage:    integrityPkg,
+		DevMode:                 devMode,
+		JWTSecret:               os.Getenv("JWT_SECRET"),
+		AuthAccessTTL:           parseDurationEnv("AUTH_ACCESS_TTL"),
+		AuthRefreshTTL:          parseDurationEnv("AUTH_REFRESH_TTL"),
+		OutboxPollInterval:      outboxPoll,
+		OutboxBatchSize:         outboxBatch,
+		OutboxPublisher:         os.Getenv("OUTBOX_PUBLISHER"),
+		OutboxPublishTimeout:    parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
+		PayoutReconcileInterval: parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
+		PayoutReconcileAfter:    parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		Port:                    port,
+		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		SQLDriver:               sqlDriver,
+		MigrationsDir:           migrationsDir,
+		RedisAddr:               os.Getenv("REDIS_ADDR"),
+		RedisPassword:           os.Getenv("REDIS_PASSWORD"),
+		VaultMasterKeyHex:       os.Getenv("VAULT_MASTER_KEY_HEX"),
+		VaultKeyID:              os.Getenv("VAULT_MASTER_KEY_ID"),
+		VaultPreviousKeys:       os.Getenv("VAULT_PREVIOUS_KEYS"),
+		STPHMACSecret:           hmacSecret,
+		STPBaseURL:              os.Getenv("STP_BASE_URL"),
+		SeedDemoMerchant:        seedDemo,
+		StaticDir:               staticDir,
 	}
 }
 
@@ -491,8 +501,9 @@ func StartOutboxDispatcher(ctx context.Context, cfg Config, db *sql.DB) (wait fu
 		return nil, err
 	}
 	d := outbox.NewDispatcher(store.NewSQLOutboxRepository(db), pub, outbox.Config{
-		PollInterval: cfg.OutboxPollInterval,
-		BatchSize:    cfg.OutboxBatchSize,
+		PollInterval:   cfg.OutboxPollInterval,
+		BatchSize:      cfg.OutboxBatchSize,
+		PublishTimeout: cfg.OutboxPublishTimeout,
 	})
 	done := make(chan struct{})
 	go func() {
@@ -500,6 +511,35 @@ func StartOutboxDispatcher(ctx context.Context, cfg Config, db *sql.DB) (wait fu
 		_ = d.Run(ctx)
 	}()
 	return func() { <-done }, nil
+}
+
+// minPayoutReconcileAfter keeps recovery well behind an in-flight
+// registraOrden (the handler waits up to 30s for STP).
+const minPayoutReconcileAfter = time.Minute
+
+// StartPayoutReconciler launches the payout recovery loop (stale RESERVED /
+// PENDING_RECONCILIATION payouts resolved against STP order status) when a
+// database is configured; with db == nil it is a no-op. The returned wait
+// function blocks until the loop has exited after ctx is cancelled.
+func StartPayoutReconciler(ctx context.Context, cfg Config, db *sql.DB, statuses stp.OrderStatusClient) (wait func()) {
+	if db == nil || statuses == nil {
+		return func() {}
+	}
+	after := cfg.PayoutReconcileAfter
+	if after != 0 && after < minPayoutReconcileAfter {
+		slog.Warn("PAYOUT_RECONCILE_AFTER below minimum, using minimum", "value", after, "min", minPayoutReconcileAfter)
+		after = minPayoutReconcileAfter
+	}
+	r := payouts.NewReconciler(store.NewSQLPayoutRepository(db), store.NewSQLMoneyStore(db), statuses, payouts.ReconcilerConfig{
+		Interval: cfg.PayoutReconcileInterval,
+		After:    after,
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = r.Run(ctx)
+	}()
+	return func() { <-done }
 }
 
 func generateSelfSignedCSD() ([]byte, []byte, error) {
@@ -570,6 +610,7 @@ func main() {
 		slog.Error("fatal initialization error", "error", err)
 		os.Exit(1)
 	}
+	waitPayouts := StartPayoutReconciler(dispatcherCtx, cfg, db, server)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -608,7 +649,7 @@ func main() {
 		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
 		stopDispatcher()
 		dispatcherDone := make(chan struct{})
-		go func() { waitDispatcher(); close(dispatcherDone) }()
+		go func() { waitDispatcher(); waitPayouts(); close(dispatcherDone) }()
 		select {
 		case <-dispatcherDone:
 		case <-shutdownCtx.Done():

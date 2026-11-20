@@ -103,7 +103,7 @@ func TestSQLOutboxRepository_MarkPublishedAndFailed(t *testing.T) {
 		t.Fatalf("expected 1 event, got: %d", len(events2))
 	}
 
-	if err := repo.MarkPublished(ctx, events2[0].ID); err != nil {
+	if err := repo.MarkPublishedUnleased(ctx, events2[0].ID); err != nil {
 		t.Fatalf("MarkPublished failed: %v", err)
 	}
 

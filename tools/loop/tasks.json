@@ -1122,6 +1122,20 @@
       "test_results": "TestServerEnvVars_MatchCode (AST scan of os.Getenv/LookupEnv/parseDurationEnv literals in cmd/ and pkg/ == ServerEnvVars), TestEnvExample_DocumentsEveryVariable (each var documented, secrets only empty/placeholder), TestValidateProductionConfig_CoversEverySecret (every Secret var has rejected cases). go vet clean; go test -race -count=1 ./... all ok.",
       "audit_notes": "No real secrets manager/KMS integration (env injection only). docker compose up not executed locally (no Docker).",
       "priority": 72
+    },
+    {
+      "id": "MVP-12",
+      "component": "payouts",
+      "title": "Payout and outbox hardening",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/payout_idempotency_test.go, pkg/payouts/reconciler_test.go, pkg/outbox/dispatcher_test.go, pkg/store/payouts_integration_test.go, pkg/store/postgres_integration_test.go, cmd/server/payout_integration_test.go, cmd/server/outbox_test.go, pkg/fiscal/period_test.go (+ Idempotency-Key in existing payout tests)",
+        "implementation": "migrations/009_payouts_and_outbox_leases.*.sql, pkg/store/payouts.go, pkg/store/money.go, pkg/store/money_memory.go, pkg/store/outbox.go, pkg/payouts/payouts.go, pkg/payouts/reconciler.go, pkg/stp/order_status.go, pkg/stp/client.go, pkg/api/handlers_disbursements.go, pkg/api/server.go, pkg/outbox/dispatcher.go, pkg/fiscal/period.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "(a) POST /api/v1/disbursements requires Idempotency-Key (400 MISSING/INVALID_IDEMPOTENCY_KEY); migration 009 payouts table (PK random clave KRN+24 hex, UNIQUE(merchant_id, idempotency_key), request_hash) inserted with ON CONFLICT inside the MoneyStore transaction before the ledger lock: same key+hash replays the stored state (Idempotent-Replayed, 200/202/502, no debit, no STP call), different hash 409 IDEMPOTENCY_KEY_REUSED. Status RESERVED -> DISPATCHED | PENDING_RECONCILIATION | FAILED via compare-and-set (compensation and FAILED in one tx). (b) pkg/payouts.Reconciler (cmd/server worker, PAYOUT_RECONCILE_INTERVAL 1m / PAYOUT_RECONCILE_AFTER 10m, min 1m) lists stale RESERVED/PENDING_RECONCILIATION payouts, queries stp.OrderStatusClient (Server.QueryOrderStatus delegates to the STP client; MockSTPClient/MockOrderStatusClient), re-locks each payout: LIQUIDATED -> SETTLED, ACCEPTED -> DISPATCHED, REJECTED/NOT_FOUND -> compensating journal disb_rev_<clave> + FAILED, unknown/error -> kept + ERROR 'ALERT payout unresolved'. (c) Outbox: lease_owner column; ClaimDueEvents records owner and counts an expired-lease reclaim as an attempt (poison events end FAILED); MarkPublished/MarkRetry only update PROCESSING rows owned by the caller (store.ErrLeaseLost -> result discarded, Result.LeaseLost); per-event publish timeout (OUTBOX_PUBLISH_TIMEOUT 30s, < lease) also abandons publishers that ignore ctx; in-flight publish detached from shutdown. (d) fiscal.ResicoYearMonth computes the RESICO month in America/Mexico_City with time/tzdata embedded; api.currentYearMonth uses it.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages with tests); TEST_DATABASE_URL (embedded-postgres 16) -run PGIntegration 26/26 PASS (new: PayoutRecordsIdempotentAndStateMachine, OutboxPoisonEventDeadLettersOnLeaseExpiry, PayoutIdempotencyKey, PayoutRecoveryResolvesUnknownAndCrashedPayouts, PayoutReconcilerWorkerRuns; OutboxClaimRetryAndSkipLocked extended with lease-owner checks).",
+      "audit_notes": "Real STP consulta-de-orden client not implemented (interface + mocks; the server's MockSTPClient answers). GET /disbursements/{clave} and CEP tracking still use the in-memory CEPReconciler, not the payouts table. Fixed in passing: time-based clave de rastreo collided under concurrency (flaky TestDisbursement_ConcurrentPayoutsCannotOverdraw, duplicate journal 500).",
+      "priority": 73
     }
   ]
 }

@@ -25,7 +25,9 @@ func jsonReq(method, path string, body any) *http.Request {
 	if body != nil {
 		_ = json.NewEncoder(&buf).Encode(body)
 	}
-	return httptest.NewRequest(method, path, &buf)
+	req := httptest.NewRequest(method, path, &buf)
+	withPayoutKey(req)
+	return req
 }
 
 func TestAuthGate_DefaultDenyAndPublicAllowlist(t *testing.T) {

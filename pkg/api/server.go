@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"softpos/pkg/auth"
+	"softpos/pkg/fiscal"
 	"softpos/pkg/identity"
 	"softpos/pkg/ledger"
 	"softpos/pkg/pac"
@@ -164,6 +165,21 @@ func (s *Server) SetSTPClient(client stp.STPClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stpClient = client
+}
+
+// QueryOrderStatus implements stp.OrderStatusClient over the current STP
+// client (the payout reconciler uses the server as its STP status source).
+// A client without order-status support yields ErrOrderStatusUnavailable, so
+// payouts stay reserved instead of being guessed.
+func (s *Server) QueryOrderStatus(ctx context.Context, claveRastreo, fechaOperacion string) (stp.OrderStatus, error) {
+	s.mu.RLock()
+	client := s.stpClient
+	s.mu.RUnlock()
+	q, ok := client.(stp.OrderStatusClient)
+	if !ok {
+		return stp.OrderStatus{}, fmt.Errorf("%w: %T has no order status query", stp.ErrOrderStatusUnavailable, client)
+	}
+	return q.QueryOrderStatus(ctx, claveRastreo, fechaOperacion)
 }
 
 func (s *Server) SetCEPProvider(provider stp.CEPProvider) {
@@ -397,8 +413,10 @@ func (s *Server) GetMerchantCLABE(merchantID string) (string, bool) {
 	return clabe, found
 }
 
+// currentYearMonth is the RESICO period of now, with month boundaries in
+// America/Mexico_City (not UTC).
 func currentYearMonth() string {
-	return time.Now().UTC().Format("2006-01")
+	return fiscal.ResicoYearMonth(nowUTC())
 }
 
 // merchantMonthlySalesCents returns the accumulated base sales for the current month, propagating storage errors.

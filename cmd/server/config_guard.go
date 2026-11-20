@@ -71,6 +71,9 @@ var ServerEnvVars = []EnvVar{
 	{Name: "OUTBOX_POLL_INTERVAL"},
 	{Name: "OUTBOX_BATCH_SIZE"},
 	{Name: "OUTBOX_PUBLISHER"},
+	{Name: "OUTBOX_PUBLISH_TIMEOUT"},
+	{Name: "PAYOUT_RECONCILE_INTERVAL"},
+	{Name: "PAYOUT_RECONCILE_AFTER"},
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.

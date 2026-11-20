@@ -36,7 +36,10 @@ AMOUNT_MISMATCH`). Client `platform_fee_cents` / `rbf_sweep_cents` are ignored.
 2. Already `SETTLED`/`REFUNDED` → return the stored settlement (same body,
    nothing posted). Concurrent settles serialize on the payment row; exactly
    one posts.
-3. `gross` = authorized amount. Lock the month's RESICO accumulator, compute
+3. `gross` = authorized amount. Lock the month's RESICO accumulator (the
+   month is computed in `America/Mexico_City`, `fiscal.ResicoYearMonth`:
+   23:30 local on the 30th of November is still November although it is
+   December in UTC; zoneinfo is embedded via `time/tzdata`), compute
    `fiscal.CalculateResicoTaxSplit`. Platform fee = `gross × tariff_bps`
    (half-up); tariff = `merchants.platform_fee_bps`, or
    `DEFAULT_PLATFORM_FEE_BPS` (default 200 = 2 %) when NULL. RBF sweep =
@@ -124,33 +127,68 @@ distinct from the server-assigned virtual collection CLABE.
   registered one. `GET …/settlement-account` shows it. With `DEV_MODE` the
   demo merchant is seeded with a verified account.
 
-`POST /api/v1/disbursements {"amount_cents","concept"}` (owner): destination is
-always the registered account; `destination_clabe`, if sent, must equal it
-(`403 DESTINATION_CLABE_NOT_ALLOWED`); not registered / not `VERIFIED` → `409`.
+`POST /api/v1/disbursements {"amount_cents","concept"}` (owner), header
+**`Idempotency-Key` required** (`400 MISSING_IDEMPOTENCY_KEY`, max 255 chars):
+destination is always the registered account; `destination_clabe`, if sent,
+must equal it (`403 DESTINATION_CLABE_NOT_ALLOWED`); not registered / not
+`VERIFIED` → `409`.
 
-1. One transaction: lock `AVAILABLE` and `ASSET:STP_CONCENTRATOR` (sorted),
-   check balance ≥ amount (`400 INSUFFICIENT_FUNDS`), post `disb_<clave>` (Dr
-   `AVAILABLE`, Cr `ASSET:STP_CONCENTRATOR`), outbox `disbursement.requested`.
-   Concurrent payouts serialize on the account lock and cannot overdraw.
+Every payout is a row in `payouts` (migration 009, PK = clave de rastreo
+`KRN` + 24 random hex chars; `UNIQUE (merchant_id, idempotency_key)`;
+`request_hash` = SHA-256 of amount, destination, beneficiary and concept).
+Status: `RESERVED → DISPATCHED | PENDING_RECONCILIATION | FAILED`, and
+`SETTLED` / `DISPATCHED` / `FAILED` set by recovery.
+
+1. One transaction: insert the payout row (`ON CONFLICT (merchant_id,
+   idempotency_key) DO NOTHING`; a concurrent duplicate waits for the first
+   commit). Existing key with the same `request_hash` → **replay** of the
+   stored state, no debit and no STP call (`Idempotent-Replayed: true`;
+   `200` DISPATCHED/SETTLED, `202 PENDING_RECONCILIATION` while RESERVED or
+   unknown, `502` FAILED); different hash → `409 IDEMPOTENCY_KEY_REUSED`.
+   New key: lock `AVAILABLE` and `ASSET:STP_CONCENTRATOR` (sorted), check
+   balance ≥ amount (`400 INSUFFICIENT_FUNDS`, rolls back the row too), post
+   `disb_<clave>` (Dr `AVAILABLE`, Cr `ASSET:STP_CONCENTRATOR`), outbox
+   `disbursement.requested`. Concurrent payouts serialize on the account lock
+   and cannot overdraw.
 2. `registraOrden` to STP outside the transaction, detached from the client
    connection (30 s timeout): a disconnect cannot abort an order in flight.
+   Success → `RESERVED → DISPATCHED` with the STP order id.
 3. Definitive failure (STP rejected the order, or it never left: validation /
-   signing) → compensating journal `disb_rev_<clave>` (reverse entries) +
-   outbox `disbursement.failed` in a new transaction, `502`. If the
-   compensation itself fails it is logged for manual reconciliation.
+   signing) → `RESERVED → FAILED` + compensating journal `disb_rev_<clave>`
+   (reverse entries) + outbox `disbursement.failed` in one transaction, `502`.
+   If that transaction fails the row stays `RESERVED` for recovery.
 4. Unknown outcome (`stp.ErrSTPNetworkError`: timeout, reset, 5xx, unreadable
    response) → **no compensation** (STP may have paid; returning the funds
-   would allow a double withdrawal): the reservation stays, outbox
-   `disbursement.dispatch_unknown`, the payout is tracked for CEP
-   reconciliation, `202 PENDING_RECONCILIATION`.
-5. A crash between the debit commit and the STP call leaves the funds reserved
-   with only `disbursement.requested` in the outbox; there is no dispatcher
-   that re-sends or releases it yet (manual reconciliation).
+   would allow a double withdrawal): `RESERVED → PENDING_RECONCILIATION`,
+   outbox `disbursement.dispatch_unknown`, tracked for CEP reconciliation,
+   `202 PENDING_RECONCILIATION`.
+5. A crash between the debit commit and the STP call leaves the row
+   `RESERVED`; a retry with the same key replays `202` and never re-sends.
+
+### Payout recovery (`pkg/payouts.Reconciler`)
+
+With a database, `cmd/server` runs the reconciler every
+`PAYOUT_RECONCILE_INTERVAL` (default 1 min). It picks `RESERVED` and
+`PENDING_RECONCILIATION` payouts not updated for `PAYOUT_RECONCILE_AFTER`
+(default 10 min, minimum 1 min — always longer than the 30 s dispatch
+timeout) and asks STP for the order status (`stp.OrderStatusClient`; the
+server delegates to its STP client — `MockSTPClient` reports orders it
+accepted as liquidated; the real STP consulta call arrives with the STP
+contract). Each payout is re-locked and re-checked inside its own
+transaction, so one finalized meanwhile is skipped:
+
+| STP state | Result |
+|---|---|
+| `LIQUIDATED` | `SETTLED` + order id, outbox `disbursement.settled` |
+| `ACCEPTED` | `DISPATCHED` + order id, outbox `disbursement.dispatched` |
+| `REJECTED` / `NOT_FOUND` | journal `disb_rev_<clave>` (its fixed id makes a second compensation impossible) + `FAILED` + outbox `disbursement.failed` |
+| unknown / query error | kept reserved, `ERROR` log `ALERT payout unresolved` every pass |
 
 ## Not covered yet
 
-- Real processor/STP confirmations of payouts and refunds (webhooks), daily
-  reconciliation, STP returns.
+- Real processor/STP confirmations of payouts and refunds (webhooks), the
+  real STP order-status client, daily reconciliation, STP returns after
+  liquidation.
 - RBF loans persisted in the database (and reversed on refunds).
 - Real settlement-account ownership verification (STP/bank titularidad or KYB
   provider) and 2FA on account changes.

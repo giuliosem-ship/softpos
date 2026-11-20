@@ -1,7 +1,9 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"softpos/pkg/auth"
@@ -39,5 +41,17 @@ func asRole(t *testing.T, s *Server, merchantID string, role auth.Role, req *htt
 
 func withBearer(req *http.Request, token string) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+token)
+	return req
+}
+
+var payoutKeySeq atomic.Int64
+
+// withPayoutKey gives every POST /api/v1/disbursements test request a unique
+// Idempotency-Key (required since MVP-12); tests of idempotency itself set
+// their own key afterwards.
+func withPayoutKey(req *http.Request) *http.Request {
+	if req.Method == http.MethodPost && req.URL.Path == "/api/v1/disbursements" && req.Header.Get("Idempotency-Key") == "" {
+		req.Header.Set("Idempotency-Key", fmt.Sprintf("test-payout-%d", payoutKeySeq.Add(1)))
+	}
 	return req
 }

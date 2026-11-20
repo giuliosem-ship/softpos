@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 
 // validEMVTLVHex: $250.00 MXN, currency 0484, ARQC, PAN 4152313333339012, exp 2812.
 const validEMVTLVHex = "9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"
+
+var payoutKeySeq atomic.Int64
 
 func doJSON(t *testing.T, srv *api.Server, token, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -31,6 +35,9 @@ func doJSON(t *testing.T, srv *api.Server, token, method, path string, body any)
 	req := httptest.NewRequest(method, path, &buf)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if method == http.MethodPost && path == "/api/v1/disbursements" {
+		req.Header.Set("Idempotency-Key", fmt.Sprintf("it-payout-%d", payoutKeySeq.Add(1)))
 	}
 	srv.Router().ServeHTTP(rec, req)
 	return rec

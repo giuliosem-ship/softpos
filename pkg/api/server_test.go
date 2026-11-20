@@ -242,7 +242,7 @@ func TestDisbursement_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body))
+	req := withPayoutKey(httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -290,7 +290,7 @@ func TestDisbursement_SAT69BBlacklistBlocked(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body))
+	req := withPayoutKey(httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -324,7 +324,7 @@ func TestDisbursement_InsufficientFundsFails(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body))
+	req := withPayoutKey(httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -352,7 +352,7 @@ func TestDisbursement_InvalidCLABEFails(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body))
+	req := withPayoutKey(httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -810,7 +810,7 @@ func TestDisbursementWithHTTPSTPClientAndCEPReconciliation(t *testing.T) {
 		Concept:          "Liquidacion T+0",
 	})
 	recDisb := httptest.NewRecorder()
-	server.Router().ServeHTTP(recDisb, asTenant(t, server, merchantID, httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(disbBody))))
+	server.Router().ServeHTTP(recDisb, asTenant(t, server, merchantID, withPayoutKey(httptest.NewRequest(http.MethodPost, "/api/v1/disbursements", bytes.NewReader(disbBody)))))
 	if recDisb.Code != http.StatusOK {
 		t.Fatalf("expected 200 on disbursement, got %d: %s", recDisb.Code, recDisb.Body.String())
 	}

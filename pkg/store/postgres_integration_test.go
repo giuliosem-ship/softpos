@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -271,8 +272,8 @@ func TestPGIntegration_OutboxRepository(t *testing.T) {
 	if len(events) != 1 || events[0].RetryCount != 1 || events[0].LastError != "boom" {
 		t.Fatalf("unexpected after MarkFailed: %+v", events)
 	}
-	if err := repo.MarkPublished(ctx, events[0].ID); err != nil {
-		t.Fatalf("MarkPublished: %v", err)
+	if err := repo.MarkPublishedUnleased(ctx, events[0].ID); err != nil {
+		t.Fatalf("MarkPublishedUnleased: %v", err)
 	}
 	if events, _ = repo.FetchPendingEventsWithLock(ctx, 10); len(events) != 0 {
 		t.Fatalf("expected no pending events, got %d", len(events))
@@ -390,10 +391,10 @@ func TestPGIntegration_OutboxClaimRetryAndSkipLocked(t *testing.T) {
 	}
 	results := make(chan claim, 2)
 	for i := 0; i < 2; i++ {
-		go func() {
-			evs, err := repo.ClaimDueEvents(ctx, 15, now, time.Minute)
+		go func(i int) {
+			evs, err := repo.ClaimDueEvents(ctx, 15, now, time.Minute, fmt.Sprintf("claimer-%d", i))
 			results <- claim{evs, err}
-		}()
+		}(i)
 	}
 	seen := map[int64]bool{}
 	total := 0
@@ -417,25 +418,40 @@ func TestPGIntegration_OutboxClaimRetryAndSkipLocked(t *testing.T) {
 		t.Fatalf("expected all 20 events claimed exactly once, got %d", total)
 	}
 	// Live leases: nothing claimable now.
-	if evs, _ := repo.ClaimDueEvents(ctx, 50, now, time.Minute); len(evs) != 0 {
+	if evs, _ := repo.ClaimDueEvents(ctx, 50, now, time.Minute, "other"); len(evs) != 0 {
 		t.Fatalf("expected no claimable events while leased, got %d", len(evs))
 	}
-	// Expired lease: reclaimable.
-	if evs, _ := repo.ClaimDueEvents(ctx, 50, time.Now().Add(2*time.Minute), time.Minute); len(evs) != 20 {
+	// Expired lease: reclaimable, and the reclaim counts as an attempt.
+	evs, _ := repo.ClaimDueEvents(ctx, 50, time.Now().Add(2*time.Minute), time.Minute, "reclaimer")
+	if len(evs) != 20 {
 		t.Fatalf("expected 20 reclaimed after lease expiry, got %d", len(evs))
+	}
+	if evs[0].RetryCount != 1 || evs[0].LastError != LeaseExpiredError {
+		t.Fatalf("reclaim must count as an attempt: %+v", evs[0])
 	}
 
 	var id int64
 	_ = db.QueryRow(`SELECT MIN(id) FROM outbox_events`).Scan(&id)
 	next := time.Now().Add(time.Hour)
-	if err := repo.MarkRetry(ctx, id, "timeout", next); err != nil {
+	// Only the current lease owner can record a result.
+	if err := repo.MarkRetry(ctx, id, "claimer-0", "late", next); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale owner MarkRetry: want ErrLeaseLost, got %v", err)
+	}
+	if err := repo.MarkPublished(ctx, id, "claimer-1"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale owner MarkPublished: want ErrLeaseLost, got %v", err)
+	}
+	if err := repo.MarkRetry(ctx, id, "reclaimer", "timeout", next); err != nil {
 		t.Fatalf("MarkRetry: %v", err)
+	}
+	// A PENDING event can no longer be finished by anyone.
+	if err := repo.MarkPublished(ctx, id, "reclaimer"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("MarkPublished on PENDING: want ErrLeaseLost, got %v", err)
 	}
 	var status, lastErr string
 	var retries int
 	var gotNext time.Time
 	_ = db.QueryRow(`SELECT status, retry_count, last_error, next_attempt_at FROM outbox_events WHERE id=$1`, id).Scan(&status, &retries, &lastErr, &gotNext)
-	if status != "PENDING" || retries != 1 || lastErr != "timeout" || gotNext.Sub(next).Abs() > time.Millisecond {
+	if status != "PENDING" || retries != 2 || lastErr != "timeout" || gotNext.Sub(next).Abs() > time.Millisecond {
 		t.Fatalf("after MarkRetry: %s %d %s %v", status, retries, lastErr, gotNext)
 	}
 	// Not due before next_attempt_at, due after.
@@ -453,8 +469,10 @@ func TestPGIntegration_OutboxClaimRetryAndSkipLocked(t *testing.T) {
 	}
 
 	// max_retries reached -> FAILED (dead letter) and never claimed again.
-	_, _ = db.Exec(`UPDATE outbox_events SET retry_count = max_retries - 1, status = 'PENDING' WHERE id = $1`, id)
-	_ = repo.MarkRetry(ctx, id, "final", time.Now())
+	_, _ = db.Exec(`UPDATE outbox_events SET retry_count = max_retries - 1, status = 'PROCESSING', lease_owner = 'last' WHERE id = $1`, id)
+	if err := repo.MarkRetry(ctx, id, "last", "final", time.Now()); err != nil {
+		t.Fatalf("final MarkRetry: %v", err)
+	}
 	_ = db.QueryRow(`SELECT status FROM outbox_events WHERE id=$1`, id).Scan(&status)
 	if status != "FAILED" {
 		t.Fatalf("expected FAILED after max retries, got %s", status)
@@ -463,9 +481,41 @@ func TestPGIntegration_OutboxClaimRetryAndSkipLocked(t *testing.T) {
 
 func mustClaim(t *testing.T, repo *SQLOutboxRepository, now time.Time) []OutboxEvent {
 	t.Helper()
-	evs, err := repo.ClaimDueEvents(context.Background(), 100, now, time.Minute)
+	evs, err := repo.ClaimDueEvents(context.Background(), 100, now, time.Minute, "must-claim")
 	if err != nil {
 		t.Fatalf("ClaimDueEvents: %v", err)
 	}
 	return evs
+}
+
+// TestPGIntegration_OutboxPoisonEventDeadLettersOnLeaseExpiry: an event whose
+// dispatchers keep crashing (lease never released) becomes FAILED after
+// max_retries reclaims instead of being handed out forever.
+func TestPGIntegration_OutboxPoisonEventDeadLettersOnLeaseExpiry(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	repo := NewSQLOutboxRepository(db)
+	tx, _ := db.BeginTx(ctx, nil)
+	if err := repo.SaveEventTx(ctx, tx, "poison", "agg", map[string]int{"x": 1}); err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.Commit()
+	_, _ = db.Exec(`UPDATE outbox_events SET max_retries = 3`)
+
+	at := time.Now()
+	claims := 0
+	for i := 0; i < 6; i++ {
+		evs, err := repo.ClaimDueEvents(ctx, 10, at, time.Minute, fmt.Sprintf("crash-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims += len(evs)
+		at = at.Add(2 * time.Minute) // the claimer dies; its lease expires
+	}
+	var status, owner, lastErr string
+	var retries int
+	_ = db.QueryRow(`SELECT status, retry_count, lease_owner, last_error FROM outbox_events`).Scan(&status, &retries, &owner, &lastErr)
+	if claims != 3 || status != "FAILED" || retries != 3 || owner != "" || lastErr != LeaseExpiredError {
+		t.Fatalf("claims=%d status=%s retries=%d owner=%q last_error=%q", claims, status, retries, owner, lastErr)
+	}
 }

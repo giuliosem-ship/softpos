@@ -86,6 +86,18 @@ type MoneyTx interface {
 	// EnqueueEvent records an outbox event that is published only if the
 	// transaction commits.
 	EnqueueEvent(ctx context.Context, eventType, aggregateID string, payload any) error
+
+	// CreatePayout inserts p (status RESERVED unless set). If the merchant
+	// already used p.IdempotencyKey, nothing is inserted and the existing
+	// payout is returned locked with created=false.
+	CreatePayout(ctx context.Context, p PayoutRecord) (existing PayoutRecord, created bool, err error)
+	// SetPayoutRemainingBalance records the balance left after the reservation.
+	SetPayoutRemainingBalance(ctx context.Context, claveRastreo string, cents int64) error
+	// GetPayoutForUpdate loads and locks a payout.
+	GetPayoutForUpdate(ctx context.Context, claveRastreo string) (PayoutRecord, bool, error)
+	// SetPayoutStatus moves a payout from -> to (ErrPayoutStateConflict);
+	// stpOrderID 0 keeps the stored one.
+	SetPayoutStatus(ctx context.Context, claveRastreo string, from, to PayoutStatus, stpOrderID int64, lastError string) error
 }
 
 // MoneyStore runs units of work. fn's error rolls everything back.
@@ -100,7 +112,8 @@ type MoneyStore interface {
 // SQLMoneyStore implements MoneyStore with a single database/sql transaction
 // (READ COMMITTED + row locks). Lock order used by the API handlers: payment
 // row -> settlement row -> operation key -> monthly sales row -> ledger
-// accounts (sorted).
+// accounts (sorted). A payout row is taken like an operation key: before the
+// ledger accounts.
 type SQLMoneyStore struct {
 	db     *sql.DB
 	outbox *SQLOutboxRepository

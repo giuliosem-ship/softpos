@@ -55,8 +55,10 @@ Notes:
   returns the error (`ErrDuplicateCLABE` -> HTTP 409 on `POST /merchants`), and a
   failed monthly-sales read returns 503 `MONTHLY_SALES_UNAVAILABLE` instead of
   silently using 0 (which would pick the wrong RESICO bracket).
+- Payouts: `payouts` table (migration 009) written in the money transaction;
+  see `docs/MONEY_FLOWS.md` (idempotency and recovery).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
-  exists but is not wired), disbursement/CEP tracking, SAT ingestion state.
+  exists but is not wired), CEP tracking of disbursements, SAT ingestion state.
 - Payment state change, ledger journal, RESICO monthly accumulator,
   settlement record, webhook exactly-once key and outbox event are written in
   **one transaction** (`store.SQLMoneyStore`, see `docs/MONEY_FLOWS.md`);
@@ -68,9 +70,19 @@ With a database configured, `cmd/server` starts `pkg/outbox.Dispatcher` in a
 goroutine; on SIGTERM it is stopped after the HTTP server drains.
 
 - `store.SQLOutboxRepository.ClaimDueEvents` claims due events with
-  `FOR UPDATE SKIP LOCKED` and marks them `PROCESSING` (safe with several
+  `FOR UPDATE SKIP LOCKED`, marks them `PROCESSING` and records the
+  dispatcher instance as `lease_owner` (migration 009; safe with several
   replicas). Events stuck in `PROCESSING` longer than the lease (5 min) are
-  reclaimed.
+  reclaimed, and **a reclaim counts as an attempt** (`retry_count + 1`,
+  `last_error` = lease expired): a poison event that crashes or hangs every
+  dispatcher ends `FAILED` after `max_retries` reclaims.
+- `MarkPublished` / `MarkRetry` only update a row that is still
+  `PROCESSING` under the caller's `lease_owner` (`store.ErrLeaseLost`
+  otherwise): a dispatcher whose lease expired cannot overwrite the result of
+  the one that reclaimed the event.
+- Each publish has a timeout (`OUTBOX_PUBLISH_TIMEOUT`, default 30 s, always
+  below the lease); a publisher that ignores its context is abandoned at the
+  deadline and the event is retried (`outbox publish timed out`).
 - On publisher error (or panic) `MarkRetry` increments `retry_count`, stores
   `last_error` and sets `next_attempt_at = now + 1s * 2^retry_count` (capped at
   5 min, migration 004). At `max_retries` (default 5) the event becomes
@@ -92,6 +104,9 @@ goroutine; on SIGTERM it is stopped after the HTTP server drains.
 | `OUTBOX_POLL_INTERVAL` | `2s` | dispatcher poll interval (Go duration) |
 | `OUTBOX_BATCH_SIZE` | `50` | events claimed per pass |
 | `OUTBOX_PUBLISHER` | `log` | `log` or `noop` |
+| `OUTBOX_PUBLISH_TIMEOUT` | `30s` | per-event publish timeout (kept below the 5 min lease) |
+| `PAYOUT_RECONCILE_INTERVAL` | `1m` | payout recovery pass interval |
+| `PAYOUT_RECONCILE_AFTER` | `10m` | minimum payout age before recovery (≥ 1 min) |
 | `DEFAULT_PLATFORM_FEE_BPS` | `200` | platform tariff for merchants without `platform_fee_bps` (0..10000) |
 | `TEST_DATABASE_URL` | empty | enables real-Postgres integration tests |
 

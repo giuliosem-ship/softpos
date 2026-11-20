@@ -3,7 +3,9 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,23 +13,25 @@ import (
 	"softpos/pkg/store"
 )
 
-// memSource is an in-memory Source with the same semantics as the SQL repo.
+// memSource is an in-memory Source with the same semantics as the SQL repo
+// (leases with owners; reclaiming an expired lease counts as an attempt).
 type memSource struct {
 	mu      sync.Mutex
 	events  map[int64]*store.OutboxEvent
 	next    map[int64]time.Time
+	owner   map[int64]string
 	claimed int
 }
 
 func newMemSource(n, maxRetries int) *memSource {
-	s := &memSource{events: map[int64]*store.OutboxEvent{}, next: map[int64]time.Time{}}
+	s := &memSource{events: map[int64]*store.OutboxEvent{}, next: map[int64]time.Time{}, owner: map[int64]string{}}
 	for i := 1; i <= n; i++ {
 		s.events[int64(i)] = &store.OutboxEvent{ID: int64(i), EventType: "payment.settled", AggregateID: "p", Status: "PENDING", MaxRetries: maxRetries}
 	}
 	return s
 }
 
-func (s *memSource) ClaimDueEvents(_ context.Context, limit int, now time.Time, lease time.Duration) ([]store.OutboxEvent, error) {
+func (s *memSource) ClaimDueEvents(_ context.Context, limit int, now time.Time, lease time.Duration, owner string) ([]store.OutboxEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.OutboxEvent
@@ -38,13 +42,23 @@ func (s *memSource) ClaimDueEvents(_ context.Context, limit int, now time.Time, 
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	for _, id := range ids {
 		ev := s.events[id]
-		due := ev.RetryCount < ev.MaxRetries &&
-			((ev.Status == "PENDING" && !s.next[id].After(now)) || (ev.Status == "PROCESSING" && !ev.UpdatedAt.After(now.Add(-lease))))
+		reclaim := ev.Status == "PROCESSING" && !ev.UpdatedAt.After(now.Add(-lease))
+		due := ev.RetryCount < ev.MaxRetries && ((ev.Status == "PENDING" && !s.next[id].After(now)) || reclaim)
 		if !due {
 			continue
 		}
-		ev.Status = "PROCESSING"
 		ev.UpdatedAt = now
+		if reclaim {
+			ev.RetryCount++
+			ev.LastError = store.LeaseExpiredError
+			if ev.RetryCount >= ev.MaxRetries {
+				ev.Status = "FAILED"
+				s.owner[id] = ""
+				continue
+			}
+		}
+		ev.Status = "PROCESSING"
+		s.owner[id] = owner
 		out = append(out, *ev)
 		s.claimed++
 		if len(out) == limit {
@@ -54,17 +68,24 @@ func (s *memSource) ClaimDueEvents(_ context.Context, limit int, now time.Time, 
 	return out, nil
 }
 
-func (s *memSource) MarkPublished(_ context.Context, id int64) error {
+func (s *memSource) MarkPublished(_ context.Context, id int64, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.events[id].Status != "PROCESSING" || s.owner[id] != owner {
+		return store.ErrLeaseLost
+	}
 	s.events[id].Status = "PUBLISHED"
+	s.owner[id] = ""
 	return nil
 }
 
-func (s *memSource) MarkRetry(_ context.Context, id int64, msg string, next time.Time) error {
+func (s *memSource) MarkRetry(_ context.Context, id int64, owner, msg string, next time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ev := s.events[id]
+	if ev.Status != "PROCESSING" || s.owner[id] != owner {
+		return store.ErrLeaseLost
+	}
 	ev.RetryCount++
 	ev.LastError = msg
 	if ev.RetryCount >= ev.MaxRetries {
@@ -72,6 +93,7 @@ func (s *memSource) MarkRetry(_ context.Context, id int64, msg string, next time
 	} else {
 		ev.Status = "PENDING"
 	}
+	s.owner[id] = ""
 	s.next[id] = next
 	return nil
 }
@@ -184,7 +206,7 @@ func TestRunOnce_ReclaimsExpiredLease(t *testing.T) {
 	src := newMemSource(1, 5)
 	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
 	// Simulate a crashed dispatcher that claimed the event.
-	_, _ = src.ClaimDueEvents(context.Background(), 10, clock.Now(), time.Minute)
+	_, _ = src.ClaimDueEvents(context.Background(), 10, clock.Now(), time.Minute, "crashed-dispatcher")
 	d := NewDispatcher(src, NoopPublisher{}, Config{Lease: time.Minute, Now: clock.Now})
 	if res, _ := d.RunOnce(context.Background()); res.Published != 0 {
 		t.Fatalf("event with live lease must not be reclaimed")
@@ -241,5 +263,85 @@ func TestRunOnce_CancelledContextStopsBatchButRecordsCurrent(t *testing.T) {
 	}
 	if st, _, _ := src.status(2); st != "PROCESSING" {
 		t.Fatalf("unprocessed claimed event should stay PROCESSING for lease reclaim, got %s", st)
+	}
+}
+
+func TestRunOnce_ReclaimCountsAsAttemptAndPoisonEventFails(t *testing.T) {
+	src := newMemSource(1, 3)
+	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	// Every dispatcher that claims the poison event crashes before recording a result.
+	for i := 0; i < 3; i++ {
+		evs, _ := src.ClaimDueEvents(context.Background(), 10, clock.Now(), time.Minute, fmt.Sprintf("crash-%d", i))
+		if i < 3 && len(evs) != 1 {
+			t.Fatalf("claim %d: got %d events", i, len(evs))
+		}
+		clock.Advance(time.Minute)
+	}
+	// The 3rd reclaim reaches max_retries: dead-lettered, never handed out again.
+	d := NewDispatcher(src, NoopPublisher{}, Config{Lease: time.Minute, Now: clock.Now})
+	res, err := d.RunOnce(context.Background())
+	if err != nil || res.Published != 0 {
+		t.Fatalf("poison event must not be published: %+v %v", res, err)
+	}
+	if st, retries, _ := src.status(1); st != "FAILED" || retries != 3 {
+		t.Fatalf("want FAILED after 3 expired leases, got %s retries=%d", st, retries)
+	}
+}
+
+func TestRunOnce_PublishTimeoutIsRetried(t *testing.T) {
+	src := newMemSource(1, 5)
+	release := make(chan struct{})
+	defer close(release)
+	hung := PublisherFunc(func(context.Context, store.OutboxEvent) error {
+		<-release // ignores its context entirely
+		return nil
+	})
+	d := NewDispatcher(src, hung, Config{PublishTimeout: 20 * time.Millisecond, Lease: time.Minute})
+	start := time.Now()
+	res, err := d.RunOnce(context.Background())
+	if err != nil || res.Retried != 1 || res.Published != 0 {
+		t.Fatalf("hung publish must be retried: %+v %v", res, err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("publish timeout not enforced")
+	}
+	src.mu.Lock()
+	lastErr := src.events[1].LastError
+	src.mu.Unlock()
+	if !strings.Contains(lastErr, ErrPublishTimeout.Error()) {
+		t.Fatalf("last_error=%q", lastErr)
+	}
+}
+
+func TestConfig_PublishTimeoutBelowLease(t *testing.T) {
+	c := Config{Lease: time.Second, PublishTimeout: time.Minute}.withDefaults()
+	if c.PublishTimeout >= c.Lease || c.Owner == "" {
+		t.Fatalf("publish timeout %v must be < lease %v and owner set (%q)", c.PublishTimeout, c.Lease, c.Owner)
+	}
+	if NewDispatcher(newMemSource(0, 1), nil, Config{}).Owner() == NewDispatcher(newMemSource(0, 1), nil, Config{}).Owner() {
+		t.Fatalf("dispatcher owners must be unique")
+	}
+}
+
+func TestRunOnce_StaleOwnerResultIsDiscarded(t *testing.T) {
+	src := newMemSource(1, 5)
+	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	var b *Dispatcher
+	// A's publish is slow: while it runs, its lease expires and B reclaims and publishes.
+	slow := PublisherFunc(func(context.Context, store.OutboxEvent) error {
+		clock.Advance(2 * time.Minute)
+		if res, err := b.RunOnce(context.Background()); err != nil || res.Published != 1 {
+			t.Errorf("B must reclaim and publish: %+v %v", res, err)
+		}
+		return errors.New("A failed late")
+	})
+	a := NewDispatcher(src, slow, Config{Lease: time.Minute, Now: clock.Now, Owner: "A"})
+	b = NewDispatcher(src, NoopPublisher{}, Config{Lease: time.Minute, Now: clock.Now, Owner: "B"})
+	res, err := a.RunOnce(context.Background())
+	if err != nil || res.LeaseLost != 1 || res.Retried != 0 {
+		t.Fatalf("A's late result must be discarded: %+v %v", res, err)
+	}
+	if st, retries, _ := src.status(1); st != "PUBLISHED" || retries != 1 {
+		t.Fatalf("B's publish must stand: %s retries=%d", st, retries)
 	}
 }

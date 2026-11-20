@@ -84,14 +84,25 @@ also validates the wrapper jar against Gradle's published checksums.
   the backend derives it) → `TapToPayProvider.collect(intent)` starts the
   processor SDK with `provider_payment_id` + `client_secret` (never logged) →
   poll `GET /api/v1/card-payments/{id}` until `final:true` (backoff 0.5 s ×1.5,
-  capped at 3 s, 60 s timeout → "en confirmación", check *Ventas*). The SDK
+  capped at 3 s, 60 s timeout measured on a monotonic clock so slow GETs
+  count → "en confirmación", check *Ventas*). `final` is false only for
+  `CREATED`/`AUTHORIZED`. The SDK only starts for a `CREATED` intent with a
+  `client_secret`: a replay of an already tapped intent (no secret) goes
+  straight to polling and is never canceled by the app. The SDK
   result is informative only; the screen follows the backend status:
   `CAPTURED` (or later refund/chargeback states) = approved, `DECLINED` shows
   the `decline_code`, `CANCELED` back to the keypad.
-- Retries: a network error or `502 ACQUIRER_UNAVAILABLE` keeps the key, so
-  the retry replays the same intent (one charge). Any other answer
-  (`409 IDEMPOTENCY_KEY_REUSED`, `503 ACQUIRER_NOT_CONFIGURED`, a KYB `403`,
-  a decline, a cancel) drops it and the next attempt is a new intent.
+- Retries (`isUnknownOutcome`, shared with refunds): no response, an
+  unparsable one, or any 5xx except `ACQUIRER_REJECTED` /
+  `ACQUIRER_NOT_CONFIGURED` keeps the key (e.g. `502 ACQUIRER_UNAVAILABLE`,
+  `500 CARD_PAYMENT_STORE_FAILED` after the row was stored, a proxy `504`),
+  so the retry replays the same intent. Any 4xx (`409 IDEMPOTENCY_KEY_REUSED`,
+  `403 MERCHANT_NOT_APPROVED`...), a definitive rejection, a decline or a
+  cancel drops it and the next attempt is a new intent. Changing the amount
+  also drops it (the backend would answer `IDEMPOTENCY_KEY_REUSED`).
+- Merchant gate: `403 MERCHANT_NOT_APPROVED` (onboarding not approved) links
+  to the KYB screen; `403 MERCHANT_BLOCKED` (blocked by an operator) shows
+  its own message. Exact codes, no substring matching.
 - *Cancelar cobro* while waiting for the card stops the SDK and calls
   `POST /api/v1/card-payments/{id}/cancel` (`200` canceled / `202` requested;
   the webhook moves the status). An SDK failure also cancels the intent.
@@ -105,6 +116,10 @@ also validates the wrapper jar against Gradle's published checksums.
 
 `GET /api/v1/merchants/{id}/sales?limit=50&before=<cursor>` →
 `{"items":[{id, kind:"card"|"spei"|"codi", status, amount_cents, created_at, card_payment_id?}], "next_cursor"}`.
+Statuses: card = `card_payments.status`; SPEI and CoDi rows come from
+`merchant_sales`, which only holds credited money (`RECEIVED` / `CONFIRMED`,
+both shown as approved). A card intent that was never tapped stays `CREATED`
+(shown as pending).
 The list asks for the next page (`before=next_cursor`) when its end is
 reached; `null` = last page; duplicates across pages are dropped; *Actualizar*
 starts over from the first page.
@@ -118,8 +133,11 @@ and shows captured / refunded / chargeback amounts, the settlement split
 refund the whole refundable remainder (`{}`) or a typed amount
 (`MoneyParser`, Long cents, ≤ 2 decimals, ≤ refundable), after a
 confirmation dialog: `POST /api/v1/card-payments/{id}/refunds` with an
-`Idempotency-Key` stable per attempt and amount (kept on network errors and
-`502 ACQUIRER_UNAVAILABLE`, dropped on any other answer). The `202 PENDING`
+`Idempotency-Key` stable per attempt and amount (kept while the outcome is
+unknown, same rule as intents: e.g. `500 CARD_REFUND_STORE_FAILED` can follow
+a refund the processor accepted; dropped on 4xx and `502 ACQUIRER_REJECTED`,
+whose body also carries the `FAILED` refund). Cashiers get `403
+ROLE_FORBIDDEN` unless the backend sets `ALLOW_CASHIER_REFUNDS`. The `202 PENDING`
 request is shown as such; the money moves when the processor's
 `payment.refunded` arrives (in debug the DEV simulator plays it with
 `{"outcome":"refund","refund_id"}`). Statuses `PARTIALLY_REFUNDED`,
@@ -145,29 +163,53 @@ status; while it is not `APPROVED` it shows the status card, disables *Nuevo
 cobro* and opens the onboarding screen automatically once per app session (a
 KYB `403` on a charge also links there). Flow for the owner: `DRAFT` → form
 (client-side checks: RFC shape from `KybOnboardingPresenter`, CURP incl. the
-state code, SAT regime 3 digits, MCC 4 digits, CP 5 digits, email, Mexican
-mobile → E.164) → `PUT` → documents → `submit` → status. Each required
-document (`required_documents`; all six when the backend sends none) is
+state code, `tax_regime` as the backend enum — `RESICO_PF` preselected, the
+only one that passes submission; `RESICO_PM`, `ACTIVIDAD_EMPRESARIAL_PF`,
+`PLATAFORMAS_TECNOLOGICAS_PF`, `GENERAL_PM`, `OTHER` — MCC 4 digits, CP 5
+digits, email, Mexican mobile → E.164 `+52…`, which matches the backend
+`^\+[1-9][0-9]{7,14}$`) → `PUT` (`400 INVALID_KYB_DATA {fields}` marks those
+fields) → documents → `submit` → status. The owner's GET carries
+`application` and `uploaded_documents`: a resumed or rejected onboarding
+prefills the form and counts stored documents as received. Each required
+document (`required_documents`, always the six types today) is
 captured with the camera intent (`TakePicture` into a FileProvider cache
 file that is overwritten and deleted after reading), the system photo picker
 (`PickVisualMedia`, no storage permission) or, for CSF / proof of address /
 bank statement, a PDF (`GetContent`). Photos are decoded with
 `ImageDecoder` (EXIF rotation applied), scaled to ≤ 2048 px and re-encoded as
-JPEG 85 (drops EXIF/GPS); max 10 MB per file. Upload streams in 16 KiB chunks
+JPEG 85 (drops EXIF/GPS); max 5 MiB per file (backend `MaxDocumentBytes`;
+`413 DOCUMENT_TOO_LARGE` otherwise), upload answers `201`. Upload streams in 16 KiB chunks
 with a progress bar; document bytes are zeroed after a successful upload, on
 replacement and when the screen's ViewModel is cleared (a failed upload keeps
-them for *Reintentar*). `REJECTED` shows the `reason` and lets the owner
-correct and resubmit; `SUBMITTED`/`IN_REVIEW` only show the status;
-cashiers/operators see the status and "solo el dueño…". A `404` with a
-backend error code is treated as "no application yet" (`DRAFT`); a bare
-`404` (endpoint missing on an older backend) disables the routing.
+them for *Reintentar*; the PDF read buffer is zeroed on every exit path).
+Submit answers `200` with `IN_REVIEW` (or `REJECTED` + `RFC_LISTED_69B`),
+never `SUBMITTED` in practice; `422 KYB_CHECKS_FAILED` returns the KYB body
+with status `DRAFT` and a check `reason` (`RFC_INVALID`,
+`PERSONA_MORAL_NOT_SUPPORTED`, `UNSUPPORTED_TAX_REGIME`, `CURP_RFC_MISMATCH`,
+`DOCUMENTS_INCOMPLETE`, `APPLICATION_INCOMPLETE`), shown translated on the
+status screen with *Corregir*; `409 KYB_ALREADY_SUBMITTED` reloads the
+status. `REJECTED` shows the operator's `reason` and lets the owner correct
+and resubmit; `IN_REVIEW` only shows the status; cashiers/operators see the
+status and "solo el dueño…" (no `application` in their response). The
+backend never answers `404` for a merchant's KYB (it creates a `DRAFT` on
+first read); the client still treats a bare `404` as "endpoint missing" and
+disables the routing.
+
+### Contract tests
+
+`src/test/resources/contract/*.json` are response bodies captured from the
+Go handlers of batch G (KYB GET/PUT/upload/submit incl. 400/409/422, card
+intent/payment/cancel/refund, sales, the `403 MERCHANT_NOT_APPROVED` gate);
+`contract/KybContractTest` and `contract/PaymentsContractTest` decode them
+through the real HTTP clients and ViewModels. Regenerate them from the
+backend tests when a response struct changes.
 
 ## What is mocked or provisional
 
 | Item | Status |
 |---|---|
-| `SalesApi` | Contract defined with the backend batch that builds `/merchants/{id}/sales` in parallel; the client follows it exactly. |
-| `TapToPayProvider` | Debug: `MockTapToPayProvider` waits 1.5 s and calls `POST /api/v1/dev/card-payments/{id}/simulate {"outcome":"tap"}` (cancel → `"cancel"`), so a debug build against a `DEV_MODE` backend with the mock acquirer runs the real intent → webhook → ledger → polling path. Outcomes follow the backend mock scenarios: amounts ending in **51** centavos are declined, **52** make the processor time out (`502`, retry with the same key). Without `DEV_MODE` the simulate call fails and the charge ends as a tap failure (intent canceled). Release: `UnavailableTapToPayProvider` (card button disabled; `BuildConfig.DEV_TAP_SIMULATOR=false`, no simulator wired) so a release build can never fake a processor event. |
+| `SalesApi` | Real backend endpoint since batch G (checked by the contract fixtures). |
+| `TapToPayProvider` | Debug: `MockTapToPayProvider` waits 1.5 s and calls `POST /api/v1/dev/card-payments/{id}/simulate {"outcome":"tap"}` (cancel → `"cancel"`), so a debug build against a `DEV_MODE` backend with the mock acquirer runs the real intent → webhook → ledger → polling path. Outcomes follow the backend mock scenarios: amounts ending in **51** centavos are declined, **52** make the processor time out (`502`, retry with the same key). Without `DEV_MODE` the simulate call fails and the charge ends as a tap failure (intent canceled). Release: `UnavailableTapToPayProvider` (card button disabled; `BuildConfig.DEV_TAP_SIMULATOR=false`, no simulator wired) so a release build can never fake a processor event. CI fails if the release dex mentions `api/v1/dev/card-payments` or `MockTapToPay`. |
 | Legacy EMV client | `SoftPosApiClient.authorizeEmv` (`/api/v1/payments/emv/authorize`, `410` without `DEV_MODE`) was removed. The pure fake of the card backend lives only in unit tests (`FakeCardBackend`). |
 | Play Integrity | Not wired into the app yet (`PlayIntegrityClient` is still pure logic). |
 
@@ -176,8 +218,9 @@ backend error code is treated as "no application yet" (`DRAFT`); a bare
 1. Processor **Tap to Pay on Android SDK**: implement `TapToPayProvider` with it
    (device checks, attestation, permissions); the card contract is already final.
 2. Real **Play Integrity**: Google SDK token + `/api/v1/auth/attestation/verify`,
-   bound to login. Note the backend default `PLAY_INTEGRITY_PACKAGE` is still
-   `mx.softpos.app`; the app id is now `mx.kerno.softpos`.
+   bound to login. The backend default `PLAY_INTEGRITY_PACKAGE` is now
+   `mx.kerno.softpos` (debug builds are `mx.kerno.softpos.debug`: set the
+   variable when testing attestation with a debug build).
 3. **Signing and distribution**: upload key in CI secrets, Play App Signing,
    internal/closed track, forced minimum version (targetSdk is already 36).
 4. **Crash reporting / telemetry** (Crashlytics or Sentry) with PII scrubbing.

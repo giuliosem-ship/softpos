@@ -18,6 +18,10 @@ tooling, **never by a public endpoint**:
 | Bootstrap at boot | `BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE=+52…` — `cmd/server` creates the user if needed and grants it (idempotent, `created_by = bootstrap:env`). |
 | CLI | `DATABASE_URL=… go run ./cmd/operatorctl add|remove|check +52…` (database already migrated; `created_by = operatorctl:<os user>`). |
 
+**Segregation of duties:** an operator who is also a member of a merchant
+(e.g. its owner) cannot approve that merchant's onboarding nor unblock it
+(`403 OPERATOR_IS_MERCHANT_MEMBER`); another operator must.
+
 Removal takes effect on the next request: every backoffice call re-checks
 `platform_operators`, and a refresh of a backoffice session fails with `403`.
 

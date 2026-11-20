@@ -335,3 +335,33 @@ func TestBackoffice_StaticUIWithCSP(t *testing.T) {
 		t.Fatal("the backoffice page must not use inline script or style (CSP)")
 	}
 }
+
+// Audit (batch G): segregation of duties. A platform operator who is also a
+// member of a merchant (its owner, typically) cannot approve that merchant's
+// onboarding nor lift its block.
+func TestBackoffice_OperatorCannotDecideOwnMerchant(t *testing.T) {
+	s, _ := setupTestServer(t)
+	s.SetAcquirerProvider(acquirer.NewMockProvider(acquirer.MockConfig{}))
+	m := "m_bo_own"
+	submittedMerchant(t, s, m)
+	tok, opID := operatorToken(t, s, "+525500000071")
+	if err := s.AuthService().AddMembership(context.Background(), opID, m, auth.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	if rec := boCall(s, tok, http.MethodPost, "/api/v1/backoffice/merchants/"+m+"/kyb/approve", map[string]any{}); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "OPERATOR_IS_MERCHANT_MEMBER") {
+		t.Fatalf("self approval: want 403 OPERATOR_IS_MERCHANT_MEMBER, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec, _, _ := s.MerchantKYB(context.Background(), m); rec.Status == kyb.StatusApproved {
+		t.Fatal("operator approved its own merchant")
+	}
+	other, _ := operatorToken(t, s, "+525500000072")
+	if rec := boCall(s, other, http.MethodPost, "/api/v1/backoffice/merchants/"+m+"/block", map[string]any{"reason": "review"}); rec.Code != http.StatusOK {
+		t.Fatalf("block: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := boCall(s, tok, http.MethodPost, "/api/v1/backoffice/merchants/"+m+"/unblock", map[string]any{}); rec.Code != http.StatusForbidden {
+		t.Fatalf("self unblock: want 403, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := boCall(s, other, http.MethodPost, "/api/v1/backoffice/merchants/"+m+"/kyb/approve", map[string]any{}); rec.Code != http.StatusOK {
+		t.Fatalf("approval by another operator: %d %s", rec.Code, rec.Body.String())
+	}
+}

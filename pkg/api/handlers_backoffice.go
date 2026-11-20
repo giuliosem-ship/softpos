@@ -98,6 +98,25 @@ func (s *Server) requirePlatformOperator(w http.ResponseWriter, r *http.Request)
 	return user, true
 }
 
+// requireNotMerchantMember enforces segregation of duties: a platform
+// operator who is a member of the merchant (its owner, typically) cannot
+// decide on it (approve its onboarding, lift its block).
+func (s *Server) requireNotMerchantMember(w http.ResponseWriter, r *http.Request, operator, merchantID string) bool {
+	memberships, err := s.authService().Repository().ListMemberships(r.Context(), operator)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "OPERATOR_LOOKUP_FAILED")
+		return false
+	}
+	for _, m := range memberships {
+		if m.MerchantID == merchantID {
+			slog.Warn("operator decision on own merchant refused", "operator", operator, "merchant_id", merchantID)
+			writeError(w, http.StatusForbidden, "OPERATOR_IS_MERCHANT_MEMBER")
+			return false
+		}
+	}
+	return true
+}
+
 // backoffice wraps a handler with the platform-operator check.
 func (s *Server) backoffice(h func(w http.ResponseWriter, r *http.Request, operator string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -372,6 +391,9 @@ func (s *Server) handleBOApprove(w http.ResponseWriter, r *http.Request, op stri
 		return
 	}
 	id := r.PathValue("merchant")
+	if !s.requireNotMerchantMember(w, r, op, id) {
+		return
+	}
 	before, found, err := s.MerchantKYB(r.Context(), id)
 	if err == nil && !found {
 		err = ErrKYBNotFound
@@ -439,6 +461,9 @@ func (s *Server) handleBOBlock(block bool) func(http.ResponseWriter, *http.Reque
 		id := r.PathValue("merchant")
 		if _, found := s.GetMerchant(id); !found {
 			writeError(w, http.StatusNotFound, "MERCHANT_NOT_FOUND")
+			return
+		}
+		if !block && !s.requireNotMerchantMember(w, r, op, id) {
 			return
 		}
 		ctx := r.Context()

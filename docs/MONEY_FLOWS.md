@@ -69,8 +69,10 @@ as a card settle but fee 0; accumulator `+= base`; outbox `codi.confirmed`.
 
 ## STP abono — `POST /api/v1/webhooks/stp/abono`
 
-Signed by STP (RSA or HMAC). Exactly-once key: `stp:abono:<claveRastreo>`
-(required). Journal `spei_in_<claveRastreo>`: Dr `ASSET:STP_CONCENTRATOR`, Cr
+Signed by STP (RSA or HMAC). Exactly-once key:
+`stp:abono:<institucionOrdenante>:<claveRastreo>` (a clave is unique only per
+sending institution; both fields are signed, `fechaOperacion` is not and so is
+not part of the key). Journal `spei_in_<institucionOrdenante>:<claveRastreo>`: Dr `ASSET:STP_CONCENTRATOR`, Cr
 `AVAILABLE` (no tax split yet); outbox `spei.abono_received`.
 
 ## Refund / void — `POST /api/v1/payments/emv/reverse`

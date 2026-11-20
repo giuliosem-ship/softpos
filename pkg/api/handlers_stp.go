@@ -119,10 +119,15 @@ func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exactly-once on claveRastreo: the key claim, the journal and the outbox
-	// event commit in one transaction; a duplicate replays the first response.
+	// Exactly-once on (institucionOrdenante, claveRastreo): a clave de rastreo
+	// is only unique per sending institution, and both fields are covered by
+	// the signature (fechaOperacion is not, so it cannot be part of the key
+	// without letting a replay with another date credit twice). The key
+	// claim, the journal and the outbox event commit in one transaction; a
+	// duplicate replays the first response.
 	ctx := r.Context()
-	opKey := "stp:abono:" + req.ClaveRastreo
+	abonoRef := strings.TrimSpace(req.InstitucionOrdenante) + ":" + req.ClaveRastreo
+	opKey := "stp:abono:" + abonoRef
 	var respBytes []byte
 	err = s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
 		claimed, _, prior, err := tx.ClaimOperation(ctx, opKey)
@@ -135,10 +140,10 @@ func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 		}
 		// Double-entry posting: Debit STP Concentrator, Credit Merchant Available
 		availableAccountID := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", merchant.ID)
-		journal, err := ledger.NewJournalEntry("spei_in_"+req.ClaveRastreo, nowUTC(), "SPEI Inbound Abono "+req.ClaveRastreo, []ledger.Entry{
+		journal, err := ledger.NewJournalEntry("spei_in_"+abonoRef, nowUTC(), "SPEI Inbound Abono "+req.ClaveRastreo, []ledger.Entry{
 			{AccountID: "ASSET:STP_CONCENTRATOR", Direction: ledger.Debit, Money: ledger.NewMoney(montoCents, "MXN")},
 			{AccountID: availableAccountID, Direction: ledger.Credit, Money: ledger.NewMoney(montoCents, "MXN")},
-		}, map[string]string{"clave_rastreo": req.ClaveRastreo, "stp_id": strconv.FormatInt(req.ID, 10)})
+		}, map[string]string{"clave_rastreo": req.ClaveRastreo, "institucion_ordenante": req.InstitucionOrdenante, "stp_id": strconv.FormatInt(req.ID, 10)})
 		if err != nil {
 			return err
 		}

@@ -263,3 +263,25 @@ func (f failingPostStore) InTx(ctx context.Context, fn func(tx store.MoneyTx) er
 func (failingPostTx) PostJournal(context.Context, *ledger.JournalEntry) error {
 	return errors.New("simulated ledger failure")
 }
+
+// SPEI claves de rastreo are unique per sending institution (and day), not
+// globally: the same clave from two banks is two different deposits.
+func TestSTPAbono_SameClaveFromDifferentBanksCreditsBoth(t *testing.T) {
+	s, _ := setupTestServer(t)
+	const m, clabe = "merch_abono_banks", "646180000000000014"
+	_ = s.RegisterMerchantCLABE(clabe, m, "GARM850101ABC")
+	for _, inst := range []string{"40012", "40002"} {
+		canonical := s.stpSigner.BuildAbonoCanonicalString(clabe, 30000, "12345", inst, "012180001234567890")
+		body := map[string]any{
+			"id": 1, "fechaOperacion": 20261120, "institucionOrdenante": inst, "institucionBeneficiaria": "646",
+			"claveRastreo": "12345", "monto": json.Number("300.00"), "cuentaOrdenante": "012180001234567890",
+			"cuentaBeneficiario": clabe, "firma": s.stpSigner.SignHMAC(canonical),
+		}
+		if rec := serve(s, jsonReq("POST", "/api/v1/webhooks/stp/abono", body)); rec.Code != http.StatusOK {
+			t.Fatalf("abono from %s: %d %s", inst, rec.Code, rec.Body.String())
+		}
+	}
+	if got := availableCents(t, s, m); got != 60000 {
+		t.Fatalf("available = %d, want 60000 (two distinct deposits)", got)
+	}
+}

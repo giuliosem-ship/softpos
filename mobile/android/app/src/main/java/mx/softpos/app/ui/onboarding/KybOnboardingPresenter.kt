@@ -28,6 +28,9 @@ sealed interface KybValidationResult {
 object KybOnboardingPresenter {
     private val RFC_REGEX = Regex("^[A-Z&Ñ]{3,4}[0-9]{6}[A-Z0-9]{3}$")
 
+    /** SAT RFC shape: 12 chars (persona moral) or 13 (persona física), upper case. */
+    fun isValidRfc(rfc: String): Boolean = RFC_REGEX.matches(rfc.trim().uppercase())
+
     fun validateCsdBundle(bundle: CsdUploadBundle): KybValidationResult {
         val errors = mutableListOf<String>()
 

@@ -35,7 +35,7 @@ import mx.softpos.app.core.money.MoneyFormatter
 import mx.softpos.app.ui.codi.CodiQrMatrix
 
 @Composable
-fun ChargeScreen(viewModel: ChargeViewModel) {
+fun ChargeScreen(viewModel: ChargeViewModel, onOnboarding: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -44,7 +44,12 @@ fun ChargeScreen(viewModel: ChargeViewModel) {
     ) {
         when (val step = state.step) {
             ChargeStep.Entering -> AmountEntry(state, viewModel)
-            is ChargeStep.ProcessingCard -> Processing(stringResource(step.stage.messageRes()), state.amountCents)
+            is ChargeStep.ProcessingCard -> {
+                Processing(stringResource(step.stage.messageRes()), state.amountCents)
+                if (step.stage == CardStage.WAITING_FOR_CARD) {
+                    TextButton(onClick = viewModel::cancelCardCharge) { Text(stringResource(R.string.charge_cancel)) }
+                }
+            }
             ChargeStep.LoadingSpei -> Processing(stringResource(R.string.charge_spei_loading), state.amountCents)
             is ChargeStep.CardApproved -> Result(
                 title = stringResource(R.string.charge_card_approved),
@@ -60,7 +65,16 @@ fun ChargeScreen(viewModel: ChargeViewModel) {
             )
             is ChargeStep.SpeiQr -> SpeiQrView(step, onDone = viewModel::newCharge, onBack = viewModel::backToAmount)
         }
-        state.error?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
+        state.error?.let { error ->
+            val code = state.declineCode
+            val message = if (error == ChargeError.DECLINED && code != null) {
+                stringResource(R.string.charge_error_declined_code, code)
+            } else stringResource(error.messageRes())
+            Text(message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            if (error == ChargeError.NOT_APPROVED) {
+                TextButton(onClick = onOnboarding) { Text(stringResource(R.string.home_kyb_cta)) }
+            }
+        }
     }
 }
 
@@ -162,6 +176,12 @@ private fun ChargeError.messageRes(): Int = when (this) {
     ChargeError.DECLINED -> R.string.charge_error_declined
     ChargeError.CANCELLED -> R.string.charge_error_cancelled
     ChargeError.NETWORK -> R.string.error_network
+    ChargeError.ACQUIRER_UNAVAILABLE -> R.string.charge_error_acquirer_unavailable
+    ChargeError.CARD_NOT_CONFIGURED -> R.string.charge_error_card_not_configured
+    ChargeError.IDEMPOTENCY_CONFLICT -> R.string.charge_error_idempotency
+    ChargeError.NOT_APPROVED -> R.string.charge_error_not_approved
+    ChargeError.MERCHANT_BLOCKED -> R.string.charge_error_merchant_blocked
+    ChargeError.TAP_FAILED -> R.string.charge_error_tap_failed
     ChargeError.NOT_AVAILABLE -> R.string.error_not_available
     ChargeError.UNKNOWN -> R.string.error_unknown
 }

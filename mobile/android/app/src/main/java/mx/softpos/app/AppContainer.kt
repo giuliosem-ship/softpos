@@ -7,15 +7,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import mx.softpos.app.auth.AuthApi
 import mx.softpos.app.auth.HttpAuthApi
+import mx.softpos.app.auth.MembershipInfo
 import mx.softpos.app.auth.SessionManager
 import mx.softpos.app.auth.authenticatedClient
 import mx.softpos.app.auth.keystoreTokenStore
+import mx.softpos.app.kyb.HttpKybApi
+import mx.softpos.app.kyb.KybApi
 import mx.softpos.app.merchant.HttpMerchantApi
+import mx.softpos.app.ui.onboarding.DocumentReader
 import mx.softpos.app.merchant.MerchantApi
 import mx.softpos.app.payments.CardPaymentsApi
+import mx.softpos.app.payments.DevCardSimulator
 import mx.softpos.app.payments.HttpCardPaymentsApi
+import mx.softpos.app.payments.HttpDevCardSimulator
 import mx.softpos.app.payments.HttpSalesApi
-import mx.softpos.app.payments.InMemoryPaymentsBackend
 import mx.softpos.app.payments.MockTapToPayProvider
 import mx.softpos.app.payments.SalesApi
 import mx.softpos.app.payments.TapToPayProvider
@@ -46,27 +51,34 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
 
     val merchantApi: MerchantApi by lazy { HttpMerchantApi(baseUrl, apiClient) }
 
-    private val mockPayments by lazy { InMemoryPaymentsBackend() }
+    val kybApi: KybApi by lazy { HttpKybApi(baseUrl, apiClient) }
 
-    /** PROVISIONAL endpoints (docs/ANDROID_APP.md); in-memory in debug. */
-    val cardPaymentsApi: CardPaymentsApi by lazy {
-        if (BuildConfig.MOCK_PAYMENTS) mockPayments else HttpCardPaymentsApi(baseUrl, apiClient)
+    val documentReader: DocumentReader by lazy { DocumentReader(appContext) }
+
+    /** Real `/api/v1/card-payments/...` contract (docs/ACQUIRER_INTEGRATION.md) in every build. */
+    val cardPaymentsApi: CardPaymentsApi by lazy { HttpCardPaymentsApi(baseUrl, apiClient) }
+
+    val salesApi: SalesApi by lazy { HttpSalesApi(baseUrl, apiClient) }
+
+    /**
+     * Debug only: the backend DEV_MODE endpoint that plays the processor
+     * webhooks. Null in release, so nothing can fake a processor event there.
+     */
+    val devCardSimulator: DevCardSimulator? by lazy {
+        if (BuildConfig.DEV_TAP_SIMULATOR) HttpDevCardSimulator(baseUrl, apiClient) else null
     }
 
-    val salesApi: SalesApi by lazy {
-        if (BuildConfig.MOCK_PAYMENTS) mockPayments else HttpSalesApi(baseUrl, apiClient)
-    }
-
-    /** Mock until the processor SDK is integrated; never fakes approvals in release. */
+    /** Simulated tap until the processor SDK is integrated; card payments off in release. */
     val tapToPay: TapToPayProvider by lazy {
-        if (BuildConfig.MOCK_PAYMENTS) MockTapToPayProvider(onOutcome = mockPayments::onTapOutcome)
-        else UnavailableTapToPayProvider
+        devCardSimulator?.let { MockTapToPayProvider(it) } ?: UnavailableTapToPayProvider
     }
 
     /** Selected tenant of the current session (null if none yet). */
     fun currentMerchantId(): String? = sessionManager.current()?.merchantId?.ifBlank { null }
 
     fun currentRole(): String = sessionManager.current()?.role.orEmpty()
+
+    fun memberships(): List<MembershipInfo> = sessionManager.current()?.memberships.orEmpty()
 
     /** Process-wide scope for work that must outlive a screen (logout). */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

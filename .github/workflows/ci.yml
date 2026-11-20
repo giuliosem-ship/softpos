@@ -77,7 +77,7 @@ jobs:
         run: node --test web/pos/softpos_sdk.test.js
 
   kotlin:
-    name: Android app (unit tests + lint + debug APK, JDK 17)
+    name: Android app (unit tests + lint + debug and release APKs, JDK 17)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,14 +89,23 @@ jobs:
           distribution: temurin
           java-version: "17"
       # ubuntu-latest ships an Android SDK (ANDROID_HOME); this installs the
-      # licenses/platform the build needs (compileSdk 35, build-tools 35.0.0).
+      # licenses/platform the build needs (compileSdk 36, build-tools 35.0.0).
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-35 build-tools;35.0.0"
+          packages: "platforms;android-36 build-tools;35.0.0"
       # Validates gradle-wrapper.jar against the official checksums and caches.
       - uses: gradle/actions/setup-gradle@v4
-      - name: Unit tests, lint and debug APK
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      # Release = R8 minify + resource shrinking, unsigned (no keys in CI yet).
+      - name: Unit tests, lint, debug and release APKs
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease
+      # The DEV tap simulator must never ship: R8 has to strip it from release.
+      - name: Release APK carries no DEV simulator
+        run: |
+          d=$(mktemp -d)
+          unzip -q app/build/outputs/apk/release/app-release-unsigned.apk 'classes*.dex' -d "$d"
+          if grep -l -a -E 'api/v1/dev/card-payments|MockTapToPay' "$d"/classes*.dex; then
+            echo "release APK references the DEV card simulator"; exit 1
+          fi
 
   docker:
     name: Docker image build

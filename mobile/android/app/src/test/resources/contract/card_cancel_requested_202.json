@@ -1,0 +1,1 @@
+{"cancel_requested":true,"card_payment":{"card_payment_id":"cp_1","merchant_id":"merch_card_01","provider":"mock","provider_payment_id":"mock_pi_1","status":"CREATED","amount_cents":1234,"currency":"MXN","captured_cents":0,"refunded_cents":0,"chargeback_cents":0,"final":false,"created_at":"2026-11-20T16:23:17Z","updated_at":"2026-11-20T16:23:17Z"}}

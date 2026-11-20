@@ -9,7 +9,8 @@ android {
     // Kotlin package of the code, kept from the pure-logic module so imports and
     // tests stay stable. The store identity is `applicationId` below.
     namespace = "mx.softpos.app"
-    compileSdk = 35
+    // 36 = Play's target requirement for new uploads from 2026-08.
+    compileSdk = 36
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
@@ -17,7 +18,7 @@ android {
         // 28 (Android 9): floor of the Tap to Pay on Android SDKs evaluated for
         // the MVP and of StrongBox/hardware-backed Keystore AES-GCM.
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
     }
@@ -27,14 +28,15 @@ android {
             applicationIdSuffix = ".debug"
             // Android emulator alias of the host loopback (backend on :8080).
             buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080\"")
-            // In-memory card intents + sales and the mock Tap to Pay provider
-            // until the backend endpoints and the processor SDK exist.
-            buildConfigField("boolean", "MOCK_PAYMENTS", "true")
+            // Mock Tap to Pay provider that asks a DEV_MODE backend to play the
+            // processor webhooks (POST /api/v1/dev/card-payments/{id}/simulate)
+            // until the processor SDK is integrated.
+            buildConfigField("boolean", "DEV_TAP_SIMULATOR", "true")
         }
         release {
             // Placeholder until the production gateway exists; HTTPS only.
             buildConfigField("String", "API_BASE_URL", "\"https://api.kerno.mx\"")
-            buildConfigField("boolean", "MOCK_PAYMENTS", "false")
+            buildConfigField("boolean", "DEV_TAP_SIMULATOR", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

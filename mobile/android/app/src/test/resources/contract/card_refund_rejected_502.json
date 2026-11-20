@@ -1,0 +1,1 @@
+{"error":"ACQUIRER_REJECTED","refund":{"refund_id":"cr_1","card_payment_id":"cp_1","amount_cents":500,"status":"FAILED"}}

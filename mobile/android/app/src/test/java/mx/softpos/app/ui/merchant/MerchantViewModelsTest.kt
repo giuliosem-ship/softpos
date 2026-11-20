@@ -48,27 +48,64 @@ class MerchantViewModelsTest {
         assertEquals(false, offline.state.value.isLoading)
     }
 
-    @Test
-    fun salesListAndDetailLookup() {
-        val sales = listOf(Sale("s2", 500, "SPEI", "settled"), Sale("s1", 100, "CARD", "succeeded"))
-        val api = object : SalesApi {
-            override fun listSales(merchantId: String, limit: Int) = ApiResult.Success(SalesPage(sales), 200)
+    private class PagedSales(val pages: Map<String?, SalesPage>) : SalesApi {
+        val cursors = mutableListOf<String?>()
+        override fun listSales(merchantId: String, limit: Int, before: String?): ApiResult<SalesPage> {
+            cursors += before
+            return pages[before]?.let { ApiResult.Success(it, 200) } ?: ApiResult.Error(404, "HTTP_404", "")
         }
+    }
+
+    @Test
+    fun salesListPaginatesWithCursorAndDedupes() {
+        val s1 = Sale("s1", "card", "CAPTURED", 100, cardPaymentId = "cp_1")
+        val s2 = Sale("s2", "spei", "RECEIVED", 500)
+        val s3 = Sale("s3", "codi", "CONFIRMED", 700)
+        val api = PagedSales(mapOf(null to SalesPage(listOf(s1, s2), "c1"), "c1" to SalesPage(listOf(s2, s3), null)))
         val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
         vm.load()
-        assertEquals(sales, vm.state.value.sales)
+        assertEquals(listOf(s1, s2), vm.state.value.sales)
+        assertEquals(true, vm.state.value.canLoadMore)
+
+        vm.loadMore()
+        assertEquals(listOf(s1, s2, s3), vm.state.value.sales)
+        assertNull(vm.state.value.nextCursor)
+        vm.loadMore() // last page: no request
+        assertEquals(listOf(null, "c1"), api.cursors)
         assertEquals(500L, vm.sale("s2")?.amountCents)
         assertNull(vm.sale("missing"))
+
+        vm.load() // refresh starts over from the first page
+        assertEquals(listOf(s1, s2), vm.state.value.sales)
     }
 
     @Test
     fun salesEndpointMissingIsReportedAsNotAvailable() {
-        val api = object : SalesApi {
-            override fun listSales(merchantId: String, limit: Int) = ApiResult.Error(404, "HTTP_404", "")
-        }
-        val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
+        val vm = SalesViewModel(PagedSales(emptyMap()), { "mer_1" }, dispatcher)
         vm.load()
         assertEquals(LoadError.NOT_AVAILABLE, vm.state.value.error)
+    }
+
+    @Test
+    fun homeRoutesToOnboardingOnceWhileKybIsNotApproved() {
+        val kyb = mx.softpos.app.ui.onboarding.FakeKybApi(ApiResult.Success(mx.softpos.app.kyb.KybStatus("IN_REVIEW"), 200))
+        val vm = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        vm.load()
+        assertEquals(true, vm.state.value.needsOnboarding)
+        assertEquals(true, vm.consumeAutoRoute())
+        assertEquals(false, vm.consumeAutoRoute())
+
+        kyb.status = ApiResult.Success(mx.softpos.app.kyb.KybStatus("APPROVED"), 200)
+        val approved = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        approved.load()
+        assertEquals(false, approved.state.value.needsOnboarding)
+        assertEquals(false, approved.consumeAutoRoute())
+
+        kyb.status = ApiResult.Error(404, "HTTP_404", "") // backend without KYB endpoint: no routing
+        val old = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        old.load()
+        assertEquals(false, old.state.value.needsOnboarding)
+        assertEquals(150_000L, old.state.value.balances?.availableCents)
     }
 
     @Test

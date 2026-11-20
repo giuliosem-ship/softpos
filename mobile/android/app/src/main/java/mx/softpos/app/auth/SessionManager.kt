@@ -39,9 +39,11 @@ class SessionManager(
 
     /**
      * Returns a usable access token after [staleAccessToken] was rejected or
-     * is about to expire, or null if the session is gone. A 4xx from
-     * `/refresh` (expired, revoked or reused token) ends the session; network
-     * or 5xx errors keep it so the user is not logged out by a bad connection.
+     * is about to expire, or null if the session is gone. Only a definitive
+     * rejection of the refresh token ends the session: `401`
+     * (`REFRESH_TOKEN_INVALID` / `REFRESH_TOKEN_REUSED`) or an OAuth-style
+     * `invalid_grant`. Network errors, `429` (rate limit), `403` and 5xx keep
+     * it, so a bad connection or a busy backend never logs the merchant out.
      */
     fun refreshAfterUnauthorized(staleAccessToken: String?): String? = synchronized(lock) {
         val current = _session.value ?: return null
@@ -54,8 +56,29 @@ class SessionManager(
                 result.data.accessToken
             }
             is ApiResult.Error -> {
-                if (result.statusCode in 400..499) clearLocal()
+                if (result.isDefinitiveRejection()) clearLocal()
                 null
+            }
+        }
+    }
+
+    /**
+     * Re-scopes the session to another membership through `/refresh
+     * {refresh_token, merchant_id}` (docs/AUTH.md). Same single-flight lock as
+     * the 401 refresh, so a concurrent refresh never reuses the rotated token.
+     * Only a `401` (invalid/reused refresh token) ends the session; a `403
+     * NOT_A_MERCHANT_MEMBER`, 429 or 5xx leaves the current session as it was.
+     */
+    fun switchMerchant(merchantId: String): ApiResult<Unit> = synchronized(lock) {
+        val current = _session.value ?: return ApiResult.Error(401, "NO_SESSION", "")
+        when (val result = authApi.refresh(current.refreshToken, merchantId)) {
+            is ApiResult.Success -> {
+                onLogin(result.data)
+                ApiResult.Success(Unit, result.statusCode)
+            }
+            is ApiResult.Error -> {
+                if (result.isDefinitiveRejection()) clearLocal()
+                result
             }
         }
     }
@@ -69,6 +92,9 @@ class SessionManager(
         } ?: return
         authApi.logout(current.refreshToken)
     }
+
+    private fun ApiResult.Error.isDefinitiveRejection(): Boolean =
+        statusCode == 401 || errorCode.equals("invalid_grant", ignoreCase = true)
 
     private fun clearLocal() {
         store.clear()

@@ -81,6 +81,31 @@ class SessionManagerTest {
     }
 
     @Test
+    fun rateLimitedOrServerErrorOnRefreshKeepsSession() {
+        sessions.onLogin(FakeAuthApi.pair("at_1", "rt_1"))
+        listOf(
+            ApiResult.Error(429, "RATE_LIMITED", ""),
+            ApiResult.Error(500, "AUTH_INTERNAL_ERROR", ""),
+            ApiResult.Error(503, "HTTP_503", ""),
+            ApiResult.Error(403, "NOT_A_MERCHANT_MEMBER", "")
+        ).forEach { error ->
+            api.refreshResult = { error }
+            assertNull(sessions.refreshAfterUnauthorized("at_1"))
+            assertEquals("rt_1", store.load()?.refreshToken, "kept after ${error.statusCode}")
+        }
+        api.refreshResult = { ApiResult.Error(400, "invalid_grant", "") }
+        assertNull(sessions.refreshAfterUnauthorized("at_1"))
+        assertNull(store.load())
+    }
+
+    @Test
+    fun tokenPairToStringNeverPrintsTokens() {
+        val text = FakeAuthApi.pair("at_secret", "rt_secret").toString()
+        assertTrue("at_secret" !in text && "rt_secret" !in text, text)
+        assertTrue("usr_1" in text)
+    }
+
+    @Test
     fun logoutRevokesFamilyAndWipesDevice() {
         sessions.onLogin(FakeAuthApi.pair("at_1", "rt_1"))
         sessions.logout()

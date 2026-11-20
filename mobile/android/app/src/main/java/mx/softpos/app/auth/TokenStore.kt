@@ -16,7 +16,9 @@ data class StoredSession(
     @SerialName("access_expires_at_ms") val accessExpiresAtMs: Long,
     @SerialName("user_id") val userId: String = "",
     @SerialName("merchant_id") val merchantId: String = "",
-    @SerialName("role") val role: String = ""
+    @SerialName("role") val role: String = "",
+    /** Merchants this user can switch to (picker); empty in sessions saved before AND-34. */
+    @SerialName("memberships") val memberships: List<MembershipInfo> = emptyList()
 ) {
     override fun toString(): String = "StoredSession(user=$userId, merchant=$merchantId, role=$role)"
 }
@@ -27,7 +29,8 @@ fun TokenPair.toStoredSession(nowMs: Long): StoredSession = StoredSession(
     accessExpiresAtMs = nowMs + expiresInSeconds * 1000L,
     userId = userId,
     merchantId = merchantId,
-    role = role
+    role = role,
+    memberships = memberships
 )
 
 interface TokenStore {

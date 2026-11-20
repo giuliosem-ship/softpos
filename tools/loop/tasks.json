@@ -1206,6 +1206,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 32/32 (new: KYB repository contract on PostgreSQL, KYB HTTP flow surviving a restart with documents decrypting and approval assigning the CLABE + onboarding); node --test 8/8.",
       "audit_notes": "Submit returns the final state after the synchronous checks (IN_REVIEW / REJECTED), not SUBMITTED. Additive response fields: uploaded_documents, application (owner only), error (422). Web POS SDK still sends is_persona_moral (ignored).",
       "priority": 78
+    },
+    {
+      "id": "MVP-19",
+      "component": "api",
+      "title": "Sales endpoint, Play Integrity package default and refresh grace window",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/sales_test.go, pkg/api/handlers_auth_test.go, pkg/auth/service_test.go, pkg/auth/authtest/contract.go, pkg/store/sales_integration_test.go, pkg/store/auth_integration_test.go, cmd/server/sales_integration_test.go, cmd/server/main_test.go",
+        "implementation": "migrations/013_sales_and_refresh_grace.*.sql, pkg/store/sales.go, pkg/store/money.go, pkg/store/money_memory.go, pkg/store/auth_store.go, pkg/api/handlers_sales.go, pkg/api/handlers_stp.go, pkg/api/handlers_emv_codi.go, pkg/api/server.go, pkg/auth/auth.go, pkg/auth/memory.go, pkg/auth/service.go, cmd/server/main.go, .env.example, docs/AUTH.md, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "GET /api/v1/merchants/{id}/sales?limit=50(1..100)&before=<cursor> (tenant from token, 403 on mismatch) -> {items:[{id,kind card|spei|codi,status,amount_cents,created_at,card_payment_id?}],next_cursor|null}: card_payments merged with merchant_sales (SPEI abonos spei_<inst>:<clave> RECEIVED, CoDi codi_<tracking> CONFIRMED) written by MoneyTx.RecordSale in the money transaction; migration 013 backfills from spei_in_/codi_ journals; order created_at DESC, id DESC, opaque cursor (unix nanos|id). store.SalesRepository (SQL UNION ALL / memory) also filters by id, kind and date for the backoffice. PLAY_INTEGRITY_PACKAGE default mx.kerno.softpos. Refresh grace: the immediately previous refresh token re-presented within 30s (auth.Config.RefreshGrace) while its successor is unused returns the same successor refresh token + fresh access token, once (grace_used_at, conditional update); successor raw value sealed AES-GCM under a key from JWT_SECRET + predecessor raw token (grace_sealed); concurrent rotation losers take the grace path; otherwise reuse revokes the family.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 34/34 (new: sales backfill + unified listing/pagination/filters, sales endpoint over HTTP; auth contract grace subtest and concurrent rotation on PostgreSQL); node --test 8/8.",
+      "audit_notes": "Legacy EMV (DEV_MODE) payments are not part of the sales view. Grace returns the same refresh token with a newly minted access token. docs/ANDROID_APP.md still notes the old PLAY_INTEGRITY_PACKAGE default (left for the Android batch to avoid conflicts).",
+      "priority": 80
     }
   ]
 }

@@ -228,6 +228,30 @@ transaction, so one finalized meanwhile is skipped:
 | `REJECTED` / `NOT_FOUND` | journal `disb_rev_<clave>` (its fixed id makes a second compensation impossible) + `FAILED` + outbox `disbursement.failed` |
 | unknown / query error | kept reserved, `ERROR` log `ALERT payout unresolved` every pass |
 
+## Sales listing — `GET /api/v1/merchants/{id}/sales`
+
+`?limit=50` (1..100, `400 INVALID_LIMIT`) `&before=<cursor>` (opaque,
+`400 INVALID_CURSOR`); any member of the tenant (another merchant → `403`).
+
+```json
+{"items":[{"id":"cp_…","kind":"card","status":"CAPTURED","amount_cents":25000,
+           "created_at":"2026-11-20T18:01:02.123456Z","card_payment_id":"cp_…"},
+          {"id":"spei_40012:SPEI123","kind":"spei","status":"RECEIVED","amount_cents":50000,"created_at":"…"},
+          {"id":"codi_BNX001","kind":"codi","status":"CONFIRMED","amount_cents":11600,"created_at":"…"}],
+ "next_cursor":"…"|null}
+```
+
+Sources: `card_payments` (every intent, with its processor status) and
+`merchant_sales` (migration 013): one row per credited SPEI abono (`spei_<institución>:<clave>`,
+`RECEIVED`) and CoDi confirmation (`codi_<tracking_key>`, `CONFIRMED`),
+written by `MoneyTx.RecordSale` in the **same transaction** as the journal
+(idempotent on the id). Migration 013 backfills both kinds from existing
+`spei_in_…` / `codi_…` journals. Order: `created_at DESC, id DESC` (stable);
+the cursor encodes the last item's `(created_at, id)` and the next page takes
+rows strictly older. Legacy EMV payments (`emv_payments`, DEV_MODE only) are
+not listed. The backoffice searches the same view across merchants
+(`docs/BACKOFFICE.md`).
+
 ## Not covered yet
 
 - A real processor adapter (only the mock exists), STP confirmations of

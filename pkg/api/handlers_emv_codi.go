@@ -545,6 +545,10 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 		if err := tx.PostJournal(ctx, jnl); err != nil {
 			return err
 		}
+		if err := tx.RecordSale(ctx, store.SaleRecord{ID: "codi_" + conf.TrackingKey, MerchantID: merchant.ID, Kind: store.SaleCoDi,
+			Status: "CONFIRMED", AmountCents: conf.AmountCents, Reference: conf.TrackingKey, CreatedAt: jnl.Timestamp}); err != nil {
+			return err
+		}
 		if err := tx.AddMonthlySales(ctx, merchant.ID, ym, taxSplit.BaseAmountCents); err != nil {
 			return err
 		}

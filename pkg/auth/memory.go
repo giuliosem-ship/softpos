@@ -165,7 +165,7 @@ func (r *MemoryRepository) GetRefreshTokenByHash(_ context.Context, hash string)
 	if !ok {
 		return RefreshToken{}, false, nil
 	}
-	return r.refresh[id], true, nil
+	return cloneRefresh(r.refresh[id]), true, nil
 }
 
 func (r *MemoryRepository) RotateRefreshToken(_ context.Context, oldID string, next RefreshToken, now time.Time) error {
@@ -186,6 +186,31 @@ func (r *MemoryRepository) RotateRefreshToken(_ context.Context, oldID string, n
 	old.ReplacedBy = next.ID
 	r.refresh[oldID] = old
 	return nil
+}
+
+func cloneRefresh(t RefreshToken) RefreshToken {
+	t.GraceSealed = append([]byte(nil), t.GraceSealed...)
+	return t
+}
+
+func (r *MemoryRepository) GetRefreshTokenByID(_ context.Context, id string) (RefreshToken, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.refresh[id]
+	return cloneRefresh(t), ok, nil
+}
+
+func (r *MemoryRepository) ClaimRefreshGrace(_ context.Context, id string, now time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.refresh[id]
+	if !ok || t.GraceUsedAt != nil {
+		return false, nil
+	}
+	ts := now
+	t.GraceUsedAt = &ts
+	r.refresh[id] = t
+	return true, nil
 }
 
 func (r *MemoryRepository) RevokeRefreshFamily(_ context.Context, familyID string, now time.Time) error {

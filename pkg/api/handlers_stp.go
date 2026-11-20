@@ -150,6 +150,10 @@ func (s *Server) HandleSTPAbono(w http.ResponseWriter, r *http.Request) {
 		if err := tx.PostJournal(ctx, journal); err != nil {
 			return err
 		}
+		if err := tx.RecordSale(ctx, store.SaleRecord{ID: "spei_" + abonoRef, MerchantID: merchant.ID, Kind: store.SaleSPEI,
+			Status: "RECEIVED", AmountCents: montoCents, Reference: req.ClaveRastreo, CreatedAt: journal.Timestamp}); err != nil {
+			return err
+		}
 		if err := tx.EnqueueEvent(ctx, "spei.abono_received", req.ClaveRastreo, map[string]any{
 			"clave_rastreo": req.ClaveRastreo,
 			"merchant_id":   merchant.ID,

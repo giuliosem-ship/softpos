@@ -17,7 +17,7 @@ Code: `pkg/auth` (service, JWT, memory repository, OTP sender),
 | User | `users` | Identified by E.164 phone (unique). Created on first successful OTP login. |
 | Membership | `merchant_memberships` | `(user_id, merchant_id)` PK, `role` ∈ `owner`, `cashier`, `operator`. |
 | OTP challenge | `otp_challenges` | One per phone: `code_hash` = HMAC-SHA256(pepper, phone:code), `expires_at`, `attempts`, `last_sent_at`. |
-| Refresh token | `refresh_tokens` | Stored as SHA-256 digest; `family_id` groups all rotations of one login; `revoked_at`, `replaced_by`. |
+| Refresh token | `refresh_tokens` | Stored as SHA-256 digest; `family_id` groups all rotations of one login; `revoked_at`, `replaced_by`; `grace_sealed`, `grace_used_at` (grace window, migration 013). |
 
 The OTP pepper is derived from `JWT_SECRET` (HMAC with a fixed label), so a
 database dump alone cannot brute-force the 6-digit codes.
@@ -43,6 +43,24 @@ database dump alone cannot brute-force the 6-digit codes.
    token: exactly one wins (conditional `UPDATE ... WHERE revoked_at IS NULL`),
    the others trigger reuse detection. `merchant_id` re-scopes the session to
    another membership (e.g. right after creating a merchant).
+   **Grace window (MVP-19):** re-presenting the *immediately previous*
+   token within `RefreshGrace` (30 s, `auth.Config.RefreshGrace`; negative
+   disables) after it was rotated, while its successor is still unused,
+   returns the **same** successor refresh token (and a fresh access token)
+   instead of revoking the family — **once** per rotated token
+   (`refresh_tokens.grace_used_at`, conditional `UPDATE`). This covers an app
+   killed mid-refresh or a retried request whose response was lost (and the
+   loser of two concurrent refreshes of the same token). The successor's raw
+   value is stored sealed (AES-256-GCM, `grace_sealed`) under a key derived
+   from `JWT_SECRET` and the *predecessor's raw value*, which only the client
+   holds (the database keeps only hashes), so a database dump cannot recover
+   it. Outside the window, on a second re-presentation, or once the
+   successor was used / the family revoked (logout), the old token is reuse
+   → family revoked. Trade-off: a thief holding the previous token gets the
+   same successor if they present it within 30 s of the rotation and before
+   the legitimate app uses it; reuse detection still fires as soon as both
+   parties use the token family (the first rotation of the successor wins,
+   the other is reuse and revokes everything).
 4. `POST /api/v1/auth/logout {"refresh_token"}` → `204`; revokes the family.
    Access tokens are stateless and stay valid until they expire (short TTL).
 
@@ -67,6 +85,7 @@ tokens whose `typ` is not `access`.
 |---|---|---|
 | Access token TTL | 15 min | `AUTH_ACCESS_TTL` (Go duration) |
 | Refresh token TTL | 30 days | `AUTH_REFRESH_TTL` |
+| Refresh grace window | 30 s (max 2 m) | — (`auth.Config.RefreshGrace`) |
 | OTP TTL | 5 min | — |
 | OTP resend interval | 60 s | — |
 | OTP max attempts | 5 | — |
@@ -193,7 +212,7 @@ can simulate a CoDi payment without holding the secret.
 | `DEV_MODE` | `true`/`1` enables explicit local-dev conveniences: ephemeral random JWT secret if `JWT_SECRET` is unset, OTP codes printed in the log, `POST /api/v1/auth/dev-session`. Rejected in production. |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | Per-IP budget for `/api/v1/auth/*` (default 30). |
 | `PLAY_INTEGRITY_SECRET` | Enables attestation verification; empty → `503`. |
-| `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
+| `PLAY_INTEGRITY_PACKAGE` | Expected Android applicationId (default `mx.kerno.softpos`, the release app; set `mx.kerno.softpos.debug` for debug builds). |
 | `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
 | `ACQUIRER_WEBHOOK_SECRET` | HMAC secret of the processor webhook (≥ 32 bytes in production when `ACQUIRER_PROVIDER` is set). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
 | `STP_HMAC_SECRET` | STP HMAC secret. No default; the dev default is accepted only with `DEV_MODE`. Required in production. |

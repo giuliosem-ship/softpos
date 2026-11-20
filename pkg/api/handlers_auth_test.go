@@ -91,7 +91,15 @@ func TestAuthHTTP_OTPLoginRefreshLogout(t *testing.T) {
 	var rotated auth.TokenPair
 	_ = json.Unmarshal(rec.Body.Bytes(), &rotated)
 
-	// Reuse of the rotated-out token -> 401 REFRESH_TOKEN_REUSED, family revoked.
+	// The rotated-out token presented again within the grace window gets the
+	// same new refresh token once (MVP-19); a further reuse -> 401
+	// REFRESH_TOKEN_REUSED, family revoked.
+	rec = postJSON(t, h, "/api/v1/auth/refresh", map[string]string{"refresh_token": tp.RefreshToken})
+	var graced auth.TokenPair
+	_ = json.Unmarshal(rec.Body.Bytes(), &graced)
+	if rec.Code != http.StatusOK || graced.RefreshToken != rotated.RefreshToken {
+		t.Fatalf("grace replay: want 200 with the same refresh token, got %d %s", rec.Code, rec.Body.String())
+	}
 	rec = postJSON(t, h, "/api/v1/auth/refresh", map[string]string{"refresh_token": tp.RefreshToken})
 	if rec.Code != http.StatusUnauthorized || !bytes.Contains(rec.Body.Bytes(), []byte("REFRESH_TOKEN_REUSED")) {
 		t.Fatalf("reuse: want 401 REFRESH_TOKEN_REUSED, got %d %s", rec.Code, rec.Body.String())

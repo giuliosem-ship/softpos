@@ -662,6 +662,7 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/rbf/loans", s.HandleOriginateRBFLoan)
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/rbf", s.HandleGetMerchantRBFLoan)
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/balances", s.HandleGetMerchantBalances)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/sales", s.HandleListSales)
 
 	// Serve Static POS Web App dynamically
 	s.router.HandleFunc("GET /pos/", func(w http.ResponseWriter, r *http.Request) {

@@ -65,7 +65,7 @@ type Config struct {
 	AuthRateLimitPerMinute int
 	// Play Integrity verification for /api/v1/auth/attestation/verify.
 	PlayIntegritySecret  string // PLAY_INTEGRITY_SECRET; empty disables verification (503)
-	PlayIntegrityPackage string // PLAY_INTEGRITY_PACKAGE, default "mx.softpos.app"
+	PlayIntegrityPackage string // PLAY_INTEGRITY_PACKAGE, default DefaultPlayIntegrityPackage
 	// CoDiWebhookSecret signs POST /api/v1/webhooks/codi/confirm (CODI_WEBHOOK_SECRET).
 	// Empty outside DEV_MODE disables the webhook (503).
 	CoDiWebhookSecret string
@@ -182,7 +182,7 @@ func LoadConfigFromEnv() Config {
 	}
 	integrityPkg := os.Getenv("PLAY_INTEGRITY_PACKAGE")
 	if integrityPkg == "" {
-		integrityPkg = "mx.softpos.app"
+		integrityPkg = DefaultPlayIntegrityPackage
 	}
 
 	cashierRefunds := false
@@ -240,6 +240,11 @@ func parseDurationEnv(name string) time.Duration {
 	}
 	return d
 }
+
+// DefaultPlayIntegrityPackage is the Android applicationId of the release
+// app (debug builds are "mx.kerno.softpos.debug": set PLAY_INTEGRITY_PACKAGE
+// per environment).
+const DefaultPlayIntegrityPackage = "mx.kerno.softpos"
 
 // demoSettlementCLABE is the demo merchant's (fake) bank account for payouts.
 const demoSettlementCLABE = "032180000118359719"

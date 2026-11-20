@@ -63,24 +63,28 @@ func TestPGIntegration_AuthOTPLoginRefreshReuseAndConcurrency(t *testing.T) {
 		t.Fatalf("rescope = %+v %v", scoped, err)
 	}
 
-	// Concurrent rotation of the same token: exactly one wins on a real DB.
+	// Concurrent rotation of the same token on a real DB: exactly one rotates;
+	// at most one more gets the same pair through the one-time grace window
+	// (MVP-19); the rest are reuse.
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	wins := 0
+	tokens := map[string]bool{}
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.Refresh(ctx, scoped.RefreshToken, ""); err == nil {
+			if r, err := svc.Refresh(ctx, scoped.RefreshToken, ""); err == nil {
 				mu.Lock()
 				wins++
+				tokens[r.RefreshToken] = true
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	if wins != 1 {
-		t.Fatalf("want exactly 1 successful concurrent rotation, got %d", wins)
+	if wins < 1 || wins > 2 || len(tokens) != 1 {
+		t.Fatalf("want 1 rotation (+ at most 1 grace replay of the same pair), got %d successes / %d tokens", wins, len(tokens))
 	}
 	// The losers triggered reuse detection: whole family revoked.
 	var active int

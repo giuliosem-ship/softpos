@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,7 +25,12 @@ type Config struct {
 	OTPTTL            time.Duration // default 5m
 	OTPResendInterval time.Duration // default 60s
 	OTPMaxAttempts    int           // default 5
-	Now               func() time.Time
+	// RefreshGrace is how long after a rotation the immediately previous
+	// refresh token may be presented again (once) and get the same new
+	// refresh token back instead of revoking the family (default 30s,
+	// negative disables). See docs/AUTH.md for the trade-off.
+	RefreshGrace time.Duration
+	Now          func() time.Time
 }
 
 const (
@@ -32,6 +39,8 @@ const (
 	DefaultOTPTTL            = 5 * time.Minute
 	DefaultOTPResendInterval = 60 * time.Second
 	DefaultOTPMaxAttempts    = 5
+	DefaultRefreshGrace      = 30 * time.Second
+	maxRefreshGrace          = 2 * time.Minute
 	otpDigits                = 6
 )
 
@@ -59,6 +68,7 @@ type Service struct {
 	sender    OTPSender
 	cfg       Config
 	otpPepper []byte
+	graceKey  []byte // derives the per-rotation grace sealing keys
 }
 
 // NewService validates cfg and builds the service.
@@ -87,6 +97,12 @@ func NewService(repo Repository, sender OTPSender, cfg Config) (*Service, error)
 	if cfg.OTPMaxAttempts <= 0 {
 		cfg.OTPMaxAttempts = DefaultOTPMaxAttempts
 	}
+	if cfg.RefreshGrace == 0 {
+		cfg.RefreshGrace = DefaultRefreshGrace
+	}
+	if cfg.RefreshGrace > maxRefreshGrace {
+		cfg.RefreshGrace = maxRefreshGrace
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -95,7 +111,9 @@ func NewService(repo Repository, sender OTPSender, cfg Config) (*Service, error)
 	// The OTP pepper is derived from (not equal to) the JWT secret.
 	m := hmac.New(sha256.New, secret)
 	m.Write([]byte("kerno-otp-pepper-v1"))
-	return &Service{repo: repo, sender: sender, cfg: cfg, otpPepper: m.Sum(nil)}, nil
+	g := hmac.New(sha256.New, secret)
+	g.Write([]byte("kerno-refresh-grace-v1"))
+	return &Service{repo: repo, sender: sender, cfg: cfg, otpPepper: m.Sum(nil), graceKey: g.Sum(nil)}, nil
 }
 
 // Repository exposes the underlying repository (membership management).
@@ -224,7 +242,7 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, code, merchantID string)
 	if err != nil {
 		return TokenPair{}, err
 	}
-	return s.issue(ctx, user.ID, scope, memberships, familyID, "", now)
+	return s.issue(ctx, user.ID, scope, memberships, familyID, "", "", now)
 }
 
 func (s *Service) getOrCreateUser(ctx context.Context, phone string, now time.Time) (User, error) {
@@ -248,7 +266,11 @@ func (s *Service) getOrCreateUser(ctx context.Context, phone string, now time.Ti
 }
 
 // Refresh rotates a refresh token. Presenting an already-rotated (revoked)
-// token revokes the whole family and returns ErrRefreshTokenReused.
+// token revokes the whole family and returns ErrRefreshTokenReused, except
+// within the grace window (Config.RefreshGrace): the immediately previous
+// token presented again, once, while its successor is still unused, returns
+// the same successor refresh token (plus a fresh access token). This covers
+// an app killed mid-refresh or a retried request that lost the response.
 // merchantID optionally re-scopes the session to another membership.
 func (s *Service) Refresh(ctx context.Context, refreshToken, merchantID string) (TokenPair, error) {
 	if refreshToken == "" {
@@ -263,8 +285,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken, merchantID string) 
 		return TokenPair{}, ErrRefreshTokenInvalid
 	}
 	if old.RevokedAt != nil {
-		_ = s.repo.RevokeRefreshFamily(ctx, old.FamilyID, now)
-		return TokenPair{}, ErrRefreshTokenReused
+		return s.graceOrRevoke(ctx, refreshToken, old, merchantID, now)
 	}
 	if !now.Before(old.ExpiresAt) {
 		return TokenPair{}, ErrRefreshTokenInvalid
@@ -277,20 +298,134 @@ func (s *Service) Refresh(ctx context.Context, refreshToken, merchantID string) 
 	if merchantID != "" {
 		target = merchantID
 	}
-	var scope *Membership
+	scope, err := pickScope(memberships, target)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	tp, err := s.issue(ctx, old.UserID, scope, memberships, old.FamilyID, old.ID, refreshToken, now)
+	if errors.Is(err, ErrRefreshTokenReused) { // lost a concurrent rotation of the same token
+		if cur, found, gErr := s.repo.GetRefreshTokenByHash(ctx, old.TokenHash); gErr == nil && found {
+			return s.graceOrRevoke(ctx, refreshToken, cur, merchantID, now)
+		}
+		_ = s.repo.RevokeRefreshFamily(ctx, old.FamilyID, now)
+	}
+	return tp, err
+}
+
+// pickScope selects the membership for target ("" = the only membership).
+func pickScope(memberships []Membership, target string) (*Membership, error) {
 	if target != "" {
 		for i := range memberships {
 			if memberships[i].MerchantID == target {
-				scope = &memberships[i]
+				return &memberships[i], nil
 			}
 		}
-		if scope == nil {
-			return TokenPair{}, ErrNotMember // membership removed or never existed
-		}
-	} else if len(memberships) == 1 {
-		scope = &memberships[0]
+		return nil, ErrNotMember // membership removed or never existed
 	}
-	return s.issue(ctx, old.UserID, scope, memberships, old.FamilyID, old.ID, now)
+	if len(memberships) == 1 {
+		return &memberships[0], nil
+	}
+	return nil, nil
+}
+
+// graceOrRevoke handles a revoked token: the grace re-presentation when it
+// applies, reuse detection (family revoked) otherwise.
+func (s *Service) graceOrRevoke(ctx context.Context, raw string, old RefreshToken, merchantID string, now time.Time) (TokenPair, error) {
+	if tp, ok := s.refreshGrace(ctx, raw, old, merchantID, now); ok {
+		return tp, nil
+	}
+	_ = s.repo.RevokeRefreshFamily(ctx, old.FamilyID, now)
+	return TokenPair{}, ErrRefreshTokenReused
+}
+
+func (s *Service) refreshGrace(ctx context.Context, raw string, old RefreshToken, merchantID string, now time.Time) (TokenPair, bool) {
+	if s.cfg.RefreshGrace <= 0 || old.RevokedAt == nil || old.ReplacedBy == "" || old.GraceUsedAt != nil {
+		return TokenPair{}, false
+	}
+	// A concurrent loser may have read its clock before the winner revoked
+	// the token: only the upper bound matters.
+	if now.Sub(*old.RevokedAt) > s.cfg.RefreshGrace {
+		return TokenPair{}, false
+	}
+	next, found, err := s.repo.GetRefreshTokenByID(ctx, old.ReplacedBy)
+	if err != nil || !found || next.RevokedAt != nil || !now.Before(next.ExpiresAt) {
+		return TokenPair{}, false // the successor was already used, revoked or expired
+	}
+	if merchantID != "" && merchantID != next.MerchantID {
+		return TokenPair{}, false
+	}
+	successor, err := s.openGrace(raw, next)
+	if err != nil || HashToken(successor) != next.TokenHash {
+		return TokenPair{}, false
+	}
+	if claimed, err := s.repo.ClaimRefreshGrace(ctx, old.ID, now); err != nil || !claimed {
+		return TokenPair{}, false
+	}
+	memberships, err := s.repo.ListMemberships(ctx, next.UserID)
+	if err != nil {
+		return TokenPair{}, false
+	}
+	scope, err := pickScope(memberships, next.MerchantID)
+	if err != nil {
+		return TokenPair{}, false
+	}
+	var mID string
+	var role Role
+	if scope != nil {
+		mID, role = scope.MerchantID, scope.Role
+	}
+	access, err := s.MintAccessToken(next.UserID, mID, role)
+	if err != nil {
+		return TokenPair{}, false
+	}
+	if memberships == nil {
+		memberships = []Membership{}
+	}
+	return TokenPair{
+		AccessToken: access, TokenType: "Bearer", ExpiresIn: int64(s.cfg.AccessTTL / time.Second),
+		RefreshToken: successor, RefreshExpiresIn: int64(next.ExpiresAt.Sub(now) / time.Second),
+		UserID: next.UserID, MerchantID: mID, Role: role, Memberships: memberships,
+	}, true
+}
+
+// graceAEAD derives the AES-256-GCM key that seals a successor token under
+// the raw value of its predecessor (never stored: only its hash is).
+func (s *Service) graceAEAD(predecessorRaw string) (cipher.AEAD, error) {
+	m := hmac.New(sha256.New, s.graceKey)
+	m.Write([]byte(predecessorRaw))
+	block, err := aes.NewCipher(m.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (s *Service) sealGrace(predecessorRaw, successorRaw, successorID string) ([]byte, error) {
+	g, err := s.graceAEAD(predecessorRaw)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, g.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return g.Seal(nonce, nonce, []byte(successorRaw), []byte(successorID)), nil
+}
+
+func (s *Service) openGrace(predecessorRaw string, next RefreshToken) (string, error) {
+	g, err := s.graceAEAD(predecessorRaw)
+	if err != nil {
+		return "", err
+	}
+	if len(next.GraceSealed) <= g.NonceSize() {
+		return "", ErrRefreshTokenInvalid
+	}
+	ns := g.NonceSize()
+	out, err := g.Open(nil, next.GraceSealed[:ns], next.GraceSealed[ns:], []byte(next.ID))
+	if err != nil {
+		return "", ErrRefreshTokenInvalid
+	}
+	return string(out), nil
 }
 
 // Logout revokes the session family of refreshToken. Unknown tokens are a no-op.
@@ -337,7 +472,10 @@ func (s *Service) ParseAccessToken(token string) (*Claims, error) {
 	return c, nil
 }
 
-func (s *Service) issue(ctx context.Context, userID string, scope *Membership, memberships []Membership, familyID, rotateFrom string, now time.Time) (TokenPair, error) {
+// issue mints a token pair. With rotateFrom (the id of the presented token)
+// the new refresh token replaces it atomically and is sealed for the grace
+// window under presentedRaw.
+func (s *Service) issue(ctx context.Context, userID string, scope *Membership, memberships []Membership, familyID, rotateFrom, presentedRaw string, now time.Time) (TokenPair, error) {
 	var merchantID string
 	var role Role
 	if scope != nil {
@@ -368,10 +506,10 @@ func (s *Service) issue(ctx context.Context, userID string, scope *Membership, m
 	if rotateFrom == "" {
 		err = s.repo.CreateRefreshToken(ctx, rec)
 	} else {
-		err = s.repo.RotateRefreshToken(ctx, rotateFrom, rec, now)
-		if errors.Is(err, ErrRefreshTokenReused) { // lost a concurrent rotation race
-			_ = s.repo.RevokeRefreshFamily(ctx, familyID, now)
+		if rec.GraceSealed, err = s.sealGrace(presentedRaw, refresh, rec.ID); err != nil {
+			return TokenPair{}, err
 		}
+		err = s.repo.RotateRefreshToken(ctx, rotateFrom, rec, now) // ErrRefreshTokenReused: lost a race
 	}
 	if err != nil {
 		return TokenPair{}, err

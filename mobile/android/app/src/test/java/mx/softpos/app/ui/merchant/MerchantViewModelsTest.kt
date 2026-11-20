@@ -87,6 +87,28 @@ class MerchantViewModelsTest {
     }
 
     @Test
+    fun homeRoutesToOnboardingOnceWhileKybIsNotApproved() {
+        val kyb = mx.softpos.app.ui.onboarding.FakeKybApi(ApiResult.Success(mx.softpos.app.kyb.KybStatus("IN_REVIEW"), 200))
+        val vm = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        vm.load()
+        assertEquals(true, vm.state.value.needsOnboarding)
+        assertEquals(true, vm.consumeAutoRoute())
+        assertEquals(false, vm.consumeAutoRoute())
+
+        kyb.status = ApiResult.Success(mx.softpos.app.kyb.KybStatus("APPROVED"), 200)
+        val approved = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        approved.load()
+        assertEquals(false, approved.state.value.needsOnboarding)
+        assertEquals(false, approved.consumeAutoRoute())
+
+        kyb.status = ApiResult.Error(404, "HTTP_404", "") // backend without KYB endpoint: no routing
+        val old = HomeViewModel(FakeMerchantApi(), { "mer_1" }, dispatcher, kyb)
+        old.load()
+        assertEquals(false, old.state.value.needsOnboarding)
+        assertEquals(150_000L, old.state.value.balances?.availableCents)
+    }
+
+    @Test
     fun settingsShowsProfileAndLogsOut() {
         var loggedOut = false
         val vm = SettingsViewModel(FakeMerchantApi(), { "mer_1" }, { "owner" }, { loggedOut = true }, dispatcher)

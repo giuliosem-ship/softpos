@@ -9,7 +9,8 @@ android {
     // Kotlin package of the code, kept from the pure-logic module so imports and
     // tests stay stable. The store identity is `applicationId` below.
     namespace = "mx.softpos.app"
-    compileSdk = 35
+    // 36 = Play's target requirement for new uploads from 2026-08.
+    compileSdk = 36
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
@@ -17,7 +18,7 @@ android {
         // 28 (Android 9): floor of the Tap to Pay on Android SDKs evaluated for
         // the MVP and of StrongBox/hardware-backed Keystore AES-GCM.
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
     }

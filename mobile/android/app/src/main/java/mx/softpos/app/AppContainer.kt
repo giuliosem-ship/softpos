@@ -11,7 +11,10 @@ import mx.softpos.app.auth.MembershipInfo
 import mx.softpos.app.auth.SessionManager
 import mx.softpos.app.auth.authenticatedClient
 import mx.softpos.app.auth.keystoreTokenStore
+import mx.softpos.app.kyb.HttpKybApi
+import mx.softpos.app.kyb.KybApi
 import mx.softpos.app.merchant.HttpMerchantApi
+import mx.softpos.app.ui.onboarding.DocumentReader
 import mx.softpos.app.merchant.MerchantApi
 import mx.softpos.app.payments.CardPaymentsApi
 import mx.softpos.app.payments.DevCardSimulator
@@ -47,6 +50,10 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
     val apiClient: OkHttpClient by lazy { authenticatedClient(baseClient, sessionManager) }
 
     val merchantApi: MerchantApi by lazy { HttpMerchantApi(baseUrl, apiClient) }
+
+    val kybApi: KybApi by lazy { HttpKybApi(baseUrl, apiClient) }
+
+    val documentReader: DocumentReader by lazy { DocumentReader(appContext) }
 
     /** Real `/api/v1/card-payments/...` contract (docs/ACQUIRER_INTEGRATION.md) in every build. */
     val cardPaymentsApi: CardPaymentsApi by lazy { HttpCardPaymentsApi(baseUrl, apiClient) }

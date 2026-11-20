@@ -30,7 +30,11 @@ data class TokenPair(
     @SerialName("merchant_id") val merchantId: String = "",
     @SerialName("role") val role: String = "",
     @SerialName("memberships") val memberships: List<MembershipInfo> = emptyList()
-)
+) {
+    /** Never prints the access or refresh token (logs, crash reports). */
+    override fun toString(): String =
+        "TokenPair(user=$userId, merchant=$merchantId, role=$role, expiresIn=$expiresInSeconds, memberships=${memberships.size})"
+}
 
 /**
  * Backend auth contract. Calls are blocking (OkHttp); ViewModels run them on

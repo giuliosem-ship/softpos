@@ -15,6 +15,9 @@ import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
 import mx.softpos.app.merchant.MerchantApi
 import mx.softpos.app.merchant.MerchantBalances
 import mx.softpos.app.merchant.MerchantProfile
+import mx.softpos.app.kyb.KybApi
+import mx.softpos.app.kyb.KybStatus
+import mx.softpos.app.kyb.KybStatusValue
 import mx.softpos.app.payments.Sale
 import mx.softpos.app.payments.SalesApi
 
@@ -40,16 +43,25 @@ internal fun ApiResult.Error.toLoadError(): LoadError = when {
 data class HomeUiState(
     val isLoading: Boolean = false,
     val balances: MerchantBalances? = null,
+    /** Null until read, or when the backend has no KYB endpoint. */
+    val kyb: KybStatus? = null,
     val error: LoadError? = null
-)
+) {
+    /** Charging and disbursing are blocked by the backend until KYB is APPROVED. */
+    val needsOnboarding: Boolean get() = kyb != null && !kyb.isApproved
+}
 
 class HomeViewModel(
     private val merchantApi: MerchantApi,
     private val merchantId: MerchantIdProvider,
-    private val io: CoroutineDispatcher = Dispatchers.IO
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val kybApi: KybApi? = null
 ) : ViewModel() {
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
+
+    /** Home sends the merchant to onboarding automatically once per app session. */
+    private var autoRouted = false
 
     fun load() {
         val id = merchantId()
@@ -59,12 +71,26 @@ class HomeViewModel(
         }
         _state.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch {
+            val kyb = kybApi?.let { api ->
+                when (val r = withContext(io) { api.getKyb(id) }) {
+                    is ApiResult.Success -> r.data
+                    // 404 with a backend code = no application yet; a bare 404 = no endpoint.
+                    is ApiResult.Error -> if (r.statusCode == 404 && r.errorCode != "HTTP_404") KybStatus(KybStatusValue.DRAFT) else _state.value.kyb
+                }
+            }
             val result = withContext(io) { merchantApi.getBalances(id) }
             _state.value = when (result) {
-                is ApiResult.Success -> HomeUiState(balances = result.data)
-                is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
+                is ApiResult.Success -> HomeUiState(balances = result.data, kyb = kyb)
+                is ApiResult.Error -> _state.value.copy(isLoading = false, kyb = kyb, error = result.toLoadError())
             }
         }
+    }
+
+    /** True once, the first time onboarding is needed (the screen then navigates there). */
+    fun consumeAutoRoute(): Boolean {
+        if (autoRouted || !_state.value.needsOnboarding) return false
+        autoRouted = true
+        return true
     }
 }
 

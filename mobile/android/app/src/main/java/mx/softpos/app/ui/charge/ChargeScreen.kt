@@ -35,7 +35,7 @@ import mx.softpos.app.core.money.MoneyFormatter
 import mx.softpos.app.ui.codi.CodiQrMatrix
 
 @Composable
-fun ChargeScreen(viewModel: ChargeViewModel) {
+fun ChargeScreen(viewModel: ChargeViewModel, onOnboarding: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -71,6 +71,9 @@ fun ChargeScreen(viewModel: ChargeViewModel) {
                 stringResource(R.string.charge_error_declined_code, code)
             } else stringResource(error.messageRes())
             Text(message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            if (error == ChargeError.NOT_APPROVED) {
+                TextButton(onClick = onOnboarding) { Text(stringResource(R.string.home_kyb_cta)) }
+            }
         }
     }
 }

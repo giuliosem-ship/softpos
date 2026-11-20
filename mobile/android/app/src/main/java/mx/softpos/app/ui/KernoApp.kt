@@ -46,6 +46,8 @@ import mx.softpos.app.ui.merchant.SalesScreen
 import mx.softpos.app.ui.merchant.SalesViewModel
 import mx.softpos.app.ui.merchant.SettingsScreen
 import mx.softpos.app.ui.merchant.SettingsViewModel
+import mx.softpos.app.ui.onboarding.KybScreen
+import mx.softpos.app.ui.onboarding.KybViewModel
 
 private object Routes {
     const val HOME = "home"
@@ -54,6 +56,7 @@ private object Routes {
     const val SALE_DETAIL = "sales/{saleId}"
     const val SETTINGS = "settings"
     const val PICKER = "merchant-picker"
+    const val ONBOARDING = "onboarding"
     fun saleDetail(id: String) = "sales/$id"
 }
 
@@ -98,8 +101,12 @@ private fun MerchantApp(container: AppContainer) {
     Scaffold(bottomBar = { BottomBar(nav) }) { padding ->
         NavHost(nav, startDestination = Routes.HOME, modifier = Modifier.padding(padding)) {
             composable(Routes.HOME) {
-                val vm = viewModel { HomeViewModel(container.merchantApi, container::currentMerchantId) }
-                HomeScreen(vm, onCharge = { nav.navigateTab(Routes.CHARGE) })
+                val vm = viewModel { HomeViewModel(container.merchantApi, container::currentMerchantId, kybApi = container.kybApi) }
+                HomeScreen(vm, onCharge = { nav.navigateTab(Routes.CHARGE) }, onOnboarding = { nav.navigate(Routes.ONBOARDING) })
+            }
+            composable(Routes.ONBOARDING) {
+                val vm = viewModel { KybViewModel(container.kybApi, container::currentMerchantId, container::currentRole) }
+                KybScreen(vm, container.documentReader, onDone = { nav.popBackStack() })
             }
             composable(Routes.CHARGE) {
                 val vm = viewModel {
@@ -110,7 +117,7 @@ private fun MerchantApp(container: AppContainer) {
                         merchantId = container::currentMerchantId
                     )
                 }
-                ChargeScreen(vm)
+                ChargeScreen(vm, onOnboarding = { nav.navigate(Routes.ONBOARDING) })
             }
             composable(Routes.SALES) { entry ->
                 val vm = viewModel(entry) { SalesViewModel(container.salesApi, container::currentMerchantId) }

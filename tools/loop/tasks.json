@@ -1192,6 +1192,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (18 packages); PGIntegration 29/29 (new: concurrent payout deliveries under two event ids -> bank credited once, mismatch report via operator endpoint, overlapping watcher passes -> one NOT_SETTLED); node --test 8/8.",
       "audit_notes": "NOT_SETTLED items are not auto-resolved when a late payout arrives (operator resolves). Correcting journals for discrepancies are backoffice work (next batch).",
       "priority": 77
+    },
+    {
+      "id": "MVP-17",
+      "component": "kyb",
+      "title": "Merchant KYB data, documents and status flow",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/kyb/kyb_test.go, pkg/api/kyb_test.go, pkg/store/kyb_integration_test.go, pkg/identity/rfc_check_digit_test.go, pkg/identity/document_vault_test.go, pkg/acquirer/acquirer_test.go, cmd/server/kyb_integration_test.go",
+        "implementation": "migrations/012_merchant_kyb.*.sql, pkg/kyb/kyb.go, pkg/kyb/provider.go, pkg/store/kyb.go, pkg/identity/rfc_check_digit.go, pkg/identity/document_vault.go, pkg/acquirer/acquirer.go, pkg/acquirer/mock.go, pkg/api/handlers_kyb.go, pkg/api/server.go, pkg/api/handlers_card_payments.go, pkg/api/handlers_payments.go, pkg/api/handlers_emv_codi.go, pkg/api/handlers_disbursements.go, pkg/api/handlers_acquirer_events.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/KYB.md, docs/AUTH.md, docs/ACQUIRER_INTEGRATION.md, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Onboarding DRAFT -> SUBMITTED -> IN_REVIEW -> APPROVED|REJECTED (REJECTED -> DRAFT on edit), merchant_kyb with optimistic version. GET/PUT /api/v1/merchants/{id}/kyb, POST .../kyb/documents (owner, multipart type+file, <=5 MiB, sniffed JPEG/PNG/PDF, encrypted with identity.DocumentVault over the vault KeyProvider, blobs behind store.DocumentBlobStore = kyb_document_blobs bytea), POST .../kyb/submit: application complete, RFC format + SAT verification digit, persona fisica derived from RFC length, RESICO_PF only (other regimes / persona moral rejected explicitly, 422 KYB_CHECKS_FAILED + reason, stays DRAFT), CURP prefix = RFC, documents complete; then SUBMITTED, SAT 69-B (listed -> REJECTED RFC_LISTED_69B), kyb.KYCProvider identity check (mock; KYC_PROVIDER env, mock rejected in production), IN_REVIEW. Server.ApproveMerchantKYB assigns the virtual CLABE (no longer at alta) and calls acquirer.Provider.OnboardMerchant (new port method, mock) with kerno_onboard_<id>; RejectMerchantKYB. Gate: card intents/refunds, CoDi QR, payouts, legacy EMV need APPROVED and not blocked (403 MERCHANT_NOT_APPROVED / MERCHANT_BLOCKED). Alta validates RFC format and starts DRAFT. is_persona_moral no longer read from intents/settle (server-derived, false for RESICO PF sales to the public). Server.RegisterMerchant (trusted provisioning) and the DEV_MODE demo merchant are APPROVED (system:provisioning).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 32/32 (new: KYB repository contract on PostgreSQL, KYB HTTP flow surviving a restart with documents decrypting and approval assigning the CLABE + onboarding); node --test 8/8.",
+      "audit_notes": "Submit returns the final state after the synchronous checks (IN_REVIEW / REJECTED), not SUBMITTED. Additive response fields: uploaded_documents, application (owner only), error (422). Web POS SDK still sends is_persona_moral (ignored).",
+      "priority": 78
     }
   ]
 }

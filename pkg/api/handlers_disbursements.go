@@ -54,6 +54,9 @@ func (s *Server) HandleDisbursement(w http.ResponseWriter, r *http.Request) {
 	if !requireRole(w, r, auth.RoleOwner) { // cashiers cannot move money out
 		return
 	}
+	if !s.requireActiveMerchant(w, r, tenant) { // approved KYB, not blocked
+		return
+	}
 	// Every payout needs a merchant-scoped Idempotency-Key: a retried request
 	// replays the stored outcome instead of paying twice.
 	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))

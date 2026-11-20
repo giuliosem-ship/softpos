@@ -17,6 +17,11 @@ Rules:
   key → monthly-sales row → ledger accounts (sorted by code). Global accounts
   (`ASSET:ACQUIRER_RECEIVABLE`, `ASSET:STP_CONCENTRATOR`, `REVENUE:FEES`) are hot
   rows: postings that touch them serialize.
+- Merchant gate (MVP-17): money operations started by a merchant — card
+  intents and refunds, CoDi/SPEI QR, payouts, legacy EMV authorize / settle /
+  reverse — require an `APPROVED`, not blocked onboarding (`403
+  MERCHANT_NOT_APPROVED` / `MERCHANT_BLOCKED`, `docs/KYB.md`). Inbound money
+  (STP abonos, CoDi confirmations, processor webhooks) is always recorded.
 - Outbox events are written with `SaveEventTx` inside the same transaction, so
   they exist only if the money moved. Delivery is at-least-once (consumers
   deduplicate on `aggregate_id` + `event_type`).
@@ -64,9 +69,11 @@ ALERT` and served to operators by `GET /api/v1/acquirer/reconciliation`.
 with `DEV_MODE=true` (`410 LEGACY_CARD_FLOW_DISABLED` otherwise): they trust
 the phone's TLV as the approval.
 
-Body: `payment_id` (required), `is_persona_moral`, optional
+Body: `payment_id` (required), optional
 `gross_amount_cents` (only cross-checked: a different value → `409
-AMOUNT_MISMATCH`). Client `platform_fee_cents` / `rbf_sweep_cents` are ignored.
+AMOUNT_MISMATCH`). Client `platform_fee_cents` / `rbf_sweep_cents` and
+`is_persona_moral` are ignored (the buyer-is-persona-moral split input is
+server-derived, `docs/KYB.md`).
 
 1. Lock the payment. Unknown id or another tenant's payment → `404
    PAYMENT_NOT_FOUND`; `VOIDED` → `409 INVALID_PAYMENT_STATE`.

@@ -157,10 +157,10 @@ func TestSoftPOSPaymentSettle_SuccessWithRESICO(t *testing.T) {
 
 	// Settle a $1,160.00 MXN sale (116000 cents) under a 2.90% merchant tariff:
 	// platform fee = 116000 * 290 / 10000 = 3364 cents (server-derived).
-	// Buyer is Persona Moral -> Art. 113-J applies:
-	// Base = 100000, IVA = 16000, PM withholds 1.25% ISR (1250 cents)
-	// Total tax escrow = 16000 (IVA)
-	// Net available = 116000 - (3364 + 16000) = 96636 cents
+	// A client "is_persona_moral" is ignored since MVP-17 (the split input is
+	// server-derived): RESICO PF to the general public, 1.0% ISR tier:
+	// Base = 100000, IVA = 16000, ISR = 1000 -> tax escrow 17000
+	// Net available = 116000 - (3364 + 17000) = 95636 cents
 	authorizeTestPayment(t, server, merchantID, "pay_softpos_001", 116000)
 	if err := server.merchantRepo.SetMerchantPlatformFeeBps(context.Background(), merchantID, 290); err != nil {
 		t.Fatal(err)
@@ -194,25 +194,25 @@ func TestSoftPOSPaymentSettle_SuccessWithRESICO(t *testing.T) {
 	if resp.IVAAmountCents != 16000 {
 		t.Errorf("expected IVA 16000, got %d", resp.IVAAmountCents)
 	}
-	if resp.TaxEscrowCents != 16000 {
-		t.Errorf("expected TaxEscrow 16000, got %d", resp.TaxEscrowCents)
+	if resp.TaxEscrowCents != 17000 || resp.IsPersonaMoralWithholding {
+		t.Errorf("expected TaxEscrow 17000 without PM withholding (client flag ignored), got %d pm=%v", resp.TaxEscrowCents, resp.IsPersonaMoralWithholding)
 	}
 	if resp.PlatformFeeCents != 3364 || resp.PlatformFeeBps != 290 || resp.RBFSweepCents != 0 {
 		t.Errorf("fee/rbf must be server-derived, got fee=%d bps=%d rbf=%d", resp.PlatformFeeCents, resp.PlatformFeeBps, resp.RBFSweepCents)
 	}
-	if resp.NetAvailableCents != 96636 {
-		t.Errorf("expected net available 96636, got %d", resp.NetAvailableCents)
+	if resp.NetAvailableCents != 95636 {
+		t.Errorf("expected net available 95636, got %d", resp.NetAvailableCents)
 	}
 
 	// Verify ledger
 	availBal, _ := server.ledger.GetBalance("LIABILITY:MERCHANT:" + merchantID + ":AVAILABLE")
-	if availBal.AmountCents != 96636 {
-		t.Errorf("expected ledger available balance 96636, got %d", availBal.AmountCents)
+	if availBal.AmountCents != 95636 {
+		t.Errorf("expected ledger available balance 95636, got %d", availBal.AmountCents)
 	}
 
 	escrowBal, _ := server.ledger.GetBalance("LIABILITY:MERCHANT:" + merchantID + ":TAX_ESCROW")
-	if escrowBal.AmountCents != 16000 {
-		t.Errorf("expected ledger escrow balance 16000, got %d", escrowBal.AmountCents)
+	if escrowBal.AmountCents != 17000 {
+		t.Errorf("expected ledger escrow balance 17000, got %d", escrowBal.AmountCents)
 	}
 }
 
@@ -414,7 +414,6 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 		PaymentID:        "pay_tier_01",
 		MerchantID:       merchantID,
 		GrossAmountCents: 2900000,
-		IsPersonaMoral:   false,
 	}
 	body1, _ := json.Marshal(sale1)
 	rec1 := httptest.NewRecorder()
@@ -436,7 +435,6 @@ func TestSoftPOSPaymentSettle_MonthlyAccumulatedSalesTierEscalation(t *testing.T
 		PaymentID:        "pay_tier_02",
 		MerchantID:       merchantID,
 		GrossAmountCents: 1160000,
-		IsPersonaMoral:   false,
 	}
 	body2, _ := json.Marshal(sale2)
 	rec2 := httptest.NewRecorder()
@@ -852,6 +850,7 @@ func TestRegisterMerchantWithCLABE_KeepsProfileAndRejectsDuplicateCLABE(t *testi
 	var created struct {
 		MerchantID   string `json:"merchant_id"`
 		VirtualCLABE string `json:"virtual_clabe"`
+		KYBStatus    string `json:"kyb_status"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
 	if created.MerchantID == "" || created.MerchantID == "m_clabe_1" {
@@ -859,19 +858,31 @@ func TestRegisterMerchantWithCLABE_KeepsProfileAndRejectsDuplicateCLABE(t *testi
 	}
 	m, ok := server.GetMerchant(created.MerchantID)
 	if !ok || m.Name != "Fonda Real" || m.IsRESICO {
-		t.Fatalf("CLABE assignment must not overwrite the merchant profile: %+v", m)
+		t.Fatalf("registration must keep the declared profile: %+v", m)
 	}
-	// The collection CLABE is server-assigned (client value ignored: no squatting).
-	if m.CLABE == "646180123400000007" || m.CLABE != created.VirtualCLABE || !stp.ValidateCLABE(m.CLABE) || !strings.HasPrefix(m.CLABE, "646180") {
-		t.Fatalf("expected a server-assigned STP CLABE, got %q (response %q)", m.CLABE, created.VirtualCLABE)
+	// No CLABE until the onboarding is approved (client value ignored: no squatting).
+	if m.CLABE != "" || created.VirtualCLABE != "" || created.KYBStatus != "DRAFT" {
+		t.Fatalf("a new merchant starts DRAFT without CLABE, got clabe=%q resp=%s", m.CLABE, rec.Body.String())
 	}
-	rec2 := post(`{"rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"` + m.CLABE + `"}`)
+	if bad := post(`{"rfc":"NOT AN RFC","name":"x"}`); bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "INVALID_RFC") {
+		t.Fatalf("alta must validate the RFC format: %d %s", bad.Code, bad.Body.String())
+	}
+	rec2 := post(`{"rfc":"XAXX010101000","name":"Otro","is_resico":true,"virtual_clabe":"646180123400000007"}`)
 	var created2 struct {
-		VirtualCLABE string `json:"virtual_clabe"`
+		MerchantID string `json:"merchant_id"`
 	}
 	_ = json.Unmarshal(rec2.Body.Bytes(), &created2)
-	if rec2.Code != http.StatusCreated || created2.VirtualCLABE == m.CLABE || !stp.ValidateCLABE(created2.VirtualCLABE) {
-		t.Fatalf("second merchant must get its own CLABE even when asking for another's: %d %s", rec2.Code, rec2.Body.String())
+	completeKYB(t, server, created.MerchantID)
+	completeKYB(t, server, created2.MerchantID)
+	c1, _ := server.GetMerchantCLABE(created.MerchantID)
+	c2, _ := server.GetMerchantCLABE(created2.MerchantID)
+	for _, c := range []string{c1, c2} {
+		if c == "646180123400000007" || !stp.ValidateCLABE(c) || !strings.HasPrefix(c, "646180") {
+			t.Fatalf("expected a server-assigned STP CLABE on approval, got %q", c)
+		}
+	}
+	if c1 == c2 {
+		t.Fatalf("each merchant gets its own CLABE")
 	}
 	if err := server.RegisterMerchantCSD("ghost_merchant", []byte("k"), []byte("c")); err == nil {
 		t.Fatalf("expected error registering a CSD for an unknown merchant")
@@ -892,6 +903,7 @@ func TestSetPaymentProcessor_IsUsedByHandlers(t *testing.T) {
 	server, _ := setupTestServer(t)
 	proc := &countingProcessor{PaymentProcessor: payments.NewPaymentEngine()}
 	server.SetPaymentProcessor(proc)
+	_ = server.RegisterMerchant("m1", "GARM850101ABC", "M1", true)
 	body := `{"payment_id":"pp_1","merchant_id":"m1","tlv_hex":"9F02060000000250005F2A0204849F2701809F2608AABBCCDDEEFF00119F360200145A0841523133333390125F24022812"}`
 	rec := httptest.NewRecorder()
 	server.Router().ServeHTTP(rec, asTenant(t, server, "m1", httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", strings.NewReader(body))))

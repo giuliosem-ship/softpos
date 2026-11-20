@@ -296,7 +296,7 @@ func (s *Server) HandleCreateCardRefund(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "ACQUIRER_NOT_CONFIGURED")
 		return
 	}
-	tenant, ok := requireTenant(w, r, "")
+	tenant, ok := s.requireActiveTenant(w, r, "")
 	if !ok {
 		return
 	}

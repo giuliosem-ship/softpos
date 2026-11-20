@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"softpos/pkg/auth"
 	"softpos/pkg/fiscal"
 	"softpos/pkg/identity"
+	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
 	"softpos/pkg/pac"
 	"softpos/pkg/payments"
@@ -63,6 +65,10 @@ type Server struct {
 	acquirer          acquirer.Provider
 	acquirerSecret    []byte
 	legacyCardFlow    bool
+	kybRepo           store.KYBRepository
+	docBlobs          store.DocumentBlobStore
+	docVault          *identity.DocumentVault
+	kycProvider       kyb.KYCProvider
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -75,7 +81,10 @@ func NewServer(
 ) *Server {
 	// Ephemeral per-process vault key until SetCSDKeyProvider installs the
 	// configured one (VAULT_MASTER_KEY_HEX / KMS): never a hardcoded key.
-	vault, _ := identity.NewCSDVaultServiceWithProvider(identity.NewEphemeralKeyProvider())
+	ephemeralKeys := identity.NewEphemeralKeyProvider()
+	vault, _ := identity.NewCSDVaultServiceWithProvider(ephemeralKeys)
+	docVault, _ := identity.NewDocumentVault(ephemeralKeys)
+	kybMem := store.NewMemoryKYBRepository()
 	primaryPAC := pac.NewMockPACClient(false, "")
 	fallbackPAC := pac.NewMockPACClient(false, "")
 
@@ -92,6 +101,10 @@ func NewServer(
 		csdVault:          vault,
 		idempotency:       NewIdempotencyStore(),
 		merchantRepo:      store.NewMemoryMerchantRepository(),
+		kybRepo:           kybMem,
+		docBlobs:          kybMem,
+		docVault:          docVault,
+		kycProvider:       kyb.MockKYCProvider{},
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -258,17 +271,23 @@ func (s *Server) SetStaticDir(dir string) {
 	s.staticDir = dir
 }
 
-// SetCSDKeyProvider replaces the CSD vault master-key provider. Call at boot,
-// before any CSD is stored (envelopes made with the previous provider would
-// only decrypt if it held their key ids).
+// SetCSDKeyProvider replaces the vault master-key provider of the CSD vault
+// and of the KYC document vault. Call at boot, before any CSD or document is
+// stored (envelopes made with the previous provider would only decrypt if it
+// held their key ids).
 func (s *Server) SetCSDKeyProvider(p identity.KeyProvider) error {
 	vault, err := identity.NewCSDVaultServiceWithProvider(p)
+	if err != nil {
+		return err
+	}
+	docVault, err := identity.NewDocumentVault(p)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.csdVault = vault
+	s.docVault = docVault
 	return nil
 }
 
@@ -307,8 +326,20 @@ func (s *Server) getMerchantCSD(merchantID string) (identity.DecryptedCSD, error
 	return s.vault().DecryptCSDForSigning(enc)
 }
 
-// RegisterMerchant ensures ledger accounts are created before committing merchant state (Prepare-Commit pattern).
+// RegisterMerchant provisions a merchant from trusted server code (demo
+// seeding, tests, back-office tooling): ledger accounts, profile and an
+// out-of-band APPROVED onboarding record (decided_by system:provisioning).
+// The public alta (POST /api/v1/merchants) never uses it: it creates a DRAFT
+// onboarding that must go through KYB (docs/KYB.md).
 func (s *Server) RegisterMerchant(id string, rfc string, name string, isRESICO bool) error {
+	if err := s.registerMerchant(id, rfc, name, isRESICO); err != nil {
+		return err
+	}
+	return s.provisionApprovedKYB(context.Background(), id, rfc, name, isRESICO)
+}
+
+// registerMerchant ensures ledger accounts are created before committing merchant state (Prepare-Commit pattern).
+func (s *Server) registerMerchant(id string, rfc string, name string, isRESICO bool) error {
 	availCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", id)
 	escrowCode := fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", id)
 	rbfCode := fmt.Sprintf("ASSET:RBF_LOANS_RECEIVABLE:%s", id)
@@ -522,8 +553,14 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
+	req.RFC = strings.ToUpper(strings.TrimSpace(req.RFC))
+	req.Name = strings.TrimSpace(req.Name)
 	if req.RFC == "" || req.Name == "" {
 		http.Error(w, `{"error":"MISSING_REQUIRED_FIELDS"}`, http.StatusBadRequest)
+		return
+	}
+	if !identity.ValidateRFC(req.RFC) || len(req.Name) > 255 {
+		writeError(w, http.StatusBadRequest, "INVALID_RFC")
 		return
 	}
 	merchantID, err := newMerchantID()
@@ -532,8 +569,16 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.RegisterMerchant(merchantID, req.RFC, req.Name, req.IsRESICO); err != nil {
+	if err := s.registerMerchant(merchantID, req.RFC, req.Name, req.IsRESICO); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"REGISTRATION_FAILED","detail":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	// Onboarding starts as a DRAFT: no money operation is allowed until an
+	// operator approves the KYB (which also assigns the virtual CLABE).
+	repo, _ := s.kybStore()
+	if _, err := repo.CreateKYB(r.Context(), store.KYBRecord{MerchantID: merchantID, Status: kyb.StatusDraft}); err != nil {
+		slog.Error("kyb draft creation failed", "merchant_id", merchantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "KYB_INIT_FAILED")
 		return
 	}
 
@@ -543,23 +588,18 @@ func (s *Server) HandleRegisterMerchant(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// The virtual collection CLABE is always assigned by the server (a
-	// client-chosen CLABE allowed squatting other merchants' deposits).
+	// The virtual collection CLABE is always assigned by the server, and only
+	// when the onboarding is approved (a client-chosen CLABE allowed
+	// squatting other merchants' deposits).
 	if req.VirtualCLABE != "" {
 		slog.Warn("client-supplied virtual_clabe ignored", "merchant_id", merchantID)
 	}
-	clabe, err := s.AssignVirtualCLABE(r.Context(), merchantID)
-	if err != nil {
-		slog.Error("virtual CLABE assignment failed", "merchant_id", merchantID, "error", err)
-		writeError(w, http.StatusInternalServerError, "CLABE_ASSIGNMENT_FAILED")
-		return
-	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"status":        "CREATED",
-		"merchant_id":   merchantID,
-		"role":          auth.RoleOwner,
-		"virtual_clabe": clabe,
+		"status":      "CREATED",
+		"merchant_id": merchantID,
+		"role":        auth.RoleOwner,
+		"kyb_status":  kyb.StatusDraft,
 	})
 }
 
@@ -583,6 +623,11 @@ func (s *Server) routes() {
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/settlement-account", s.HandleGetSettlementAccount)
 	s.router.HandleFunc("PUT /api/v1/merchants/{id}/settlement-account", s.HandlePutSettlementAccount)
 	s.router.HandleFunc("POST /api/v1/merchants/{id}/settlement-account/verify", s.HandleReviewSettlementAccount)
+	// Merchant onboarding (KYB/KYC): owner captures data and documents, submits
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/kyb", s.HandleGetKYB)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/kyb", s.HandlePutKYB)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/kyb/documents", s.HandleUploadKYBDocument)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/kyb/submit", s.HandleSubmitKYB)
 
 	// STP Inbound & Outbound Disbursements + Banxico CEP Reconciliation
 	s.router.HandleFunc("POST /api/v1/webhooks/stp/abono", s.HandleSTPAbono)

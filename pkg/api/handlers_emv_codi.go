@@ -45,7 +45,7 @@ func (s *Server) HandleEMVAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
@@ -248,7 +248,7 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_AMOUNT")
 		return
 	}
-	tenant, ok := requireTenant(w, r, "")
+	tenant, ok := s.requireActiveTenant(w, r, "")
 	if !ok {
 		return
 	}
@@ -397,7 +397,7 @@ func (s *Server) HandleCoDiCreateQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}

@@ -110,10 +110,13 @@ Rules for protected handlers:
   or `operator`; other tenant routes accept any member. See
   `docs/MONEY_FLOWS.md`.
 - `POST /api/v1/merchants` requires a token of an existing user; the **server
-  generates the id** (`mer_…`; a client `id` is ignored) and the virtual
-  collection CLABE (a client `virtual_clabe` is ignored) and the caller becomes
-  `owner`. Then `POST /api/v1/auth/refresh {"refresh_token","merchant_id"}`
-  returns a token scoped to the new merchant.
+  generates the id** (`mer_…`; a client `id` is ignored), validates the RFC
+  format (`400 INVALID_RFC`), creates a `DRAFT` onboarding (`kyb_status` in
+  the response) and the caller becomes `owner`. The virtual collection CLABE
+  is assigned by the server only when an operator approves the KYB (a client
+  `virtual_clabe` is ignored); until then money operations answer `403
+  MERCHANT_NOT_APPROVED` (`docs/KYB.md`). Then `POST /api/v1/auth/refresh
+  {"refresh_token","merchant_id"}` returns a token scoped to the new merchant.
 
 Rate limiting: `/api/v1/auth/*` is limited per client IP (fixed window,
 `AUTH_RATE_LIMIT_PER_MINUTE`, default 30) → `429 RATE_LIMITED` + `Retry-After`.

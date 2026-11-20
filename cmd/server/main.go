@@ -28,6 +28,7 @@ import (
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
 	"softpos/pkg/identity"
+	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
 	"softpos/pkg/outbox"
 	"softpos/pkg/payouts"
@@ -96,6 +97,12 @@ type Config struct {
 	// processor are flagged (ACQUIRER_RECONCILE_INTERVAL, default 1h; runs
 	// only with DatabaseURL).
 	AcquirerReconcileInterval time.Duration
+
+	// KYCProvider selects the identity verification provider used at KYB
+	// submission (KYC_PROVIDER): "mock" (tests / DEV_MODE; rejected in
+	// production) or empty = no automatic identity check (operators review
+	// the documents manually). DEV_MODE defaults it to "mock".
+	KYCProvider string
 
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
@@ -188,6 +195,7 @@ func LoadConfigFromEnv() Config {
 		AcquirerProvider:          strings.ToLower(strings.TrimSpace(os.Getenv("ACQUIRER_PROVIDER"))),
 		AcquirerWebhookSecret:     os.Getenv("ACQUIRER_WEBHOOK_SECRET"),
 		AcquirerReconcileInterval: parseDurationEnv("ACQUIRER_RECONCILE_INTERVAL"),
+		KYCProvider:               strings.ToLower(strings.TrimSpace(os.Getenv("KYC_PROVIDER"))),
 		DefaultPlatformFeeBps:     feeBps,
 		HasDefaultFeeBps:          hasFee,
 		AuthRateLimitPerMinute:    authRate,
@@ -376,6 +384,27 @@ func resolveAcquirerWebhookSecret(cfg Config) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// ErrUnknownKYCProvider is returned for an unsupported KYC_PROVIDER.
+var ErrUnknownKYCProvider = errors.New("unknown KYC_PROVIDER (want mock or empty)")
+
+// buildKYCProvider resolves KYC_PROVIDER (DEV_MODE defaults to the mock).
+// nil means identity checks stay UNKNOWN and operators verify manually.
+func buildKYCProvider(cfg Config) (kyb.KYCProvider, error) {
+	name := cfg.KYCProvider
+	if name == "" && cfg.DevMode {
+		name = "mock"
+	}
+	switch name {
+	case "":
+		slog.Warn("KYC_PROVIDER not set: KYB identity checks are manual (operator review)")
+		return nil, nil
+	case "mock":
+		slog.Warn("KYC_PROVIDER=mock: identity checks use the deterministic mock (no real verification)")
+		return kyb.MockKYCProvider{}, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrUnknownKYCProvider, name)
+}
+
 // BuildServer instantiates and connects all infrastructure, repositories, and domain services.
 func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.RedisClient, error) {
 	stpSecret, codiSecret, err := resolveWebhookSecrets(cfg)
@@ -475,6 +504,14 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	if codiSecret != "" {
 		server.SetCoDiWebhookSecret(codiSecret)
 	}
+	kycProv, err := buildKYCProvider(cfg)
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, err
+	}
+	server.SetKYCProvider(kycProv)
 	if cfg.AuthRateLimitPerMinute > 0 {
 		server.SetAuthRateLimit(cfg.AuthRateLimitPerMinute)
 	}
@@ -485,6 +522,10 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	if db != nil {
 		sqlMerchantRepo := store.NewSQLMerchantRepository(db)
 		server.SetMerchantRepository(sqlMerchantRepo)
+
+		// Merchant onboarding (KYB) and encrypted KYC document blobs (bytea).
+		sqlKYB := store.NewSQLKYBRepository(db)
+		server.SetKYBRepository(sqlKYB, sqlKYB)
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
@@ -532,6 +573,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		demoCLABE := "646180123400000007"
 		if err := server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC); err != nil {
 			slog.Warn("demo merchant seeding failed", "error", err)
+		}
+		// The demo merchant is provisioned with an approved onboarding (also
+		// when it was seeded before migration 012 created merchant_kyb).
+		if err := server.EnsureMerchantApproved(ctx, demoID); err != nil {
+			slog.Warn("demo merchant KYB approval failed", "error", err)
 		}
 		// DEV_MODE only: a pre-verified settlement account so the demo can
 		// exercise payouts (ownership verification has no real provider yet).

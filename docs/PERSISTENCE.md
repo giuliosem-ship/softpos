@@ -46,6 +46,7 @@ same interfaces use in-memory implementations.
 | Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |
 | SAT 69-B blacklist | `identity` repository | `store.SQLBlacklistRepository` | map |
 | Users, memberships, OTP challenges, refresh tokens, attestation nonces (`docs/AUTH.md`) | `auth.Repository` | `store.SQLAuthRepository` (migrations 005, 006) | `auth.MemoryRepository` |
+| Merchant onboarding (KYB), KYC document metadata and encrypted blobs (migration 012, `docs/KYB.md`) | `store.KYBRepository`, `store.DocumentBlobStore` | `store.SQLKYBRepository` (`merchant_kyb`, `kyb_documents`, `kyb_document_blobs`) | `store.MemoryKYBRepository` |
 | Money unit of work: settlements, exactly-once keys, merchant tariff (`docs/MONEY_FLOWS.md`) | `store.MoneyStore` | `store.SQLMoneyStore` (`payment_settlements`, `money_operations`, `merchants.platform_fee_bps`, migration 007) | `store.MemoryMoneyStore` |
 
 Notes:

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -23,6 +25,17 @@ var (
 	ErrInsecureCoDiWebhookSecret = errors.New("insecure configuration: CODI_WEBHOOK_SECRET must be set to at least 32 bytes in production")
 )
 
+// insecureVaultKey reports whether keyHex decodes to the public dev key (in
+// any spelling: case, surrounding spaces) or to a trivial key (all bytes equal).
+func insecureVaultKey(keyHex string) bool {
+	k, err := identity.DecodeMasterKeyHex(keyHex)
+	if err != nil {
+		return false // malformed keys are rejected separately
+	}
+	dev, _ := hex.DecodeString(defaultVaultMasterKeyHex)
+	return bytes.Equal(k, dev) || identity.IsTrivialMasterKey(k)
+}
+
 // ValidateProductionConfig performs fail-fast security auditing on the runtime configuration.
 // If env is "production" (or "prod"), it rejects default dev secrets, plain-text DB connections,
 // and synthetic merchant seeding.
@@ -34,7 +47,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	}
 
 	// 1. Vault Master Key validation
-	if cfg.VaultMasterKeyHex == "" || cfg.VaultMasterKeyHex == defaultVaultMasterKeyHex {
+	if cfg.VaultMasterKeyHex == "" || insecureVaultKey(cfg.VaultMasterKeyHex) {
 		return ErrInsecureDefaultVaultKey
 	}
 	if _, err := identity.DecodeMasterKeyHex(cfg.VaultMasterKeyHex); err != nil {
@@ -44,7 +57,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 		return ErrInvalidVaultKey
 	} else {
 		for _, h := range ring {
-			if _, err := identity.DecodeMasterKeyHex(h); err != nil || h == defaultVaultMasterKeyHex {
+			if _, err := identity.DecodeMasterKeyHex(h); err != nil || insecureVaultKey(h) {
 				return ErrInvalidVaultKey
 			}
 		}

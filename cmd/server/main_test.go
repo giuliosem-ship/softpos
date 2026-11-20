@@ -282,6 +282,13 @@ func TestBuildServer_VaultKeyFromEnvOnly(t *testing.T) {
 	if _, _, _, err := BuildServer(context.Background(), devKey); !errors.Is(err, ErrDevVaultKeyOutsideDevMode) {
 		t.Fatalf("public dev key outside DEV_MODE: want ErrDevVaultKeyOutsideDevMode, got %v", err)
 	}
+	for _, k := range []string{strings.ToUpper(defaultVaultMasterKeyHex), strings.Repeat("00", 32)} {
+		weak := base
+		weak.VaultMasterKeyHex = k
+		if _, err := buildVaultKeyProvider(weak); err == nil {
+			t.Fatalf("vault key %q outside DEV_MODE must be rejected", k)
+		}
+	}
 	short := base
 	short.VaultMasterKeyHex = "abcd"
 	if _, _, _, err := BuildServer(context.Background(), short); err == nil {
@@ -311,7 +318,7 @@ func TestBuildServer_VaultKeyFromEnvOnly(t *testing.T) {
 		t.Fatalf("envelope key id: %q %v", enc.KeyID, err)
 	}
 	rotated := cfg
-	rotated.VaultMasterKeyHex = strings.Repeat("ab", 32)
+	rotated.VaultMasterKeyHex = "5c3e8a1f0b7d29e46a1c3f5b7d9e0a2c4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b"
 	rotated.VaultKeyID = "v2"
 	rotated.VaultPreviousKeys = "v1:" + testVaultKeyHex
 	p2, err := buildVaultKeyProvider(rotated)

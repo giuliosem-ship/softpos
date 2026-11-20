@@ -185,7 +185,7 @@ can simulate a CoDi payment without holding the secret.
 | `PLAY_INTEGRITY_PACKAGE` | Expected Android package (default `mx.softpos.app`). |
 | `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
 | `STP_HMAC_SECRET` | STP HMAC secret. No default; the dev default is accepted only with `DEV_MODE`. Required in production. |
-| `VAULT_MASTER_KEY_HEX` | Active 32-byte (64 hex) master key of the CSD vault. Required unless `DEV_MODE=true` (then the public dev key is used, so old dev envelopes keep decrypting); the dev key is refused without `DEV_MODE`. |
+| `VAULT_MASTER_KEY_HEX` | Active 32-byte (64 hex) master key of the CSD vault. Required unless `DEV_MODE=true` (then the public dev key is used, so old dev envelopes keep decrypting); the dev key (in any spelling) and trivial keys (all bytes equal, e.g. all zeros) are refused without `DEV_MODE`. |
 | `VAULT_MASTER_KEY_ID` | Key id written into new envelopes (default `v1`; `dev` for the dev key). |
 | `VAULT_PREVIOUS_KEYS` | Retired keys still accepted for decryption: `id:hex,id:hex` (rotation). |
 | `ALLOW_CASHIER_REFUNDS` | `true` lets cashiers refund settled payments (default: owner-only). |

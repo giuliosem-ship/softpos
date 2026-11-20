@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -142,5 +143,18 @@ func TestKMSKeyProvider_WrapsThroughClient(t *testing.T) {
 	}
 	if _, _, err := (&KMSKeyProvider{}).WrapDEK(context.Background(), key); err == nil {
 		t.Fatal("unconfigured KMS provider must fail")
+	}
+}
+
+func TestParseKeyring_ErrorDoesNotLeakKeyMaterial(t *testing.T) {
+	const secret = "7e1f3c5a9b2d4e6f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7"
+	for _, spec := range []string{secret, ":" + secret, "v1:aa," + secret} {
+		_, err := ParseKeyring(spec)
+		if err == nil {
+			t.Fatalf("%q: want error", spec)
+		}
+		if strings.Contains(err.Error(), secret[:16]) {
+			t.Fatalf("keyring error leaks key material: %v", err)
+		}
 	}
 }

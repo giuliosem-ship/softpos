@@ -60,6 +60,25 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 		t.Errorf("expected ErrInvalidVaultKey for a bad previous key, got: %v", err)
 	}
 
+	// 2c. The dev key in another spelling, or a trivial key, is not a real key
+	for _, k := range []string{
+		"0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+		" 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	} {
+		weak := prodCfg
+		weak.VaultMasterKeyHex = k
+		if err := ValidateProductionConfig(weak, "production"); !errors.Is(err, ErrInsecureDefaultVaultKey) {
+			t.Errorf("vault key %q: expected ErrInsecureDefaultVaultKey, got: %v", k, err)
+		}
+	}
+	devPrev := prodCfg
+	devPrev.VaultPreviousKeys = "dev:0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20"
+	if err := ValidateProductionConfig(devPrev, "production"); !errors.Is(err, ErrInvalidVaultKey) {
+		t.Errorf("expected ErrInvalidVaultKey for the dev key as a previous key, got: %v", err)
+	}
+
 	// 3. Reject default STP HMAC secret
 	badSTPCfg := prodCfg
 	badSTPCfg.STPHMACSecret = "softpos_dev_secret_key_12345678"

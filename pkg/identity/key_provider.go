@@ -52,6 +52,17 @@ func DecodeMasterKeyHex(keyHex string) ([]byte, error) {
 	return k, nil
 }
 
+// IsTrivialMasterKey reports whether k is a degenerate key (every byte equal,
+// e.g. all zeros): a placeholder, never a real random key.
+func IsTrivialMasterKey(k []byte) bool {
+	for _, b := range k {
+		if b != k[0] {
+			return false
+		}
+	}
+	return true
+}
+
 // NewStaticKeyProvider builds a provider whose active key is activeHex under
 // activeID; previous maps retired key ids to hex keys (still able to unwrap).
 func NewStaticKeyProvider(activeID, activeHex string, previous map[string]string) (*StaticKeyProvider, error) {
@@ -89,14 +100,15 @@ func NewEphemeralKeyProvider() *StaticKeyProvider {
 // ParseKeyring parses VAULT_PREVIOUS_KEYS: "id1:hex1,id2:hex2" (empty -> none).
 func ParseKeyring(spec string) (map[string]string, error) {
 	out := map[string]string{}
-	for _, part := range strings.Split(spec, ",") {
+	for i, part := range strings.Split(spec, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
 		id, h, ok := strings.Cut(part, ":")
 		if !ok || strings.TrimSpace(id) == "" {
-			return nil, fmt.Errorf("invalid keyring entry %q (want id:hex)", part)
+			// Never echo the entry: it is (or contains) key material.
+			return nil, fmt.Errorf("invalid keyring entry #%d (want id:hex)", i+1)
 		}
 		out[strings.TrimSpace(id)] = strings.TrimSpace(h)
 	}

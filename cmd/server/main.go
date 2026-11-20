@@ -239,7 +239,7 @@ var (
 	// ErrMissingVaultKey is returned when VAULT_MASTER_KEY_HEX is unset outside DEV_MODE.
 	ErrMissingVaultKey = errors.New("VAULT_MASTER_KEY_HEX is required (32 bytes hex) unless DEV_MODE=true")
 	// ErrDevVaultKeyOutsideDevMode is returned when the public dev vault key is configured without DEV_MODE.
-	ErrDevVaultKeyOutsideDevMode = errors.New("VAULT_MASTER_KEY_HEX is the public dev key; set a real key or DEV_MODE=true")
+	ErrDevVaultKeyOutsideDevMode = errors.New("VAULT_MASTER_KEY_HEX is the public dev key or a trivial key; set a real random key or DEV_MODE=true")
 )
 
 // buildVaultKeyProvider returns the CSD vault master-key provider from the
@@ -257,7 +257,7 @@ func buildVaultKeyProvider(cfg Config) (identity.KeyProvider, error) {
 		if keyID == "" {
 			keyID = "dev"
 		}
-	case keyHex == defaultVaultMasterKeyHex && !cfg.DevMode:
+	case insecureVaultKey(keyHex) && !cfg.DevMode:
 		return nil, ErrDevVaultKeyOutsideDevMode
 	}
 	if keyID == "" {

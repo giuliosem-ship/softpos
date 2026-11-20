@@ -93,16 +93,19 @@ class DocumentReader(private val context: Context) {
     private fun readPdf(uri: Uri, baseName: String): PickedDocument? {
         val out = WipeableOutputStream()
         return try {
-            resolver.openInputStream(uri)?.use { input ->
-                val chunk = ByteArray(16 * 1024)
-                while (true) {
-                    val n = input.read(chunk)
-                    if (n < 0) break
-                    out.write(chunk, 0, n)
-                    if (out.size() > MAX_BYTES) return null
-                }
-                chunk.fill(0)
-            } ?: return null
+            val chunk = ByteArray(16 * 1024)
+            try {
+                resolver.openInputStream(uri)?.use { input ->
+                    while (true) {
+                        val n = input.read(chunk)
+                        if (n < 0) break
+                        out.write(chunk, 0, n)
+                        if (out.size() > MAX_BYTES) return null
+                    }
+                } ?: return null
+            } finally {
+                chunk.fill(0) // also on the too-large and I/O error paths
+            }
             PickedDocument(out.toByteArray(), PDF, "$baseName.pdf")
         } finally {
             out.wipe()

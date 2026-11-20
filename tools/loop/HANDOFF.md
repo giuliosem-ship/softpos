@@ -1,5 +1,5 @@
 # Engineering Loop Handoff Checkpoint
-**Actualizado:** 2026-11-20 — Fase 1 cerrada (MVP-01..13, Lotes A–D); Fase 2 en curso: Lote E backend (MVP-14..16)
+**Actualizado:** 2026-11-20 — Fase 1 cerrada (MVP-01..13, Lotes A–D); Fase 2 en curso: Lotes E (procesador, MVP-14..16), F (app Android, AND-30..32) y G (KYB + backoffice + ventas, MVP-17..19) aplicados y auditados
 **Estado real:** prototipo con cimientos de MVP. No hay procesador de tarjetas, PAC ni STP reales: los rieles externos siguen simulados (ver `docs/KERNO_MVP_GAP_ANALYSIS.md`).
 
 ## Cómo se trabaja ahora
@@ -27,6 +27,16 @@
 - MVP-15: webhook firmado `POST /api/v1/webhooks/acquirer/{provider}` (exactly-once, tolerante a desorden), devoluciones vía procesador (`POST /{id}/refunds`, el ledger se mueve con el webhook), contracargos en ledger + outbox, `ACQUIRER_WEBHOOK_SECRET` en el guard.
 - MVP-16: conciliación de payouts del procesador (`ASSET:ACQUIRER_RECEIVABLE` → `ASSET:BANK_OPERATING`, reporte de diferencias para `operator`, alertas), vigilante de capturas no liquidadas (worker + `cmd/reconciler`).
 - Validación: `go vet` limpio, `go test -race` OK, PGIntegration 29/29, `node --test` 8/8. Contrato para Android en `docs/ACQUIRER_INTEGRATION.md` §2.
+
+## Fase 2 — Lote F (app Android, AND-30..32)
+- Módulo Android real (Compose, sesión cifrada con Keystore, saldo/cobrar/ventas/perfil); detalle y estado en `docs/ANDROID_APP.md` (su auditoría va aparte).
+
+## Fase 2 — Lote G (KYB, backoffice, ventas)
+- MVP-17: KYB `DRAFT → SUBMITTED → IN_REVIEW → APPROVED/REJECTED` (migración 012), documentos cifrados con la bóveda, checks (dígito verificador RFC, solo RESICO PF, 69-B, `kyb.KYCProvider` mock); sin aprobación o bloqueado no hay movimientos de dinero (`docs/KYB.md`).
+- MVP-18: backoffice de operadores de plataforma (`kerno:backoffice`, migración 014, bitácora `operator_audit_log`, UI en `/backoffice/` con CSP estricta; `docs/BACKOFFICE.md`).
+- MVP-19: `GET /api/v1/merchants/{id}/sales` (migración 013 con backfill), `PLAY_INTEGRITY_PACKAGE=mx.kerno.softpos`, ventana de gracia de 30 s del refresh.
+- Auditoría (`[MVP-17-audit]`/`[MVP-18-audit]`): RBF tras la aprobación y solo `operator`; CLABE virtual asignada una sola vez; no se aprueba un RFC 69-B `LISTED`; un operador no aprueba/desbloquea su propio comercio; 69-B `UNKNOWN` sin lista cargada. Pendientes nuevos en el gap analysis (ingesta 69-B, documento subido durante el envío, bitácora mutable a nivel BD).
+- Validación: `go vet` limpio, `go test -race` 20/20 paquetes, PGIntegration 36/36, `node --test` 8/8.
 
 ## Qué sigue — Fase 2 (gap analysis §7)
 - Rieles reales: adaptador del procesador elegido (el flujo backend ya existe sobre el puerto) + su SDK en la app, STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).

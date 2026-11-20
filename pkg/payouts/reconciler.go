@@ -80,6 +80,17 @@ type Result struct {
 	Skipped     int // already finalized by someone else
 }
 
+// Outcome of reconciling one payout.
+type Outcome string
+
+const (
+	OutcomeSettled     Outcome = "SETTLED"     // STP liquidated it
+	OutcomeDispatched  Outcome = "DISPATCHED"  // STP accepted it
+	OutcomeCompensated Outcome = "COMPENSATED" // rejected / never registered: funds returned (FAILED)
+	OutcomeUnknown     Outcome = "UNKNOWN"     // still unknown: funds stay reserved, alert logged
+	OutcomeSkipped     Outcome = "SKIPPED"     // already finalized by someone else
+)
+
 // RunOnce processes one batch of stale payouts.
 func (r *Reconciler) RunOnce(ctx context.Context) (Result, error) {
 	var res Result
@@ -91,47 +102,59 @@ func (r *Reconciler) RunOnce(ctx context.Context) (Result, error) {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		qctx, cancel := context.WithTimeout(ctx, r.cfg.QueryTimeout)
-		st, qerr := r.stp.QueryOrderStatus(qctx, p.ClaveRastreo, p.FechaOperacion)
-		cancel()
-		if qerr != nil {
-			res.Unknown++
-			r.alert(ctx, p, "STP status query failed", qerr)
-			continue
-		}
-		var outcome string
-		var ferr error
-		switch st.State {
-		case stp.OrderLiquidated:
-			outcome, ferr = r.finalize(ctx, p, store.PayoutSettled, st.STPOrderID, "disbursement.settled")
-			if outcome == "done" {
-				res.Settled++
-			}
-		case stp.OrderAccepted:
-			outcome, ferr = r.finalize(ctx, p, store.PayoutDispatched, st.STPOrderID, "disbursement.dispatched")
-			if outcome == "done" {
-				res.Dispatched++
-			}
-		case stp.OrderRejected, stp.OrderNotFound:
-			outcome, ferr = r.compensate(ctx, p, st)
-			if outcome == "done" {
-				res.Compensated++
-			}
+		switch r.ReconcilePayout(ctx, p) {
+		case OutcomeSettled:
+			res.Settled++
+		case OutcomeDispatched:
+			res.Dispatched++
+		case OutcomeCompensated:
+			res.Compensated++
+		case OutcomeSkipped:
+			res.Skipped++
 		default:
 			res.Unknown++
-			r.alert(ctx, p, "STP order state still unknown", fmt.Errorf("state %q: %s", st.State, st.Detail))
-			continue
-		}
-		if ferr != nil {
-			res.Unknown++
-			r.alert(ctx, p, "payout recovery transaction failed", ferr)
-			continue
-		}
-		if outcome == "skipped" {
-			res.Skipped++
 		}
 	}
 	return res, nil
+}
+
+// ReconcilePayout resolves one RESERVED / PENDING_RECONCILIATION payout
+// against the STP order status (also used by the backoffice "retry"). Every
+// state change is compare-and-set on the locked payout row, so it is safe to
+// run concurrently with the background loop.
+func (r *Reconciler) ReconcilePayout(ctx context.Context, p store.PayoutRecord) Outcome {
+	qctx, cancel := context.WithTimeout(ctx, r.cfg.QueryTimeout)
+	st, qerr := r.stp.QueryOrderStatus(qctx, p.ClaveRastreo, p.FechaOperacion)
+	cancel()
+	if qerr != nil {
+		r.alert(ctx, p, "STP status query failed", qerr)
+		return OutcomeUnknown
+	}
+	var outcome string
+	var ferr error
+	var done Outcome
+	switch st.State {
+	case stp.OrderLiquidated:
+		outcome, ferr = r.finalize(ctx, p, store.PayoutSettled, st.STPOrderID, "disbursement.settled")
+		done = OutcomeSettled
+	case stp.OrderAccepted:
+		outcome, ferr = r.finalize(ctx, p, store.PayoutDispatched, st.STPOrderID, "disbursement.dispatched")
+		done = OutcomeDispatched
+	case stp.OrderRejected, stp.OrderNotFound:
+		outcome, ferr = r.compensate(ctx, p, st)
+		done = OutcomeCompensated
+	default:
+		r.alert(ctx, p, "STP order state still unknown", fmt.Errorf("state %q: %s", st.State, st.Detail))
+		return OutcomeUnknown
+	}
+	if ferr != nil {
+		r.alert(ctx, p, "payout recovery transaction failed", ferr)
+		return OutcomeUnknown
+	}
+	if outcome == "skipped" {
+		return OutcomeSkipped
+	}
+	return done
 }
 
 func (r *Reconciler) alert(ctx context.Context, p store.PayoutRecord, msg string, err error) {

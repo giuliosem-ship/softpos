@@ -205,7 +205,7 @@ func TestLoadConfigFromEnv_AttestationAndRateLimit(t *testing.T) {
 	t.Setenv("AUTH_RATE_LIMIT_PER_MINUTE", "7")
 	t.Setenv("PLAY_INTEGRITY_SECRET", "pi_secret")
 	cfg := LoadConfigFromEnv()
-	if cfg.AuthRateLimitPerMinute != 7 || cfg.PlayIntegritySecret != "pi_secret" || cfg.PlayIntegrityPackage != "mx.softpos.app" {
+	if cfg.AuthRateLimitPerMinute != 7 || cfg.PlayIntegritySecret != "pi_secret" || cfg.PlayIntegrityPackage != "mx.kerno.softpos" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }

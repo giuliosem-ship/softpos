@@ -17,6 +17,11 @@ Rules:
   key → monthly-sales row → ledger accounts (sorted by code). Global accounts
   (`ASSET:ACQUIRER_RECEIVABLE`, `ASSET:STP_CONCENTRATOR`, `REVENUE:FEES`) are hot
   rows: postings that touch them serialize.
+- Merchant gate (MVP-17): money operations started by a merchant — card
+  intents and refunds, CoDi/SPEI QR, payouts, legacy EMV authorize / settle /
+  reverse — require an `APPROVED`, not blocked onboarding (`403
+  MERCHANT_NOT_APPROVED` / `MERCHANT_BLOCKED`, `docs/KYB.md`). Inbound money
+  (STP abonos, CoDi confirmations, processor webhooks) is always recorded.
 - Outbox events are written with `SaveEventTx` inside the same transaction, so
   they exist only if the money moved. Delivery is at-least-once (consumers
   deduplicate on `aggregate_id` + `event_type`).
@@ -64,9 +69,11 @@ ALERT` and served to operators by `GET /api/v1/acquirer/reconciliation`.
 with `DEV_MODE=true` (`410 LEGACY_CARD_FLOW_DISABLED` otherwise): they trust
 the phone's TLV as the approval.
 
-Body: `payment_id` (required), `is_persona_moral`, optional
+Body: `payment_id` (required), optional
 `gross_amount_cents` (only cross-checked: a different value → `409
-AMOUNT_MISMATCH`). Client `platform_fee_cents` / `rbf_sweep_cents` are ignored.
+AMOUNT_MISMATCH`). Client `platform_fee_cents` / `rbf_sweep_cents` and
+`is_persona_moral` are ignored (the buyer-is-persona-moral split input is
+server-derived, `docs/KYB.md`).
 
 1. Lock the payment. Unknown id or another tenant's payment → `404
    PAYMENT_NOT_FOUND`; `VOIDED` → `409 INVALID_PAYMENT_STATE`.
@@ -220,6 +227,30 @@ transaction, so one finalized meanwhile is skipped:
 | `ACCEPTED` | `DISPATCHED` + order id, outbox `disbursement.dispatched` |
 | `REJECTED` / `NOT_FOUND` | journal `disb_rev_<clave>` (its fixed id makes a second compensation impossible) + `FAILED` + outbox `disbursement.failed` |
 | unknown / query error | kept reserved, `ERROR` log `ALERT payout unresolved` every pass |
+
+## Sales listing — `GET /api/v1/merchants/{id}/sales`
+
+`?limit=50` (1..100, `400 INVALID_LIMIT`) `&before=<cursor>` (opaque,
+`400 INVALID_CURSOR`); any member of the tenant (another merchant → `403`).
+
+```json
+{"items":[{"id":"cp_…","kind":"card","status":"CAPTURED","amount_cents":25000,
+           "created_at":"2026-11-20T18:01:02.123456Z","card_payment_id":"cp_…"},
+          {"id":"spei_40012:SPEI123","kind":"spei","status":"RECEIVED","amount_cents":50000,"created_at":"…"},
+          {"id":"codi_BNX001","kind":"codi","status":"CONFIRMED","amount_cents":11600,"created_at":"…"}],
+ "next_cursor":"…"|null}
+```
+
+Sources: `card_payments` (every intent, with its processor status) and
+`merchant_sales` (migration 013): one row per credited SPEI abono (`spei_<institución>:<clave>`,
+`RECEIVED`) and CoDi confirmation (`codi_<tracking_key>`, `CONFIRMED`),
+written by `MoneyTx.RecordSale` in the **same transaction** as the journal
+(idempotent on the id). Migration 013 backfills both kinds from existing
+`spei_in_…` / `codi_…` journals. Order: `created_at DESC, id DESC` (stable);
+the cursor encodes the last item's `(created_at, id)` and the next page takes
+rows strictly older. Legacy EMV payments (`emv_payments`, DEV_MODE only) are
+not listed. The backoffice searches the same view across merchants
+(`docs/BACKOFFICE.md`).
 
 ## Not covered yet
 

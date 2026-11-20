@@ -28,6 +28,7 @@ var (
 	ErrWeakPlayIntegritySecret   = errors.New("insecure configuration: PLAY_INTEGRITY_SECRET, when set, must be at least 32 bytes in production")
 	ErrInsecureAcquirerSecret    = errors.New("insecure configuration: ACQUIRER_WEBHOOK_SECRET must be set to at least 32 bytes in production when ACQUIRER_PROVIDER is set")
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
+	ErrMockKYCInProduction       = errors.New("insecure configuration: KYC_PROVIDER=mock cannot be used in production (it passes every identity check)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
 
@@ -73,6 +74,8 @@ var ServerEnvVars = []EnvVar{
 	{Name: "ACQUIRER_PROVIDER"},
 	{Name: "ACQUIRER_WEBHOOK_SECRET", Secret: true},
 	{Name: "ACQUIRER_RECONCILE_INTERVAL"},
+	{Name: "KYC_PROVIDER"},
+	{Name: "BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE"},
 	{Name: "OUTBOX_POLL_INTERVAL"},
 	{Name: "OUTBOX_BATCH_SIZE"},
 	{Name: "OUTBOX_PUBLISHER"},
@@ -176,6 +179,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	}
 	if cfg.AcquirerProvider == "mock" {
 		return ErrMockAcquirerInProduction
+	}
+
+	// 8. KYB identity verification: the mock passes every check.
+	if cfg.KYCProvider == "mock" {
+		return ErrMockKYCInProduction
 	}
 
 	return nil

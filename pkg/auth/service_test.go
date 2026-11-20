@@ -196,7 +196,7 @@ func TestVerifyOTP_NonMemberMerchantRejected(t *testing.T) {
 }
 
 func TestRefresh_RotationAndReuseDetection(t *testing.T) {
-	svc, _, sender, _ := newService(t)
+	svc, _, sender, clk := newService(t)
 	ctx := context.Background()
 	tp := login(t, svc, sender, "+525588889999", "")
 
@@ -207,7 +207,9 @@ func TestRefresh_RotationAndReuseDetection(t *testing.T) {
 	if rotated.RefreshToken == tp.RefreshToken {
 		t.Fatal("refresh must rotate the token")
 	}
-	// Replaying the old token is reuse: the whole family is revoked.
+	// Replaying the old token after the grace window is reuse: the whole
+	// family is revoked.
+	clk.Advance(auth.DefaultRefreshGrace + time.Second)
 	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
 		t.Fatalf("want ErrRefreshTokenReused, got %v", err)
 	}
@@ -219,26 +221,106 @@ func TestRefresh_RotationAndReuseDetection(t *testing.T) {
 	}
 }
 
+// TestRefresh_GraceWindowReturnsSamePairOnce: an app killed mid-refresh
+// re-presents the previous token; within the grace window it gets the same
+// new refresh token back (once) instead of losing the session.
+func TestRefresh_GraceWindowReturnsSamePairOnce(t *testing.T) {
+	svc, _, sender, clk := newService(t)
+	ctx := context.Background()
+	tp := login(t, svc, sender, "+525588880001", "")
+	rotated, err := svc.Refresh(ctx, tp.RefreshToken, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(10 * time.Second)
+	again, err := svc.Refresh(ctx, tp.RefreshToken, "")
+	if err != nil {
+		t.Fatalf("grace re-presentation: %v", err)
+	}
+	if again.RefreshToken != rotated.RefreshToken || again.AccessToken == "" || again.UserID != rotated.UserID {
+		t.Fatalf("grace must return the same new refresh token, got %+v", again)
+	}
+	if _, err := svc.ParseAccessToken(again.AccessToken); err != nil {
+		t.Fatalf("grace access token: %v", err)
+	}
+	// Only once: a second re-presentation is reuse and revokes the family.
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("second re-presentation: want ErrRefreshTokenReused, got %v", err)
+	}
+	if _, err := svc.Refresh(ctx, rotated.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("family must be revoked after the second replay, got %v", err)
+	}
+}
+
+// TestRefresh_GraceDoesNotApplyOnceSuccessorUsed: if the successor was already
+// rotated (the client did receive it), re-presenting the old token is theft.
+func TestRefresh_GraceDoesNotApplyOnceSuccessorUsed(t *testing.T) {
+	svc, _, sender, _ := newService(t)
+	ctx := context.Background()
+	tp := login(t, svc, sender, "+525588880002", "")
+	r1, _ := svc.Refresh(ctx, tp.RefreshToken, "")
+	r2, err := svc.Refresh(ctx, r1.RefreshToken, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("replay of a token whose successor was used: want reuse, got %v", err)
+	}
+	if _, err := svc.Refresh(ctx, r2.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("family must be revoked, got %v", err)
+	}
+}
+
+func TestRefresh_GraceDisabledAndLogout(t *testing.T) {
+	repo := auth.NewMemoryRepository()
+	sender := auth.NewMemorySender()
+	svc, err := auth.NewService(repo, sender, auth.Config{JWTSecret: []byte(testSecret), RefreshGrace: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tp := login(t, svc, sender, "+525588880003", "")
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("grace disabled: want reuse, got %v", err)
+	}
+	// With grace on, logout (family revoked) also ends the grace.
+	svc2, _, sender2, _ := newService(t)
+	tp2 := login(t, svc2, sender2, "+525588880004", "")
+	r, _ := svc2.Refresh(ctx, tp2.RefreshToken, "")
+	_ = svc2.Logout(ctx, r.RefreshToken)
+	if _, err := svc2.Refresh(ctx, tp2.RefreshToken, ""); !errors.Is(err, auth.ErrRefreshTokenReused) {
+		t.Fatalf("grace after logout: want reuse, got %v", err)
+	}
+}
+
+// TestRefresh_ConcurrentRotationAtMostGracePair: of concurrent rotations of
+// one token, one rotates and at most one more gets the same pair through the
+// grace window; the others are reuse.
 func TestRefresh_ConcurrentRotationOnlyOneWins(t *testing.T) {
 	svc, _, sender, _ := newService(t)
 	tp := login(t, svc, sender, "+525510101010", "")
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	got := map[string]int{}
 	ok := 0
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.Refresh(context.Background(), tp.RefreshToken, ""); err == nil {
+			if r, err := svc.Refresh(context.Background(), tp.RefreshToken, ""); err == nil {
 				mu.Lock()
 				ok++
+				got[r.RefreshToken]++
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	if ok != 1 {
-		t.Fatalf("exactly one concurrent rotation must succeed, got %d", ok)
+	if ok < 1 || ok > 2 || len(got) != 1 {
+		t.Fatalf("want one rotation (+ at most one grace replay of the same pair), got %d successes, %d distinct tokens", ok, len(got))
 	}
 }
 
@@ -333,5 +415,34 @@ func TestOTP_LockoutKeepsResendThrottle(t *testing.T) {
 	code, _ = sender.LastCode(phone)
 	if _, err := svc.VerifyOTP(ctx, phone, code, ""); err != nil {
 		t.Fatalf("fresh code after lockout: %v", err)
+	}
+}
+
+func TestBackofficeScope_OnlyPlatformOperators(t *testing.T) {
+	svc, repo, sender, _ := newService(t)
+	ctx := context.Background()
+	if _, err := svc.RequestOTP(ctx, "+525540000001"); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := sender.LastCode("+525540000001")
+	if _, err := svc.VerifyOTP(ctx, "+525540000001", code, auth.BackofficeScope); !errors.Is(err, auth.ErrNotMember) {
+		t.Fatalf("non-operator: want ErrNotMember, got %v", err)
+	}
+	u, err := svc.GrantPlatformOperator(ctx, "+525540000002", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp := login(t, svc, sender, "+525540000002", auth.BackofficeScope)
+	if tp.MerchantID != auth.BackofficeScope || tp.Role != auth.RoleOperator || tp.UserID != u.ID {
+		t.Fatalf("backoffice session = %+v", tp)
+	}
+	claims, err := svc.ParseAccessToken(tp.AccessToken)
+	if err != nil || claims.MerchantID != auth.BackofficeScope || claims.Role != auth.RoleOperator {
+		t.Fatalf("claims = %+v %v", claims, err)
+	}
+	// Removing the operator ends the session at the next refresh.
+	_ = repo.RemovePlatformOperator(ctx, u.ID)
+	if _, err := svc.Refresh(ctx, tp.RefreshToken, ""); !errors.Is(err, auth.ErrNotMember) {
+		t.Fatalf("refresh after removal: want ErrNotMember, got %v", err)
 	}
 }

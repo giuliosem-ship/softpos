@@ -112,8 +112,10 @@ func authMiddleware(parse func(string) (*auth.Claims, error)) func(http.Handler)
 				return
 			}
 
-			// Anti-IDOR: a path that names a merchant must name the token's tenant.
-			if pathID := pathMerchantID(r); pathID != "" && pathID != claims.MerchantID {
+			// Anti-IDOR: a path that names a merchant must name the token's
+			// tenant. Backoffice routes name any merchant; they are gated by
+			// requirePlatformOperator instead.
+			if pathID := pathMerchantID(r); pathID != "" && pathID != claims.MerchantID && !strings.HasPrefix(r.URL.Path, backofficePrefix) {
 				http.Error(w, `{"error":"forbidden","message":"anti-IDOR violation: access denied to foreign merchant resource"}`, http.StatusForbidden)
 				return
 			}
@@ -150,8 +152,8 @@ func isPublicRoute(r *http.Request) bool {
 	if method == http.MethodHead {
 		method = http.MethodGet
 	}
-	if method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/pos/") {
-		return true
+	if method == http.MethodGet && (strings.HasPrefix(r.URL.Path, "/pos/") || strings.HasPrefix(r.URL.Path, "/backoffice/")) {
+		return true // static assets; the backoffice API itself is authenticated
 	}
 	// Processor webhooks (/api/v1/webhooks/acquirer/{provider}) are verified
 	// by their signature; one path segment only.

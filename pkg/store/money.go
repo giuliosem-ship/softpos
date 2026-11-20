@@ -87,6 +87,10 @@ type MoneyTx interface {
 	// transaction commits.
 	EnqueueEvent(ctx context.Context, eventType, aggregateID string, payload any) error
 
+	// RecordSale stores a credited SPEI abono / CoDi confirmation in the sales
+	// view (merchant_sales; idempotent on the sale id).
+	RecordSale(ctx context.Context, s SaleRecord) error
+
 	// CreatePayout inserts p (status RESERVED unless set). If the merchant
 	// already used p.IdempotencyKey, nothing is inserted and the existing
 	// payout is returned locked with created=false.

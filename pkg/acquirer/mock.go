@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -188,6 +189,25 @@ func (m *MockProvider) Cancel(_ context.Context, req CancelRequest) (PaymentStat
 }
 
 // ParseWebhookEvent decodes the normalized Event wire format.
+// OnboardMerchant is deterministic: the sub-merchant id derives from the
+// idempotency key; an RFC starting with "TIMEOUT" yields
+// ErrProviderUnavailable and one starting with "REJECT" ErrProviderRejected.
+func (m *MockProvider) OnboardMerchant(_ context.Context, req OnboardRequest) (OnboardResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls["OnboardMerchant"]++
+	if req.IdempotencyKey == "" || req.MerchantID == "" {
+		return OnboardResult{}, fmt.Errorf("%w: idempotency key and merchant id are required", ErrProviderRejected)
+	}
+	switch {
+	case strings.HasPrefix(req.RFC, "TIMEOUT"):
+		return OnboardResult{}, ErrProviderUnavailable
+	case strings.HasPrefix(req.RFC, "REJECT"):
+		return OnboardResult{}, fmt.Errorf("%w: sub-merchant onboarding rejected", ErrProviderRejected)
+	}
+	return OnboardResult{ProviderMerchantID: mockID("mock_sub_", req.IdempotencyKey), Status: "active"}, nil
+}
+
 func (m *MockProvider) ParseWebhookEvent(body []byte) (Event, error) {
 	return ParseNormalizedEvent(body)
 }

@@ -1,0 +1,27 @@
+/* Kerno backoffice: no external fonts or assets (CSP default-src 'none'). */
+:root { --fg: #1d2330; --muted: #5b6475; --line: #d9dde5; --accent: #1f5eff; --danger: #c62828; --bg: #f6f7fa; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+header { display: flex; gap: 16px; align-items: center; padding: 12px 24px; background: #101828; color: #fff; }
+header h1 { font-size: 18px; margin: 0; flex: 1; }
+main { padding: 16px 24px; }
+nav { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+button { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+button.danger { border-color: var(--danger); background: var(--danger); }
+nav button { background: #fff; color: var(--accent); }
+td button { padding: 3px 8px; margin-right: 4px; }
+input, select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
+label { display: inline-flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 12px; }
+form, .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0 12px; }
+.row input { min-width: 280px; }
+table { width: 100%; border-collapse: collapse; background: #fff; margin-bottom: 12px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-word; }
+th { background: #eef1f6; font-weight: 600; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.hidden { display: none !important; }
+.msg { min-height: 1.4em; color: var(--muted); }
+.msg.error { color: var(--danger); }
+#login-view { max-width: 420px; }

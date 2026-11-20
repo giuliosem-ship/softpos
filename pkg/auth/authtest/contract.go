@@ -141,6 +141,61 @@ func RunRepositoryContract(t *testing.T, h Harness) {
 		}
 	})
 
+	t.Run("platform operators", func(t *testing.T) {
+		r, _ := newRepo(t)
+		_ = r.CreateUser(ctx, auth.User{ID: "usr_op", Phone: "+525566660000", CreatedAt: now})
+		if ok, err := r.IsPlatformOperator(ctx, "usr_op"); err != nil || ok {
+			t.Fatalf("not an operator yet: %v %v", ok, err)
+		}
+		if err := r.AddPlatformOperator(ctx, "usr_op", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.AddPlatformOperator(ctx, "usr_op", "test"); err != nil {
+			t.Fatalf("idempotent add: %v", err)
+		}
+		if ok, _ := r.IsPlatformOperator(ctx, "usr_op"); !ok {
+			t.Fatal("operator not recorded")
+		}
+		if err := r.AddPlatformOperator(ctx, "usr_ghost", "test"); !errors.Is(err, auth.ErrUserNotFound) {
+			t.Fatalf("unknown user: want ErrUserNotFound, got %v", err)
+		}
+		if err := r.RemovePlatformOperator(ctx, "usr_op"); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := r.IsPlatformOperator(ctx, "usr_op"); ok {
+			t.Fatal("operator not removed")
+		}
+	})
+
+	t.Run("refresh grace sealed successor and one-time claim", func(t *testing.T) {
+		r, _ := newRepo(t)
+		_ = r.CreateUser(ctx, auth.User{ID: "usr_g", Phone: "+525577770000", CreatedAt: now})
+		t1 := auth.RefreshToken{ID: "rtk_g1", FamilyID: "fam_g", UserID: "usr_g", TokenHash: "gh1", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+		_ = r.CreateRefreshToken(ctx, t1)
+		t2 := t1
+		t2.ID, t2.TokenHash, t2.GraceSealed = "rtk_g2", "gh2", []byte{1, 2, 3, 0, 255}
+		if err := r.RotateRefreshToken(ctx, "rtk_g1", t2, now); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := r.GetRefreshTokenByID(ctx, "rtk_g2")
+		if err != nil || !found || string(got.GraceSealed) != string(t2.GraceSealed) || got.GraceUsedAt != nil {
+			t.Fatalf("GetRefreshTokenByID = %+v %v %v", got, found, err)
+		}
+		if _, found, _ := r.GetRefreshTokenByID(ctx, "rtk_missing"); found {
+			t.Fatal("unexpected token")
+		}
+		if ok, err := r.ClaimRefreshGrace(ctx, "rtk_g1", now); err != nil || !ok {
+			t.Fatalf("first claim: %v %v", ok, err)
+		}
+		if ok, _ := r.ClaimRefreshGrace(ctx, "rtk_g1", now); ok {
+			t.Fatal("grace must be claimable once")
+		}
+		old, _, _ := r.GetRefreshTokenByHash(ctx, "gh1")
+		if old.GraceUsedAt == nil {
+			t.Fatal("grace_used_at not recorded")
+		}
+	})
+
 	t.Run("attestation nonce single use", func(t *testing.T) {
 		r, _ := newRepo(t)
 		n := auth.AttestationNonce{NonceHash: "nh1", ExpiresAt: now.Add(time.Minute), CreatedAt: now}

@@ -130,8 +130,22 @@ func TestMerchantRegistrationAndPOSLifecycle(t *testing.T) {
 	}
 	var merchResp Merchant
 	_ = json.Unmarshal(recGet.Body.Bytes(), &merchResp)
-	if merchResp.ID != merchantID || merchResp.CLABE == "646180123400000007" || !stp.ValidateCLABE(merchResp.CLABE) {
-		t.Errorf("unexpected merchant response: %+v", merchResp)
+	if merchResp.ID != merchantID || merchResp.CLABE != "" {
+		t.Errorf("a DRAFT merchant has no virtual CLABE yet: %+v", merchResp)
+	}
+
+	// 2b. Money operations wait for the onboarding (KYB) approval.
+	recEarly := httptest.NewRecorder()
+	server.Router().ServeHTTP(recEarly, withBearer(httptest.NewRequest(http.MethodPost, "/api/v1/payments/emv/authorize", strings.NewReader(`{"payment_id":"early","tlv_hex":"00"}`)), token))
+	if recEarly.Code != http.StatusForbidden || !strings.Contains(recEarly.Body.String(), "MERCHANT_NOT_APPROVED") {
+		t.Fatalf("expected 403 MERCHANT_NOT_APPROVED before KYB approval, got %d %s", recEarly.Code, recEarly.Body.String())
+	}
+	completeKYB(t, server, merchantID)
+	recGet2 := httptest.NewRecorder()
+	server.Router().ServeHTTP(recGet2, withBearer(httptest.NewRequest(http.MethodGet, "/api/v1/merchants/"+merchantID, nil), token))
+	_ = json.Unmarshal(recGet2.Body.Bytes(), &merchResp)
+	if merchResp.CLABE == "646180123400000007" || !stp.ValidateCLABE(merchResp.CLABE) {
+		t.Errorf("approval must assign a server-chosen virtual CLABE: %+v", merchResp)
 	}
 
 	// 3. Perform Tap-to-Phone EMV Authorize + Settle flow for POS (tenant from token)

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Kerno Backoffice</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Kerno · Backoffice</h1>
+    <span id="who"></span>
+    <button id="logout" class="hidden" type="button">Salir</button>
+  </header>
+
+  <main>
+    <section id="login-view">
+      <h2>Acceso de operador</h2>
+      <form id="otp-request">
+        <label>Teléfono (E.164) <input id="phone" type="tel" placeholder="+5255…" required autocomplete="tel"></label>
+        <button type="submit">Enviar código</button>
+      </form>
+      <form id="otp-verify" class="hidden">
+        <label>Código <input id="code" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label>
+        <button type="submit">Entrar</button>
+      </form>
+      <p id="login-msg" class="msg"></p>
+    </section>
+
+    <section id="app-view" class="hidden">
+      <nav>
+        <button type="button" data-tab="merchants">Comercios / KYB</button>
+        <button type="button" data-tab="payments">Pagos</button>
+        <button type="button" data-tab="payouts">Payouts</button>
+        <button type="button" data-tab="recon">Conciliación</button>
+        <button type="button" data-tab="audit">Auditoría</button>
+      </nav>
+      <p id="app-msg" class="msg"></p>
+
+      <div id="tab-merchants" class="tab">
+        <form id="merchant-filter" class="row">
+          <label>Estado KYB
+            <select id="kyb-status">
+              <option value="IN_REVIEW">IN_REVIEW</option>
+              <option value="SUBMITTED">SUBMITTED</option>
+              <option value="DRAFT">DRAFT</option>
+              <option value="APPROVED">APPROVED</option>
+              <option value="REJECTED">REJECTED</option>
+              <option value="">(todos)</option>
+            </select>
+          </label>
+          <label>Bloqueo
+            <select id="blocked">
+              <option value="">(todos)</option>
+              <option value="true">bloqueados</option>
+              <option value="false">activos</option>
+            </select>
+          </label>
+          <button type="submit">Buscar</button>
+        </form>
+        <table id="merchant-table">
+          <thead><tr><th>Comercio</th><th>Nombre</th><th>RFC</th><th>KYB</th><th>69-B</th><th>Identidad</th><th>Bloqueado</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+
+        <div id="merchant-detail" class="hidden card">
+          <h2 id="detail-title"></h2>
+          <dl id="detail-fields"></dl>
+          <h3>Documentos</h3>
+          <ul id="detail-docs"></ul>
+          <div class="row">
+            <input id="decision-text" placeholder="Motivo / nota" maxlength="1000">
+            <button type="button" id="btn-approve">Aprobar</button>
+            <button type="button" id="btn-reject" class="danger">Rechazar</button>
+            <button type="button" id="btn-block" class="danger">Bloquear</button>
+            <button type="button" id="btn-unblock">Desbloquear</button>
+            <button type="button" id="btn-ledger">Ver ledger</button>
+          </div>
+          <div id="ledger-view"></div>
+        </div>
+      </div>
+
+      <div id="tab-payments" class="tab hidden">
+        <form id="payment-filter" class="row">
+          <label>Comercio <input id="pay-merchant"></label>
+          <label>ID <input id="pay-id"></label>
+          <label>Tipo
+            <select id="pay-kind"><option value="">(todos)</option><option>card</option><option>spei</option><option>codi</option></select>
+          </label>
+          <label>Desde <input id="pay-from" type="date"></label>
+          <label>Hasta <input id="pay-to" type="date"></label>
+          <button type="submit">Buscar</button>
+        </form>
+        <table id="payment-table">
+          <thead><tr><th>Fecha</th><th>Comercio</th><th>Tipo</th><th>ID</th><th>Estado</th><th>Monto</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button type="button" id="pay-more" class="hidden">Más</button>
+      </div>
+
+      <div id="tab-payouts" class="tab hidden">
+        <form id="payout-filter" class="row">
+          <label>Comercio <input id="po-merchant"></label>
+          <label>Estado
+            <select id="po-status">
+              <option value="PENDING_RECONCILIATION">PENDING_RECONCILIATION</option>
+              <option value="RESERVED">RESERVED</option>
+              <option value="DISPATCHED">DISPATCHED</option>
+              <option value="SETTLED">SETTLED</option>
+              <option value="FAILED">FAILED</option>
+              <option value="">(todos)</option>
+            </select>
+          </label>
+          <button type="submit">Buscar</button>
+        </form>
+        <table id="payout-table">
+          <thead><tr><th>Clave de rastreo</th><th>Comercio</th><th>Monto</th><th>Estado</th><th>Error</th><th>Actualizado</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="tab-recon" class="tab hidden">
+        <button type="button" id="recon-load">Actualizar</button>
+        <table id="recon-table">
+          <thead><tr><th>#</th><th>Tipo</th><th>Payout</th><th>Pago</th><th>Esperado</th><th>Real</th><th>Detalle</th><th>Estado</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="tab-audit" class="tab hidden">
+        <form id="audit-filter" class="row">
+          <label>Comercio <input id="audit-merchant"></label>
+          <button type="submit">Buscar</button>
+        </form>
+        <table id="audit-table">
+          <thead><tr><th>Fecha</th><th>Operador</th><th>Acción</th><th>Comercio</th><th>Objeto</th><th>Antes → después</th><th>Detalle</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -149,9 +149,9 @@ func insertRefreshToken(ctx context.Context, ex interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, t auth.RefreshToken) error {
 	_, err := ex.ExecContext(ctx, `
-		INSERT INTO refresh_tokens (id, family_id, user_id, merchant_id, token_hash, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		t.ID, t.FamilyID, t.UserID, nullString(t.MerchantID), t.TokenHash, t.ExpiresAt, t.CreatedAt)
+		INSERT INTO refresh_tokens (id, family_id, user_id, merchant_id, token_hash, expires_at, created_at, grace_sealed)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		t.ID, t.FamilyID, t.UserID, nullString(t.MerchantID), t.TokenHash, t.ExpiresAt, t.CreatedAt, t.GraceSealed)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return auth.ErrConflict
@@ -165,19 +165,15 @@ func (r *SQLAuthRepository) CreateRefreshToken(ctx context.Context, t auth.Refre
 	return insertRefreshToken(ctx, r.db, t)
 }
 
-func (r *SQLAuthRepository) GetRefreshTokenByHash(ctx context.Context, hash string) (auth.RefreshToken, bool, error) {
+const refreshColumns = `id, family_id, user_id, merchant_id, token_hash, expires_at, revoked_at, replaced_by, created_at, grace_sealed, grace_used_at`
+
+func scanRefreshToken(row rowScanner) (auth.RefreshToken, error) {
 	var t auth.RefreshToken
 	var merchantID, replacedBy sql.NullString
-	var revokedAt sql.NullTime
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id, family_id, user_id, merchant_id, token_hash, expires_at, revoked_at, replaced_by, created_at
-		FROM refresh_tokens WHERE token_hash = $1`, hash).
-		Scan(&t.ID, &t.FamilyID, &t.UserID, &merchantID, &t.TokenHash, &t.ExpiresAt, &revokedAt, &replacedBy, &t.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return auth.RefreshToken{}, false, nil
-	}
-	if err != nil {
-		return auth.RefreshToken{}, false, fmt.Errorf("get refresh token: %w", err)
+	var revokedAt, graceUsedAt sql.NullTime
+	if err := row.Scan(&t.ID, &t.FamilyID, &t.UserID, &merchantID, &t.TokenHash, &t.ExpiresAt, &revokedAt, &replacedBy,
+		&t.CreatedAt, &t.GraceSealed, &graceUsedAt); err != nil {
+		return auth.RefreshToken{}, err
 	}
 	t.MerchantID = merchantID.String
 	t.ReplacedBy = replacedBy.String
@@ -185,7 +181,41 @@ func (r *SQLAuthRepository) GetRefreshTokenByHash(ctx context.Context, hash stri
 		ts := revokedAt.Time
 		t.RevokedAt = &ts
 	}
+	if graceUsedAt.Valid {
+		ts := graceUsedAt.Time
+		t.GraceUsedAt = &ts
+	}
+	return t, nil
+}
+
+func (r *SQLAuthRepository) getRefreshToken(ctx context.Context, column, value string) (auth.RefreshToken, bool, error) {
+	t, err := scanRefreshToken(r.db.QueryRowContext(ctx, `SELECT `+refreshColumns+` FROM refresh_tokens WHERE `+column+` = $1`, value))
+	if errors.Is(err, sql.ErrNoRows) {
+		return auth.RefreshToken{}, false, nil
+	}
+	if err != nil {
+		return auth.RefreshToken{}, false, fmt.Errorf("get refresh token: %w", err)
+	}
 	return t, true, nil
+}
+
+func (r *SQLAuthRepository) GetRefreshTokenByHash(ctx context.Context, hash string) (auth.RefreshToken, bool, error) {
+	return r.getRefreshToken(ctx, "token_hash", hash)
+}
+
+func (r *SQLAuthRepository) GetRefreshTokenByID(ctx context.Context, id string) (auth.RefreshToken, bool, error) {
+	return r.getRefreshToken(ctx, "id", id)
+}
+
+// ClaimRefreshGrace marks the grace re-presentation of a rotated token used
+// (conditional UPDATE: exactly one concurrent claimer wins).
+func (r *SQLAuthRepository) ClaimRefreshGrace(ctx context.Context, id string, now time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET grace_used_at = $1 WHERE id = $2 AND grace_used_at IS NULL`, now, id)
+	if err != nil {
+		return false, fmt.Errorf("claim refresh grace: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // RotateRefreshToken revokes oldID only if it is still active (conditional
@@ -217,6 +247,33 @@ func (r *SQLAuthRepository) RotateRefreshToken(ctx context.Context, oldID string
 		return err
 	}
 	return tx.Commit()
+}
+
+func (r *SQLAuthRepository) AddPlatformOperator(ctx context.Context, userID, createdBy string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO platform_operators (user_id, created_by) VALUES ($1, $2)
+		ON CONFLICT (user_id) DO NOTHING`, userID, createdBy)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return auth.ErrUserNotFound
+		}
+		return fmt.Errorf("add platform operator: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLAuthRepository) RemovePlatformOperator(ctx context.Context, userID string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM platform_operators WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("remove platform operator: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLAuthRepository) IsPlatformOperator(ctx context.Context, userID string) (bool, error) {
+	var ok bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM platform_operators WHERE user_id = $1)`, userID).Scan(&ok); err != nil {
+		return false, fmt.Errorf("is platform operator: %w", err)
+	}
+	return ok, nil
 }
 
 func (r *SQLAuthRepository) RevokeRefreshFamily(ctx context.Context, familyID string, now time.Time) error {

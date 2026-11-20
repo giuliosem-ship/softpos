@@ -1192,6 +1192,48 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (18 packages); PGIntegration 29/29 (new: concurrent payout deliveries under two event ids -> bank credited once, mismatch report via operator endpoint, overlapping watcher passes -> one NOT_SETTLED); node --test 8/8.",
       "audit_notes": "NOT_SETTLED items are not auto-resolved when a late payout arrives (operator resolves). Correcting journals for discrepancies are backoffice work (next batch).",
       "priority": 77
+    },
+    {
+      "id": "MVP-17",
+      "component": "kyb",
+      "title": "Merchant KYB data, documents and status flow",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/kyb/kyb_test.go, pkg/api/kyb_test.go, pkg/store/kyb_integration_test.go, pkg/identity/rfc_check_digit_test.go, pkg/identity/document_vault_test.go, pkg/acquirer/acquirer_test.go, cmd/server/kyb_integration_test.go",
+        "implementation": "migrations/012_merchant_kyb.*.sql, pkg/kyb/kyb.go, pkg/kyb/provider.go, pkg/store/kyb.go, pkg/identity/rfc_check_digit.go, pkg/identity/document_vault.go, pkg/acquirer/acquirer.go, pkg/acquirer/mock.go, pkg/api/handlers_kyb.go, pkg/api/server.go, pkg/api/handlers_card_payments.go, pkg/api/handlers_payments.go, pkg/api/handlers_emv_codi.go, pkg/api/handlers_disbursements.go, pkg/api/handlers_acquirer_events.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/KYB.md, docs/AUTH.md, docs/ACQUIRER_INTEGRATION.md, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Onboarding DRAFT -> SUBMITTED -> IN_REVIEW -> APPROVED|REJECTED (REJECTED -> DRAFT on edit), merchant_kyb with optimistic version. GET/PUT /api/v1/merchants/{id}/kyb, POST .../kyb/documents (owner, multipart type+file, <=5 MiB, sniffed JPEG/PNG/PDF, encrypted with identity.DocumentVault over the vault KeyProvider, blobs behind store.DocumentBlobStore = kyb_document_blobs bytea), POST .../kyb/submit: application complete, RFC format + SAT verification digit, persona fisica derived from RFC length, RESICO_PF only (other regimes / persona moral rejected explicitly, 422 KYB_CHECKS_FAILED + reason, stays DRAFT), CURP prefix = RFC, documents complete; then SUBMITTED, SAT 69-B (listed -> REJECTED RFC_LISTED_69B), kyb.KYCProvider identity check (mock; KYC_PROVIDER env, mock rejected in production), IN_REVIEW. Server.ApproveMerchantKYB assigns the virtual CLABE (no longer at alta) and calls acquirer.Provider.OnboardMerchant (new port method, mock) with kerno_onboard_<id>; RejectMerchantKYB. Gate: card intents/refunds, CoDi QR, payouts, legacy EMV need APPROVED and not blocked (403 MERCHANT_NOT_APPROVED / MERCHANT_BLOCKED). Alta validates RFC format and starts DRAFT. is_persona_moral no longer read from intents/settle (server-derived, false for RESICO PF sales to the public). Server.RegisterMerchant (trusted provisioning) and the DEV_MODE demo merchant are APPROVED (system:provisioning).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 32/32 (new: KYB repository contract on PostgreSQL, KYB HTTP flow surviving a restart with documents decrypting and approval assigning the CLABE + onboarding); node --test 8/8.",
+      "audit_notes": "Submit returns the final state after the synchronous checks (IN_REVIEW / REJECTED), not SUBMITTED. Additive response fields: uploaded_documents, application (owner only), error (422). Web POS SDK still sends is_persona_moral (ignored).",
+      "priority": 78
+    },
+    {
+      "id": "MVP-19",
+      "component": "api",
+      "title": "Sales endpoint, Play Integrity package default and refresh grace window",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/sales_test.go, pkg/api/handlers_auth_test.go, pkg/auth/service_test.go, pkg/auth/authtest/contract.go, pkg/store/sales_integration_test.go, pkg/store/auth_integration_test.go, cmd/server/sales_integration_test.go, cmd/server/main_test.go",
+        "implementation": "migrations/013_sales_and_refresh_grace.*.sql, pkg/store/sales.go, pkg/store/money.go, pkg/store/money_memory.go, pkg/store/auth_store.go, pkg/api/handlers_sales.go, pkg/api/handlers_stp.go, pkg/api/handlers_emv_codi.go, pkg/api/server.go, pkg/auth/auth.go, pkg/auth/memory.go, pkg/auth/service.go, cmd/server/main.go, .env.example, docs/AUTH.md, docs/MONEY_FLOWS.md, docs/PERSISTENCE.md"
+      },
+      "spec": "GET /api/v1/merchants/{id}/sales?limit=50(1..100)&before=<cursor> (tenant from token, 403 on mismatch) -> {items:[{id,kind card|spei|codi,status,amount_cents,created_at,card_payment_id?}],next_cursor|null}: card_payments merged with merchant_sales (SPEI abonos spei_<inst>:<clave> RECEIVED, CoDi codi_<tracking> CONFIRMED) written by MoneyTx.RecordSale in the money transaction; migration 013 backfills from spei_in_/codi_ journals; order created_at DESC, id DESC, opaque cursor (unix nanos|id). store.SalesRepository (SQL UNION ALL / memory) also filters by id, kind and date for the backoffice. PLAY_INTEGRITY_PACKAGE default mx.kerno.softpos. Refresh grace: the immediately previous refresh token re-presented within 30s (auth.Config.RefreshGrace) while its successor is unused returns the same successor refresh token + fresh access token, once (grace_used_at, conditional update); successor raw value sealed AES-GCM under a key from JWT_SECRET + predecessor raw token (grace_sealed); concurrent rotation losers take the grace path; otherwise reuse revokes the family.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (19 packages); PGIntegration 34/34 (new: sales backfill + unified listing/pagination/filters, sales endpoint over HTTP; auth contract grace subtest and concurrent rotation on PostgreSQL); node --test 8/8.",
+      "audit_notes": "Legacy EMV (DEV_MODE) payments are not part of the sales view. Grace returns the same refresh token with a newly minted access token. docs/ANDROID_APP.md still notes the old PLAY_INTEGRITY_PACKAGE default (left for the Android batch to avoid conflicts).",
+      "priority": 80
+    },
+    {
+      "id": "MVP-18",
+      "component": "backoffice",
+      "title": "Operator backoffice API, audit log and minimal web UI",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/backoffice_test.go, pkg/auth/service_test.go, pkg/auth/authtest/contract.go, cmd/operatorctl/main_test.go, cmd/server/backoffice_integration_test.go",
+        "implementation": "migrations/014_backoffice.*.sql, pkg/api/handlers_backoffice.go, pkg/api/backoffice_static.go, pkg/api/middleware_auth.go, pkg/api/server.go, pkg/api/handlers_settlement_account.go, pkg/api/handlers_acquirer_recon.go, pkg/auth/auth.go, pkg/auth/memory.go, pkg/auth/service.go, pkg/store/auth_store.go, pkg/store/backoffice.go, pkg/store/money_memory.go, pkg/payouts/reconciler.go, cmd/server/main.go, cmd/server/config_guard.go, cmd/operatorctl/*, web/backoffice/*, .env.example, docs/BACKOFFICE.md, docs/AUTH.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Platform operators (platform_operators) log in with OTP selecting merchant_id kerno:backoffice (auth.BackofficeScope, role operator; re-checked on refresh and every backoffice request); created only by BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE at boot or cmd/operatorctl add|remove|check, never an API. /api/v1/backoffice/*: merchants list by KYB status/block, detail (KYB + documents + settlement account), document download (decrypted, attachment), approve (CLABE + acquirer onboarding) / reject with reason, block/unblock (money operations 403 MERCHANT_BLOCKED), merchant ledger (balances + journal lines via store.JournalReader), cross-merchant payment search over the sales view, payouts list and retry of PENDING_RECONCILIATION (or RESERVED > 10 min) through payouts.Reconciler.ReconcilePayout, processor reconciliation report/resolve, audit log. Every operator action writes operator_audit_log (operator, action, merchant, target, before/after JSON summaries, detail); PII reads audited before serving (fail closed). Static UI web/backoffice (plain HTML/JS, no inline code, textContent only) at /backoffice/ with CSP, X-Frame-Options DENY, nosniff, no-referrer, no-store.",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (20 packages); PGIntegration 35/35 (new: bootstrap operator reviews, downloads, approves and blocks on PostgreSQL with the audit trail in operator_audit_log; auth contract platform-operator subtest on PostgreSQL); node --test 8/8; DEV_MODE smoke: /backoffice/ CSP headers, OTP backoffice login, demo merchant APPROVED and card intent OK.",
+      "audit_notes": "No per-operator permissions or operator 2FA yet. Mutation audit rows are written after the change (a failed write is an ERROR ALERT). GET /api/v1/acquirer/reconciliation still accepts per-merchant operator memberships.",
+      "priority": 79
     }
   ]
 }

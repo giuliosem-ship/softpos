@@ -17,6 +17,7 @@ type MemoryRepository struct {
 	refresh     map[string]RefreshToken // id -> token
 	refreshHash map[string]string       // hash -> id
 	nonces      map[string]memNonce
+	operators   map[string]bool
 }
 
 type memNonce struct {
@@ -35,6 +36,7 @@ func NewMemoryRepository() *MemoryRepository {
 		refresh:     map[string]RefreshToken{},
 		refreshHash: map[string]string{},
 		nonces:      map[string]memNonce{},
+		operators:   map[string]bool{},
 	}
 }
 
@@ -165,7 +167,7 @@ func (r *MemoryRepository) GetRefreshTokenByHash(_ context.Context, hash string)
 	if !ok {
 		return RefreshToken{}, false, nil
 	}
-	return r.refresh[id], true, nil
+	return cloneRefresh(r.refresh[id]), true, nil
 }
 
 func (r *MemoryRepository) RotateRefreshToken(_ context.Context, oldID string, next RefreshToken, now time.Time) error {
@@ -186,6 +188,54 @@ func (r *MemoryRepository) RotateRefreshToken(_ context.Context, oldID string, n
 	old.ReplacedBy = next.ID
 	r.refresh[oldID] = old
 	return nil
+}
+
+func cloneRefresh(t RefreshToken) RefreshToken {
+	t.GraceSealed = append([]byte(nil), t.GraceSealed...)
+	return t
+}
+
+func (r *MemoryRepository) GetRefreshTokenByID(_ context.Context, id string) (RefreshToken, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.refresh[id]
+	return cloneRefresh(t), ok, nil
+}
+
+func (r *MemoryRepository) ClaimRefreshGrace(_ context.Context, id string, now time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.refresh[id]
+	if !ok || t.GraceUsedAt != nil {
+		return false, nil
+	}
+	ts := now
+	t.GraceUsedAt = &ts
+	r.refresh[id] = t
+	return true, nil
+}
+
+func (r *MemoryRepository) AddPlatformOperator(_ context.Context, userID, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[userID]; !ok {
+		return ErrUserNotFound
+	}
+	r.operators[userID] = true
+	return nil
+}
+
+func (r *MemoryRepository) RemovePlatformOperator(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.operators, userID)
+	return nil
+}
+
+func (r *MemoryRepository) IsPlatformOperator(_ context.Context, userID string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.operators[userID], nil
 }
 
 func (r *MemoryRepository) RevokeRefreshFamily(_ context.Context, familyID string, now time.Time) error {

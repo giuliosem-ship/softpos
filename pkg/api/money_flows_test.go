@@ -145,6 +145,9 @@ func TestSettle_PostingFailureRollsBackEverything(t *testing.T) {
 	if err := s.merchantRepo.SaveMerchant(context.Background(), store.MerchantRecord{ID: m, RFC: "GARM850101ABC", Name: "No accounts", IsRESICO: true}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.EnsureMerchantApproved(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
 	authorizeTestPayment(t, s, m, "pay_fail", 11600)
 	rec := serve(s, asTenant(t, s, m, jsonReq("POST", "/api/v1/payments/settle", map[string]any{"payment_id": "pay_fail"})))
 	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "LEDGER_POSTING_FAILED") {

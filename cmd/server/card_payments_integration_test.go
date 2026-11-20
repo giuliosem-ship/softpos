@@ -166,6 +166,11 @@ func TestValidateProductionConfig_RejectsMockAcquirer(t *testing.T) {
 	if err := ValidateProductionConfig(good, "production"); !errors.Is(err, ErrMockAcquirerInProduction) {
 		t.Fatalf("mock in production: want ErrMockAcquirerInProduction, got %v", err)
 	}
+	good.AcquirerProvider = ""
+	good.KYCProvider = "mock"
+	if err := ValidateProductionConfig(good, "production"); !errors.Is(err, ErrMockKYCInProduction) {
+		t.Fatalf("mock KYC in production: want ErrMockKYCInProduction, got %v", err)
+	}
 }
 
 const pgAcquirerSecret = "pg_acquirer_webhook_secret_32_bytes_long!"

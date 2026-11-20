@@ -75,12 +75,19 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 		t.Fatalf("register merchant: %d %s", regRec.Code, regRec.Body.String())
 	}
 	var created struct {
-		MerchantID   string `json:"merchant_id"`
-		VirtualCLABE string `json:"virtual_clabe"`
+		MerchantID string `json:"merchant_id"`
 	}
 	_ = json.Unmarshal(regRec.Body.Bytes(), &created)
 	merchantID := created.MerchantID
-	clabe := created.VirtualCLABE // server-assigned collection CLABE
+	// The alta starts a DRAFT onboarding without CLABE (MVP-17); approve it
+	// out of band here (the KYB flow itself is TestPGIntegration_KYBFlowSurvivesRestart).
+	if err := srv1.EnsureMerchantApproved(context.Background(), merchantID); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	clabe, err := srv1.AssignVirtualCLABE(context.Background(), merchantID) // server-assigned collection CLABE
+	if err != nil {
+		t.Fatalf("assign CLABE: %v", err)
+	}
 	tok, _ := srv1.AuthService().MintAccessToken(owner.ID, merchantID, auth.RoleOwner)
 	privDER, certDER, err := generateSelfSignedCSD()
 	if err != nil {

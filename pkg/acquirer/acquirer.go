@@ -107,6 +107,27 @@ type CancelRequest struct {
 	ProviderPaymentID string
 }
 
+// OnboardRequest registers an approved merchant as a sub-merchant (sub-
+// afiliado) at the processor, a prerequisite to accept its card payments.
+type OnboardRequest struct {
+	// IdempotencyKey makes retries return the same sub-merchant
+	// ("kerno_onboard_<merchant_id>").
+	IdempotencyKey string
+	MerchantID     string
+	LegalName      string
+	RFC            string
+	MCC            string
+	PostalCode     string
+	ContactEmail   string
+	ContactPhone   string
+}
+
+// OnboardResult is the processor's sub-merchant account.
+type OnboardResult struct {
+	ProviderMerchantID string
+	Status             string // "active" | "pending" (processor-side review)
+}
+
 // Provider is the port every acquirer adapter implements. Every mutating call
 // carries an idempotency key; the provider must return the same result for a
 // repeated key. Errors: ErrProviderUnavailable (unknown outcome, retry),
@@ -120,6 +141,9 @@ type Provider interface {
 	Capture(ctx context.Context, req CaptureRequest) (PaymentState, error)
 	Refund(ctx context.Context, req RefundRequest) (RefundResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (PaymentState, error)
+	// OnboardMerchant creates (idempotently) the processor sub-merchant of an
+	// approved Kerno merchant (called when an operator approves its KYB).
+	OnboardMerchant(ctx context.Context, req OnboardRequest) (OnboardResult, error)
 	// ParseWebhookEvent translates a verified webhook body into a normalized Event.
 	ParseWebhookEvent(body []byte) (Event, error)
 }

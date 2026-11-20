@@ -123,3 +123,26 @@ func TestNew(t *testing.T) {
 		t.Fatalf("unknown: %v", err)
 	}
 }
+
+func TestMockOnboardMerchant_IdempotentAndScenarios(t *testing.T) {
+	m := NewMockProvider(MockConfig{})
+	ctx := context.Background()
+	req := OnboardRequest{IdempotencyKey: "kerno_onboard_m1", MerchantID: "m1", RFC: "CACX7605101P8"}
+	a, err := m.OnboardMerchant(ctx, req)
+	if err != nil || a.ProviderMerchantID == "" || a.Status != "active" {
+		t.Fatalf("onboard: %+v %v", a, err)
+	}
+	b, _ := m.OnboardMerchant(ctx, req)
+	if b.ProviderMerchantID != a.ProviderMerchantID {
+		t.Fatal("retry with the same key must return the same sub-merchant")
+	}
+	if _, err := m.OnboardMerchant(ctx, OnboardRequest{IdempotencyKey: "k", MerchantID: "m", RFC: "TIMEOUT"}); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("want unavailable, got %v", err)
+	}
+	if _, err := m.OnboardMerchant(ctx, OnboardRequest{IdempotencyKey: "k", MerchantID: "m", RFC: "REJECT"}); !errors.Is(err, ErrProviderRejected) {
+		t.Fatalf("want rejected, got %v", err)
+	}
+	if m.Calls("OnboardMerchant") != 4 {
+		t.Fatalf("calls = %d", m.Calls("OnboardMerchant"))
+	}
+}

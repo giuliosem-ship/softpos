@@ -37,10 +37,13 @@ type MemoryMoneyStore struct {
 	settlements map[string]SettlementRecord
 	operations  map[string]memOperation
 	journalIDs  map[string]bool
+	journals    []*ledger.JournalEntry // committed, in order (backoffice ledger view)
 	events      []MemoryOutboxEvent
 	payouts     map[string]PayoutRecord // by clave_rastreo
 	payoutKeys  map[string]string       // merchant_id + "\x00" + idempotency key -> clave
 	card        memCardState            // processor card payments (card_payments_memory.go)
+	sales       []SaleRecord            // credited SPEI / CoDi sales (sales.go)
+	saleIDs     map[string]bool
 }
 
 var (
@@ -62,6 +65,7 @@ func NewMemoryMoneyStore(le *ledger.LedgerEngine, processor func() payments.Paym
 		payouts:     make(map[string]PayoutRecord),
 		payoutKeys:  make(map[string]string),
 		card:        newMemCardState(),
+		saleIDs:     make(map[string]bool),
 	}
 }
 
@@ -155,6 +159,7 @@ type memMoneyTx struct {
 	events      []MemoryOutboxEvent
 	payouts     map[string]PayoutRecord
 	card        memCardTxState
+	sales       []SaleRecord
 }
 
 func payoutKey(merchantID, idemKey string) string { return merchantID + "\x00" + idemKey }
@@ -417,6 +422,7 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 			return fmt.Errorf("ledger post %s: %w", j.ID, err)
 		}
 		t.store.journalIDs[j.ID] = true
+		t.store.journals = append(t.store.journals, j)
 	}
 	// 3. RESICO accumulators.
 	for k, d := range t.salesDelta {
@@ -443,6 +449,12 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 		t.store.payoutKeys[payoutKey(p.MerchantID, p.IdempotencyKey)] = clave
 	}
 	t.commitCard()
+	for _, sr := range t.sales {
+		if !t.store.saleIDs[sr.ID] {
+			t.store.saleIDs[sr.ID] = true
+			t.store.sales = append(t.store.sales, sr)
+		}
+	}
 	t.store.events = append(t.store.events, t.events...)
 	return nil
 }

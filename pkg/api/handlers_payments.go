@@ -23,7 +23,8 @@ type SettlePaymentRequest struct {
 	MerchantID       string `json:"merchant_id,omitempty"`
 	GrossAmountCents int64  `json:"gross_amount_cents,omitempty"`
 	CustomerRFC      string `json:"customer_rfc,omitempty"`
-	IsPersonaMoral   bool   `json:"is_persona_moral"`
+	// is_persona_moral is no longer read from the client (MVP-17): the
+	// split input comes from Server.customerPersonaMoral.
 }
 
 type SettlePaymentResponse struct {
@@ -68,7 +69,7 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON")
 		return
 	}
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
@@ -125,7 +126,7 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var err2 error
-		rec, err2 = s.postSettlement(ctx, tx, tenant, p.ID, p.AmountCents, req.IsPersonaMoral, feeBps, "EMV settlement "+p.ID)
+		rec, err2 = s.postSettlement(ctx, tx, tenant, p.ID, p.AmountCents, s.customerPersonaMoral(ctx, tenant), feeBps, "EMV settlement "+p.ID)
 		if err2 != nil {
 			return err2
 		}

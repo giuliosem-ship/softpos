@@ -79,11 +79,12 @@ func newCardID(prefix string) (string, error) {
 // CardPaymentIntentRequest: POST /api/v1/card-payments/intents. The merchant
 // comes from the token; amount_cents is validated on the server.
 type CardPaymentIntentRequest struct {
-	MerchantID     string `json:"merchant_id,omitempty"` // optional; must equal the token's tenant
-	AmountCents    int64  `json:"amount_cents"`
-	Currency       string `json:"currency,omitempty"`  // "MXN" (default; the only one accepted)
-	Reference      string `json:"reference,omitempty"` // merchant reference, <= 64 chars
-	IsPersonaMoral bool   `json:"is_persona_moral,omitempty"`
+	MerchantID  string `json:"merchant_id,omitempty"` // optional; must equal the token's tenant
+	AmountCents int64  `json:"amount_cents"`
+	Currency    string `json:"currency,omitempty"`  // "MXN" (default; the only one accepted)
+	Reference   string `json:"reference,omitempty"` // merchant reference, <= 64 chars
+	// A client is_persona_moral is ignored (unknown field): the RESICO split
+	// input is decided by the server (Server.customerPersonaMoral).
 }
 
 // CardPaymentIntentResponse is what the Android app needs to start the
@@ -102,7 +103,9 @@ type CardPaymentIntentResponse struct {
 }
 
 func intentRequestHash(req CardPaymentIntentRequest) string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s|%t", req.AmountCents, req.Currency, req.Reference, req.IsPersonaMoral)))
+	// The trailing "false" keeps hashes of intents stored before MVP-17 (when
+	// the client still sent is_persona_moral) stable.
+	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s|%t", req.AmountCents, req.Currency, req.Reference, false)))
 	return hex.EncodeToString(h[:])
 }
 
@@ -126,7 +129,7 @@ func (s *Server) HandleCreateCardPaymentIntent(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "INVALID_JSON")
 		return
 	}
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
@@ -176,7 +179,7 @@ func (s *Server) HandleCreateCardPaymentIntent(w http.ResponseWriter, r *http.Re
 			AmountCents:          req.AmountCents,
 			Currency:             req.Currency,
 			Reference:            req.Reference,
-			PersonaMoral:         req.IsPersonaMoral,
+			PersonaMoral:         s.customerPersonaMoral(ctx, tenant),
 			Status:               store.CardCreated,
 		})
 		if err != nil {

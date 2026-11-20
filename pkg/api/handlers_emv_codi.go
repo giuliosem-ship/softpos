@@ -45,7 +45,7 @@ func (s *Server) HandleEMVAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"INVALID_JSON"}`, http.StatusBadRequest)
 		return
 	}
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
@@ -248,7 +248,7 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_AMOUNT")
 		return
 	}
-	tenant, ok := requireTenant(w, r, "")
+	tenant, ok := s.requireActiveTenant(w, r, "")
 	if !ok {
 		return
 	}
@@ -397,7 +397,7 @@ func (s *Server) HandleCoDiCreateQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, ok := requireTenant(w, r, req.MerchantID)
+	tenant, ok := s.requireActiveTenant(w, r, req.MerchantID)
 	if !ok {
 		return
 	}
@@ -543,6 +543,10 @@ func (s *Server) HandleCoDiWebhookConfirm(w http.ResponseWriter, r *http.Request
 		jnl.Description = "CoDi confirmation " + conf.TrackingKey
 		jnl.Metadata = map[string]string{"tracking_key": conf.TrackingKey, "merchant_id": merchant.ID}
 		if err := tx.PostJournal(ctx, jnl); err != nil {
+			return err
+		}
+		if err := tx.RecordSale(ctx, store.SaleRecord{ID: "codi_" + conf.TrackingKey, MerchantID: merchant.ID, Kind: store.SaleCoDi,
+			Status: "CONFIRMED", AmountCents: conf.AmountCents, Reference: conf.TrackingKey, CreatedAt: jnl.Timestamp}); err != nil {
 			return err
 		}
 		if err := tx.AddMonthlySales(ctx, merchant.ID, ym, taxSplit.BaseAmountCents); err != nil {

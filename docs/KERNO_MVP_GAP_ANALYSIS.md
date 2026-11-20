@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote E (MVP-14..16) aplicado y auditado; app Android del Lote F (AND-30..32) integrada
+**Última actualización:** 2026-11-20 — Lote G (MVP-17..19) aplicado
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -16,11 +16,11 @@ Kerno tiene una **base de dominio amplia y bien testeada** (61/61 tareas del bac
 | Lógica de dominio (ledger, RESICO, CLABE, CFDI XML, ISO 8583, DUKPT, STEC, MIF, disputas) | 🟢 Avanzado | Librerías puras con tests unitarios sólidos. |
 | Integración en el servidor HTTP | 🟡 Parcial | Solo ledger, pagos EMV/CoDi, CFDI, STP, RBF están ruteados. ISO 8583, HSM/DUKPT, clearing y disputas **no están conectados** a ninguna ruta. |
 | Persistencia | 🟡 Parcial | Lote A: driver `pgx`, migraciones versionadas embebidas y comercios, pagos EMV, CoDi, CSD, acumulado mensual, ledger e idempotencia en PostgreSQL con `DATABASE_URL` (probado contra Postgres 16 real). Lote C: pago + asiento + acumulado RESICO + evento de outbox en una sola transacción (`store.MoneyStore`, ver `docs/MONEY_FLOWS.md`). Lote D: payouts persistidos (`payouts`, migración 009) y outbox con leases por dueño. Falta: publicador real del outbox y RBF en DB. Sin DB todo sigue en memoria (modo dev). |
-| Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Lote C: montos de `settle` y CLABE de dispersión ya no vienen del cliente; llave de la bóveda desde el entorno. Falta: proveedor OTP real, CORS/TLS/gateway, KMS real y verificación real de titularidad de la CLABE de liquidación. |
+| Seguridad perimetral | 🟡 Parcial | Lote B: login OTP, JWT montado en todas las rutas `/api/v1/*` salvo una lista pública explícita, tenant tomado del token (anti-IDOR), webhook CoDi firmado y secretos de dev solo con `DEV_MODE` (ver `docs/AUTH.md`). Lote C: montos de `settle` y CLABE de dispersión ya no vienen del cliente; llave de la bóveda desde el entorno. Lote G: alta con KYB (`docs/KYB.md`) — ningún comercio mueve dinero sin aprobación de un operador —, bloqueo de comercios, operadores de plataforma con bitácora de auditoría (`docs/BACKOFFICE.md`), `is_persona_moral` ya no viene del cliente y ventana de gracia del refresh token. Falta: proveedor OTP real, CORS/TLS/gateway, KMS real y verificación real de titularidad de la CLABE de liquidación. |
 | Cobro con tarjeta real | 🔴 Bloqueante | Lote E (camino A): puerto `acquirer.Provider` con adaptador mock, modelo persistente `card_payments`, intents para el SDK Tap to Pay, webhooks firmados del procesador (captura → split en ledger, devoluciones, contracargos) y conciliación de sus liquidaciones; los endpoints EMV que "aprueban" al parsear TLV quedan solo con `DEV_MODE`. Falta elegir y contratar el procesador, su adaptador real y su SDK en la app. |
-| App Android | 🟡 Parcial | Lote F (AND-30..32): módulo Android real (AGP, Compose Material 3, `MainActivity`, genera APK debug), login OTP con sesión cifrada bajo Android Keystore y pantallas de saldo/apartado, cobrar (teclado → tap mock / QR SPEI), ventas y perfil/CLABE (ver `docs/ANDROID_APP.md`). Falta: pasar del contrato de tarjeta provisional y del endpoint EMV legacy a `/api/v1/card-payments/*`, el SDK del procesador, Play Integrity real, pantallas de onboarding KYB/devoluciones/facturar y la distribución en Play. |
+| App Android | 🟡 Parcial | Lote F (AND-30..32): módulo Android real (AGP, Compose Material 3, `MainActivity`, genera APK debug), login OTP con sesión cifrada bajo Android Keystore y pantallas de saldo/apartado, cobrar (teclado → tap mock / QR SPEI), ventas y perfil/CLABE (ver `docs/ANDROID_APP.md`). Falta: pasar del contrato de tarjeta provisional y del endpoint EMV legacy a `/api/v1/card-payments/*`, el SDK del procesador, Play Integrity real, pantallas de onboarding KYB (el backend y su contrato existen desde el Lote G)/devoluciones/facturar y la distribución en Play. |
 | Integraciones externas | 🔴 Bloqueante | Procesador de tarjetas: solo `acquirer.MockProvider`. PAC: solo `MockPACClient`. STP/CEP: existe cliente HTTP, pero el servidor siempre usa el mock. |
-| Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Lote E: conciliación de liquidaciones del procesador (reporte de diferencias para operador, alertas `ERROR`, worker en `cmd/server` y `cmd/reconciler` de una pasada). Falta: despliegue (CD) e infraestructura, conciliación contra el estado de cuenta STP/bancario, métricas/alertas enrutadas y backoffice. |
+| Operación (CI/CD, observabilidad, conciliación) | 🟡 Parcial | Lote D: CI en GitHub Actions (Go vet + race, integración Postgres 16, Web POS, Kotlin, imagen Docker), toolchain Go 1.27.1 fijado, secretos fuera del repo y reconciliador de payouts activo en `cmd/server`. Lote E: conciliación de liquidaciones del procesador (reporte de diferencias para operador, alertas `ERROR`, worker en `cmd/server` y `cmd/reconciler` de una pasada). Lote G: backoffice interno mínimo (revisión KYB, bloqueo, búsqueda de pagos, ledger por comercio, reintento de payouts, conciliación del procesador, bitácora; UI en `/backoffice/`). Falta: despliegue (CD) e infraestructura, conciliación contra el estado de cuenta STP/bancario y métricas/alertas enrutadas. |
 
 **Conclusión:** el proyecto está en etapa de *"motor de dominio prototipado"*, no de MVP. Estimo que lo construido cubre ~25–30 % del trabajo de un MVP que cobre dinero real, y gran parte del código más sofisticado (switch ISO 8583, DUKPT, STEC, MIF) **no es necesario para el MVP** si se cobra con tarjeta a través de un proveedor certificado.
 
@@ -105,16 +105,14 @@ Severidad: **P0** = bloquea MVP · **P1** = necesario antes de clientes reales �
 Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev).
 
 ### F1 — Alta y KYB/KYC del comercio
-**Existe:** validador RFC/CURP, parser CSF y QR de constancia, lista 69-B con repo SQL, validador de CSD `.cer/.key` (Android), `POST /api/v1/merchants`.
+**Existe:** validador RFC/CURP, parser CSF y QR de constancia, lista 69-B con repo SQL, validador de CSD `.cer/.key` (Android), `POST /api/v1/merchants` (valida el formato del RFC y deja el alta en `DRAFT`). Desde el Lote G (ver `docs/KYB.md`): flujo `DRAFT → SUBMITTED → IN_REVIEW → APPROVED/REJECTED` con motivo (`merchant_kyb`, migración 012), captura de datos (razón social, RFC, CURP, régimen, MCC, domicilio, contacto) y documentos INE/selfie/comprobante de domicilio/estado de cuenta/CSF cifrados con la bóveda (`kyb_documents`, blobs detrás de `store.DocumentBlobStore`), validaciones al enviar (dígito verificador del RFC, persona física por longitud del RFC, solo RESICO PF, CURP ↔ RFC, documentos completos, 69-B → rechazo automático), puerto `kyb.KYCProvider` (prueba de vida/INE) con mock, revisión manual en el backoffice; al aprobar se asigna la CLABE virtual y se da de alta el sub-afiliado vía `acquirer.Provider.OnboardMerchant` (mock). Sin aprobación (o con el comercio bloqueado) no hay intents de tarjeta, QR CoDi/SPEI ni dispersiones.
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| El alta no valida nada | P0 | S | `HandleRegisterMerchant` solo exige `id`, `rfc`, `name`; no llama al validador RFC ni consulta 69-B (`HandleRegisterMerchant` en `pkg/api/server.go`). (El `id` ya lo genera el servidor desde el Lote B.) |
-| Datos del propietario/representante | P0 | S | El Lote B creó usuario (teléfono) y membresía `owner` al dar de alta; faltan datos de contacto, representante legal y su vínculo con el expediente KYC. |
-| Sin captura documental KYC | P0 | M | INE/selfie/prueba de vida, comprobante de domicilio, estado de cuenta (CLABE de liquidación), giro/MCC. Normalmente vía proveedor de identidad (Truora, Metamap, etc.) + requisitos del adquirente. |
-| Sin alta en el adquirente | P0 | M | Con camino A, el comercio debe crearse como sub-afiliado/cuenta en el proveedor (API de onboarding del procesador). |
-| Sin flujo de estado del alta | P1 | S | `PENDING → IN_REVIEW → APPROVED/REJECTED`, con motivo; revisión manual en backoffice. |
-| Registro de la CLABE virtual en STP | P1 | S | Desde el Lote C el servidor asigna la CLABE virtual al dar de alta (aleatoria `646180…`, el cliente ya no la elige). Falta usar el rango/prefijo que asigne STP al participante, registrarla en STP y asignarla al aprobar el alta. |
+| Proveedor real de verificación de identidad | P0 | M | Solo existe `kyb.MockKYCProvider` (`KYC_PROVIDER=mock`, rechazado en producción; sin proveedor la identidad queda `UNKNOWN` y la revisa el operador). Falta contratar el proveedor (Truora, Metamap, …), su adaptador de `kyb.KYCProvider` (prueba de vida, INE contra lista nominal, coincidencia facial) y los requisitos documentales que pida el adquirente. |
+| Alta real en el adquirente | P0 | M | El puerto `acquirer.Provider.OnboardMerchant` (llave `kerno_onboard_<id>`) se llama al aprobar el KYB, pero solo con el mock; falta la API de onboarding de sub-afiliados del procesador elegido (ver F3). |
+| Expediente KYC: retención y representante legal | P1 | S | Falta política de conservación/borrado de expedientes (PLD, LFPDPPP), almacenamiento de objetos (S3) para los blobs y, cuando se soporten personas morales, representante legal y beneficiario controlador. |
+| Registro de la CLABE virtual en STP | P1 | S | Desde el Lote G la CLABE virtual se asigna al aprobar el alta (aleatoria `646180…`, el cliente nunca la elige). Falta usar el rango/prefijo que asigne STP al participante y registrarla en STP. |
 
 ### F2 — Autenticación, sesiones y multi-tenant
 **Existe (Lote B, ver `docs/AUTH.md`):** usuarios y membresías con rol, login OTP (`/api/v1/auth/otp/*`), access JWT HS256 de 15 min + refresh opaco rotativo con detección de reuso y logout, JWT montado en todas las rutas salvo lista pública, tenant derivado del token (body/path ajeno → 403, recursos ajenos → 404, idempotencia por tenant), dispersiones solo `owner`, alta de comercio con id generado por el servidor, nonce de atestación de un solo uso + verificación Play Integrity, rate limit por IP en `/auth/*`, webhook CoDi firmado (HMAC + timestamp + anti-replay), config guard que exige `JWT_SECRET`/`CODI_WEBHOOK_SECRET` y rechaza `DEV_MODE` en producción.
@@ -125,7 +123,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Bóveda CSD sin KMS real | P1 | S | Desde el Lote C la llave sale de `VAULT_MASTER_KEY_HEX` vía `identity.KeyProvider` (sin llave fuera de `DEV_MODE` no arranca) y cada sobre guarda su id de llave. Falta cliente KMS real detrás de `identity.KMSClient` y un job que re-cifre (`RewrapCSD`) los CSD al rotar. |
 | Atestación no exigida | P1 | S | El endpoint de nonce y la verificación existen, pero el veredicto no se exige ni se liga a la sesión (login o cobro). |
 | CORS / TLS / rate limit distribuido | P1 | S | El rate limit actual es en memoria por proceso y usa la IP TCP; CORS y TLS ausentes. Normalmente en API gateway. |
-| Gestión de miembros y permisos | P2 | S | Roles `owner`/`cashier`/`operator` en el modelo, pero no hay endpoints para invitar cajeros ni permisos finos ni rol de backoffice en uso. Los access tokens no se pueden revocar antes de expirar. |
+| Gestión de miembros y permisos | P2 | S | Roles `owner`/`cashier`/`operator` en el modelo y operadores de plataforma (backoffice, Lote G), pero no hay endpoints para invitar cajeros ni permisos finos por operador ni 2FA de operadores. Los access tokens no se pueden revocar antes de expirar. |
 
 ### F3 — Cobro con tarjeta contactless (Tap to Phone)
 **Existe:** parser TLV, motor de estados de pago, reglas CVM, orquestador de tap con auto-reversa, adaptador multi-riel (`WhiteLabelTapProvider`), simulador en Web POS. Desde el Lote E (ver `docs/ACQUIRER_INTEGRATION.md`): puerto `acquirer.Provider` + mock (aprobado / declinado `…51` / timeout `…52`), tabla `card_payments` con máquina de estados, `provider_payment_id`, llave de idempotencia del intent, comisión y fecha de liquidación del procesador; `POST /api/v1/card-payments/intents` (devuelve `client_secret` para el SDK) y `GET /api/v1/card-payments/{id}`; el estado solo cambia con webhooks firmados `POST /api/v1/webhooks/acquirer/{provider}` (HMAC + ventana, exactly-once por id de evento, tolerancia a desorden), la captura postea el split existente (tarifa, apartado fiscal, RESICO) + comisión del procesador en una transacción con outbox; conciliación de payouts del procesador (`ASSET:ACQUIRER_RECEIVABLE` → `ASSET:BANK_OPERATING`, faltantes / diferencias de monto o comisión / duplicados / no liquidados) con reporte para `operator`. Los endpoints EMV legacy (`authorize`/`settle`/`reverse`) responden `410` salvo con `DEV_MODE`.
@@ -151,7 +149,6 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Persona moral declarada por el cliente | P1 | S | `settle` ya no acepta montos del cliente, pero `is_persona_moral` (que deja el ISR fuera del apartado) sigue viniendo del body (también en `POST /api/v1/card-payments/intents`). Debe salir del receptor del CFDI / RFC validado. |
 | Publicador real del outbox | P1 | S | Desde el Lote C los flujos de dinero encolan `payment.*`, `codi.confirmed`, `spei.abono_received` y `disbursement.*` en la misma transacción, pero solo hay publicadores `log`/`noop`. Falta un publicador real (webhook/broker/PAC). |
 | Conciliación diaria | P1 | M | Desde el Lote E existe la conciliación procesador ↔ ledger (payouts del procesador contra capturas, `NOT_SETTLED`, reporte `GET /api/v1/acquirer/reconciliation` para `operator`; `cmd/reconciler` ya no es un stub). Falta: ledger vs. estado de cuenta STP, depósito del procesador vs. estado de cuenta bancario real y asientos de corrección de las diferencias desde backoffice. |
 
@@ -160,7 +157,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Verificación real de titularidad de la CLABE | P0 | S | El verificador es un stub (`PendingAccountVerifier`): la cuenta queda `PENDING` hasta que un `operator` la marca. Falta consulta de titularidad (RFC del titular = RFC del comercio) vía STP/banco o proveedor KYB, 2FA al cambiarla y rol de backoffice global (hoy `operator` es por comercio). |
+| Verificación real de titularidad de la CLABE | P0 | S | El verificador es un stub (`PendingAccountVerifier`): la cuenta queda `PENDING` hasta que un `operator` la marca. Falta consulta de titularidad (RFC del titular = RFC del comercio) vía STP/banco o proveedor KYB, 2FA al cambiarla y llevar esa revisión al backoffice de operadores de plataforma (hoy usa el rol `operator` por comercio; el estado de cuenta ya se captura en el KYB). |
 | STP real no cableado | P0 | S | `STP_BASE_URL` se lee pero nunca se usa; el servidor siempre instancia `MockSTPClient` y `MockCEPProvider`. Falta también el cliente real de consulta de estado de orden (`stp.OrderStatusClient`) que usa el reconciliador de payouts. |
 | Payout automático programado | P1 | M | Barrido diario/T+0 del saldo disponible (neto de apartado fiscal) en vez de dispersión manual por API. |
 | Devoluciones SPEI después de liquidar | P1 | S | Las dispersiones con resultado desconocido o interrumpidas ya se resuelven (Lote D). Falta: webhook de estado de STP para órdenes devueltas **después** de liquidarse (revertir asiento y reintentar) y llevar `GET /disbursements/{clave}` y el seguimiento CEP a la tabla `payouts` (hoy siguen en memoria). |
@@ -168,13 +165,12 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Fondos de terceros | P1 | — | Definir con asesoría legal dónde y bajo qué figura se custodia el saldo del comercio entre cobro y payout. |
 
 ### F7 — Apartado fiscal RESICO / IVA
-**Existe:** `CalculateResicoTaxSplit` con tramos y retención PM; split en ledger; presentador y exportador CSV en Android.
+**Existe:** `CalculateResicoTaxSplit` con tramos y retención PM; split en ledger; presentador y exportador CSV en Android. Desde el Lote G solo se aprueban comercios RESICO persona física: otros regímenes y personas morales (derivadas de la longitud del RFC) se rechazan explícitamente al enviar el KYB, y la retención PM del split la decide el servidor (nunca el body).
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
 | Validación fiscal por contador | P0 | S | Revisar con un contador: base de ISR RESICO (ingresos efectivamente cobrados), tratamiento de IVA trasladado vs. acreditable, retenciones de PM, cambio de tramo intra-mes, tope anual. Documentar supuestos. |
 | ¿Qué pasa con el dinero apartado? | P0 | M | Hoy es una subcuenta contable. Definir si se retiene en cuenta segregada, cuándo se libera y cómo el comercio paga al SAT (¿Kerno solo aparta o también paga?). Implica F6 y temas legales. |
-| Comercios no RESICO | P1 | M | Régimen general PF/PM sin soporte; al menos bloquearlos explícitamente en el alta o modo "sin apartado". |
 | Reporte mensual para declaración | P1 | S | Resumen de ingresos, IVA, ISR estimado por mes. El CSV de Android es local; debe salir del backend. |
 
 ### F8 — Facturación CFDI 4.0
@@ -185,7 +181,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Sin PAC real | P0 | M | Solo `MockPACClient`. Contratar PAC y construir cliente real (sandbox → prod), manejo de códigos de error SAT. |
 | Cadena original manual | P0 | M | `BuildCadenaOriginal` arma el string a mano; el SAT la define vía XSLT oficial. Riesgo alto de sellos inválidos en casos borde. Validar contra el XSLT del SAT o usar el servicio del PAC; probar con el validador del SAT. |
 | Carga real de CSD por el comercio | P0 | S | Backend para subir `.cer/.key` + contraseña, validar vigencia/RFC y guardarlo cifrado con llave de KMS (ver F2). Hoy solo se siembra un CSD autofirmado de demo. |
-| Datos del receptor | P1 | S | Captura de RFC, nombre, régimen fiscal, CP y uso CFDI del cliente final; autofactura desde ticket (portal o QR). |
+| Datos del receptor | P1 | S | Captura de RFC, nombre, régimen fiscal, CP y uso CFDI del cliente final; autofactura desde ticket (portal o QR). De ahí debe salir la retención ISR de persona moral (Art. 113-J) del split: desde el Lote G el servidor la decide y, sin receptor validado, trata toda venta como público en general. |
 | Cancelación CFDI | P1 | M | No existe (motivos 01–04, folio de sustitución, aceptación del receptor). |
 | Representación impresa (PDF) y envío | P1 | S | PDF con QR SAT y envío por email/WhatsApp. |
 | Factura global automática | P1 | S | Generar periódicamente la global de ventas a público en general que no se facturaron individualmente. |
@@ -196,9 +192,8 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Sin UI real (pantallas restantes) | P0 | M | Desde el Lote F existen login/OTP, saldo/apartado, cobrar, ventas y perfil. Faltan: onboarding KYB, devoluciones (sobre `POST /api/v1/card-payments/{id}/refunds`), facturar y selector de comercio cuando el usuario tiene varias membresías. |
-| Contrato de cobro de la app desalineado con el backend | P0 | S | La app aún llama al endpoint legacy `/api/v1/payments/emv/authorize` (`SoftPosApiClient`, responde `410` sin `DEV_MODE`) y su `CardPaymentsApi` usa un contrato provisional (`id`, estados en minúsculas). Debe usar `/api/v1/card-payments/*` (campo `card_payment_id`, estados del backend) y consultar `GET /api/v1/card-payments/{id}` hasta `final: true`. Además `SalesApi` usa `GET /api/v1/merchants/{id}/sales`, que no existe en el backend. |
-| Paquete de Play Integrity desalineado | P1 | S | `PLAY_INTEGRITY_PACKAGE` tiene default `mx.softpos.app` en el backend, pero el `applicationId` de la app es `mx.kerno.softpos` (`.debug` en debug): los veredictos se rechazarían. Alinear default y configuración por entorno. |
+| Sin UI real (pantallas restantes) | P0 | M | Desde el Lote F existen login/OTP, saldo/apartado, cobrar, ventas y perfil. Faltan: onboarding KYB (contrato backend listo en el Lote G, `docs/KYB.md`), devoluciones (sobre `POST /api/v1/card-payments/{id}/refunds`), facturar y selector de comercio cuando el usuario tiene varias membresías. |
+| Contrato de cobro de la app desalineado con el backend | P0 | S | La app aún llama al endpoint legacy `/api/v1/payments/emv/authorize` (`SoftPosApiClient`, responde `410` sin `DEV_MODE`) y su `CardPaymentsApi` usa un contrato provisional (`id`, estados en minúsculas). Debe usar `/api/v1/card-payments/*` (campo `card_payment_id`, estados del backend) y consultar `GET /api/v1/card-payments/{id}` hasta `final: true`. (`GET /api/v1/merchants/{id}/sales` existe desde el Lote G.) |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
 | Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
 | Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. Antes de subir a Play: `targetSdk` 36 (hoy 35) y regenerar `gradle-wrapper.jar` para Gradle 8.14.3 con `distributionSha256Sum` en `gradle-wrapper.properties`. |
@@ -221,7 +216,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 | Secretos del historial y semántica del outbox | P1 | S | Los valores que estuvieron en `docker-compose.yml` antes del Lote D (contraseña de Postgres, `STP_HMAC_SECRET`, `VAULT_MASTER_KEY_HEX`) siguen en el historial de git: no reutilizarlos en ningún entorno. Outbox: desde la auditoría del Lote D un lote se corta antes de que una publicación pueda exceder el lease; los eventos sobrantes se reclaman al vencer el lease y ese reclamo cuenta como intento aunque no se hayan publicado (falta liberarlos sin contar). |
 | Infraestructura de despliegue | P0 | M | Postgres administrado con backups/PITR, Redis administrado, TLS, dominio, entornos dev/staging/prod. |
 | Observabilidad | P1 | S | Logs estructurados existen (los payouts sin resolver ya emiten `ERROR` `ALERT payout unresolved`); faltan métricas, trazas y alertas enrutadas (fallos de webhook, descuadres de conciliación, payouts atascados, eventos `FAILED` del outbox). |
-| Backoffice interno | P1 | M | Revisar altas KYB, buscar pagos, ver ledger por comercio, reintentar payouts/timbrados, bloquear comercio. |
+| Backoffice interno | P2 | S | Desde el Lote G existe el backoffice mínimo (`docs/BACKOFFICE.md`): revisión KYB con descarga auditada de documentos, aprobar/rechazar, bloquear, búsqueda de pagos, ledger por comercio, reintento de payouts, conciliación del procesador y bitácora `operator_audit_log`; UI estática en `/backoffice/`. Falta: permisos por operador, 2FA/IP allowlist, asientos de corrección y reintento de timbrados (sin PAC real). |
 | Tests de integración E2E | P1 | M | Cobro → webhook → ledger → payout → CFDI contra sandboxes reales. Hoy todo es unitario con mocks. |
 
 ### F12 — Cumplimiento legal / regulatorio base (no-código)
@@ -239,7 +234,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 1. **Cadena de fraude cerrada en lo esencial (Lote C):** `settle` toma el monto del pago autorizado y la comisión de la tarifa, el posteo es atómico y exactly-once, las dispersiones van solo a la CLABE de liquidación verificada y las devoluciones revierten apartado y comisión. Queda: verificación real de titularidad de esa CLABE (hoy la marca un operador) y 2FA al cambiarla (ver F6).
 2. **La bóveda CSD ya no usa llave hardcodeada** (Lote C); falta KMS real y re-cifrado al rotar (ver F2).
-3. **La app Android ya es una app (Lote F), pero su cobro con tarjeta no está conectado al flujo real**: sigue llamando al endpoint EMV legacy (`410` sin `DEV_MODE`) y a un contrato provisional en vez de `/api/v1/card-payments/*`, consulta un endpoint de ventas que no existe y el paquete de Play Integrity del backend no coincide con su `applicationId` (ver F9).
+3. **La app Android ya es una app (Lote F), pero su cobro con tarjeta no está conectado al flujo real**: sigue llamando al endpoint EMV legacy (`410` sin `DEV_MODE`) y a un contrato provisional en vez de `/api/v1/card-payments/*`, (el endpoint de ventas y el paquete de Play Integrity del backend ya quedaron alineados en el Lote G; ver F9).
 4. **No hay ninguna integración real con terceros** (procesador, PAC, STP, CEP): todo pasa por mocks. Para el procesador, el flujo backend completo (intent, webhooks firmados, devoluciones, contracargos, conciliación) ya existe sobre el puerto `acquirer.Provider` (Lote E); falta el adaptador real.
 
 ---
@@ -259,6 +254,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - Queda de la Fase 1, pasa a la Fase 2: publicador real del outbox, proveedor OTP real, KMS real para la bóveda, verificación real de titularidad de la CLABE de liquidación y CD/protección de `main`.
 
 **Fase 2 — Rieles de cobro y payout (≈4–6 semanas)**
+- ~~Alta y KYB con revisión de operador, bloqueo y backoffice mínimo~~ ✅ Lote G (MVP-17..19: KYB con documentos cifrados y estados, alta en el adquirente por el puerto, backoffice con auditoría, endpoint de ventas, ventana de gracia del refresh); falta proveedor KYC y onboarding real del procesador.
 - ~~Integración procesador (backend + webhooks)~~ ✅ Lote E sobre el puerto `acquirer.Provider` con mock (MVP-14..16); falta el adaptador del procesador elegido. STP real (abonos, órdenes, consulta de estado para el reconciliador de payouts, CEP, devoluciones).
 - Pendientes heredados de la Fase 1 (ver arriba).
 - Payout automático diario; conciliador real: procesador vs. ledger ✅ Lote E; falta STP/banco vs. ledger.
@@ -268,7 +264,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 - PAC real, carga de CSD, cadena original validada, cancelación, PDF, factura global automática, comprobante de venta.
 
 **Fase 4 — Piloto controlado (≈2–3 semanas)**
-- Backoffice mínimo, alertas, runbooks; 5–20 comercios piloto con límites de monto y payout supervisado.
+- ~~Backoffice mínimo~~ ✅ Lote G; alertas, runbooks; 5–20 comercios piloto con límites de monto y payout supervisado.
 
 > Con 2–3 desarrolladores, el rango realista hasta un piloto con dinero real es de **3 a 5 meses**, condicionado sobre todo por los tiempos de contratación y certificación de procesador, STP y PAC.
 

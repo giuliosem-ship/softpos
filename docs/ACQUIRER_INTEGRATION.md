@@ -22,6 +22,7 @@ rejected in production).
 | `Capture(CaptureRequest)` | manual-capture providers (Kerno assumes auto-capture today) | caller-defined |
 | `Refund(RefundRequest)` → `RefundResult{ProviderRefundID, Status}` | refund request; ledger moves only on the webhook | `kerno_refund_<refund_id>` |
 | `Cancel(CancelRequest)` | cancel an uncaptured intent | `kerno_cancel_<card_payment_id>` |
+| `OnboardMerchant(OnboardRequest)` → `OnboardResult{ProviderMerchantID, Status}` | create the processor sub-merchant when an operator approves the KYB (`docs/KYB.md`); the mock rejects RFCs starting with `REJECT` and times out on `TIMEOUT` | `kerno_onboard_<merchant_id>` |
 | `ParseWebhookEvent(body)` → `Event` | translate the provider payload into the normalized `Event` | — |
 
 Error contract: `ErrProviderUnavailable` = outcome unknown (timeout, reset,
@@ -47,9 +48,12 @@ intent / refund. `MockProvider.SimulateTap` builds the webhook events of a tap.
 
 1. **Intent** — `POST /api/v1/card-payments/intents` (any member; header
    `Idempotency-Key` required, ≤ 255 chars). Body:
-   `{"amount_cents": 25000, "currency": "MXN", "reference": "mesa 4", "is_persona_moral": false}`
+   `{"amount_cents": 25000, "currency": "MXN", "reference": "mesa 4"}`
    (`currency` optional, only MXN; `reference` ≤ 64 chars; `merchant_id`, if
-   sent, must equal the token's tenant). `amount_cents` 1..100,000,000.
+   sent, must equal the token's tenant; a client `is_persona_moral` is
+   ignored — the split input is server-derived, `docs/KYB.md`).
+   `amount_cents` 1..100,000,000. The merchant must be KYB-approved and not
+   blocked (`403 MERCHANT_NOT_APPROVED` / `MERCHANT_BLOCKED`).
    The row `card_payments` (status `CREATED`) is written first (unique
    `(merchant_id, intent_idempotency_key)`; same key + different body → `409
    IDEMPOTENCY_KEY_REUSED`), then the provider is called outside the
@@ -258,7 +262,8 @@ stub; needs `DATABASE_URL`). Settlement dates are Mexico City calendar days.
    carry `kerno_refund_id` (matches a refund whose provider id was never
    stored because the call timed out, releasing its hold).
 3. Idempotency: pass Kerno's keys (`kerno_intent_…`, `kerno_refund_…`,
-   `kerno_cancel_…`) as the provider's idempotency keys; return
+   `kerno_cancel_…`, `kerno_onboard_…`; `OnboardMerchant` maps to the
+   processor's sub-merchant / account onboarding API) as the provider's idempotency keys; return
    `ErrProviderUnavailable` only for unknown outcomes.
 4. Webhooks: configure the endpoint
    `https://<host>/api/v1/webhooks/acquirer/<name>` and the secret in

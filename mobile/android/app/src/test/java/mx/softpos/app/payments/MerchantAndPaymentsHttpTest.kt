@@ -34,9 +34,21 @@ class MerchantAndPaymentsHttpTest {
 
     @Test
     fun merchantIdIsPathEscaped() {
-        server.enqueue(MockResponse().setBody("""{"id":"a/b","virtual_clabe":"646180157000000004"}"""))
+        server.enqueue(MockResponse().setBody("""{"id":"a/b","clabe":"646180157000000004"}"""))
         HttpMerchantApi(base(), client).getMerchant("a/b")
         assertEquals("/api/v1/merchants/a%2Fb", server.takeRequest().path)
+    }
+
+    @Test
+    fun merchantProfileReadsBackendClabeField() {
+        // Exact shape of pkg/api/server.go Merchant (json tag "clabe").
+        server.enqueue(
+            MockResponse().setBody(
+                """{"id":"mer_1","rfc":"XAXX010101000","name":"Tacos","is_resico":true,"clabe":"646180157000000004"}"""
+            )
+        )
+        val r = HttpMerchantApi(base(), client).getMerchant("mer_1") as ApiResult.Success
+        assertEquals("646180157000000004", r.data.virtualClabe)
     }
 
     @Test

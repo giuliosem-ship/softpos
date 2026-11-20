@@ -25,7 +25,8 @@ data class MerchantProfile(
     @SerialName("rfc") val rfc: String = "",
     @SerialName("name") val name: String = "",
     @SerialName("is_resico") val isResico: Boolean = false,
-    @SerialName("virtual_clabe") val virtualClabe: String = ""
+    // Backend Merchant JSON tag is "clabe" (pkg/api/server.go), not "virtual_clabe".
+    @SerialName("clabe") val virtualClabe: String = ""
 )
 
 interface MerchantApi {

@@ -74,7 +74,7 @@ CI (`.github/workflows/ci.yml`, job `kotlin`) runs
   on retry after a network error) → `TapToPayProvider.collect(intent)` →
   `GET` the payment to confirm. Approved, pending (webhook not yet seen) or
   declined/cancelled back to the keypad.
-- **SPEI QR**: reads the merchant's `virtual_clabe` (`GET /api/v1/merchants/{id}`),
+- **SPEI QR**: reads the merchant's `clabe` (`GET /api/v1/merchants/{id}`),
   draws a QR with `{v, type:"SPEI", clabe, beneficiary, amount_cents, reference}`
   (7-digit numeric reference, 15 min expiry) plus the CLABE and reference as text.
   This is a Kerno payload, not CoDi/DiMo; payment is credited when the STP

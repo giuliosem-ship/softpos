@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"softpos/pkg/acquirer"
 	"softpos/pkg/auth"
 	"softpos/pkg/fiscal"
 	"softpos/pkg/identity"
@@ -59,6 +60,9 @@ type Server struct {
 	accountVerifier   SettlementAccountVerifier
 	cashierRefunds    bool
 	defaultFeeBps     int64
+	acquirer          acquirer.Provider
+	acquirerSecret    []byte
+	legacyCardFlow    bool
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -93,6 +97,9 @@ func NewServer(
 	s.money = s.newMemoryMoneyStore()
 	s.accountVerifier = PendingAccountVerifier{}
 	s.defaultFeeBps = DefaultPlatformFeeBps
+	// Legacy client-trusted EMV authorize/settle/reverse stay on for library
+	// users and unit tests; cmd/server enables them only with DEV_MODE.
+	s.legacyCardFlow = true
 	s.auth = newEphemeralAuthService()
 	s.authLimiter = NewRateLimiter(DefaultAuthRateLimitPerMinute, time.Minute)
 
@@ -583,12 +590,17 @@ func (s *Server) routes() {
 	s.router.HandleFunc("GET /api/v1/disbursements/{clave}", s.HandleGetDisbursement)
 	s.router.HandleFunc("POST /api/v1/disbursements/{clave}/reconcile-cep", s.HandleReconcileCEP)
 
-	// Payments: EMV Contactless, CoDi QR & Tax-Split Settlement
-	s.router.HandleFunc("POST /api/v1/payments/emv/authorize", s.HandleEMVAuthorize)
-	s.router.HandleFunc("POST /api/v1/payments/emv/reverse", s.HandleEMVReverse)
+	// Card payments through the certified processor (AcquirerProvider port)
+	s.router.HandleFunc("POST /api/v1/card-payments/intents", s.HandleCreateCardPaymentIntent)
+	s.router.HandleFunc("GET /api/v1/card-payments/{id}", s.HandleGetCardPayment)
+	s.router.HandleFunc("POST /api/v1/card-payments/{id}/cancel", s.HandleCancelCardPayment)
+
+	// Payments: legacy EMV (DEV_MODE only in cmd/server), CoDi QR & Tax-Split Settlement
+	s.router.HandleFunc("POST /api/v1/payments/emv/authorize", s.legacyCardOnly(s.HandleEMVAuthorize))
+	s.router.HandleFunc("POST /api/v1/payments/emv/reverse", s.legacyCardOnly(s.HandleEMVReverse))
 	s.router.HandleFunc("POST /api/v1/payments/codi/qr", s.HandleCoDiCreateQR)
 	s.router.HandleFunc("POST /api/v1/webhooks/codi/confirm", s.HandleCoDiWebhookConfirm)
-	s.router.HandleFunc("POST /api/v1/payments/settle", s.HandlePaymentSettle)
+	s.router.HandleFunc("POST /api/v1/payments/settle", s.legacyCardOnly(s.HandlePaymentSettle))
 	s.router.HandleFunc("POST /api/v1/dev/codi/simulate-confirm", s.HandleDevCoDiSimulate) // DEV_MODE only
 
 	// CFDI 4.0 Invoicing & Multi-PAC Stamping

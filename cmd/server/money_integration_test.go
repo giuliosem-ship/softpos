@@ -71,6 +71,7 @@ func TestPGIntegration_ConcurrentMoneyPostingIsExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
 	}
+	srv.SetLegacyCardFlowEnabled(true) // legacy EMV endpoints are DEV_MODE-only in cmd/server
 	defer func() { _ = db.Close() }()
 
 	const merchantID, clabe = "merch_pg_money", "646180123400000007"
@@ -179,6 +180,7 @@ func TestPGIntegration_PayoutsAndRefunds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
 	}
+	srv.SetLegacyCardFlowEnabled(true) // legacy EMV endpoints are DEV_MODE-only in cmd/server
 	defer func() { _ = db.Close() }()
 	const m, payoutCLABE = "merch_pg_payout", "032180000118359719"
 	if err := srv.RegisterMerchantCLABE("646180123400000007", m, "GARM850101ABC"); err != nil {
@@ -264,6 +266,7 @@ func TestPGIntegration_ConcurrentSettlesAndRefundsDoNotDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServer: %v", err)
 	}
+	srv.SetLegacyCardFlowEnabled(true) // legacy EMV endpoints are DEV_MODE-only in cmd/server
 	defer func() { _ = db.Close() }()
 	const m = "merch_pg_lockorder"
 	if err := srv.RegisterMerchantCLABE("646180123400000007", m, "GARM850101ABC"); err != nil {

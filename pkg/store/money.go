@@ -98,6 +98,11 @@ type MoneyTx interface {
 	// SetPayoutStatus moves a payout from -> to (ErrPayoutStateConflict);
 	// stpOrderID 0 keeps the stored one.
 	SetPayoutStatus(ctx context.Context, claveRastreo string, from, to PayoutStatus, stpOrderID int64, lastError string) error
+
+	// Processor card payments, refund requests, payouts and reconciliation
+	// items (pkg/store/card_payments.go). Lock order: card payment row ->
+	// operation key -> settlement row -> monthly sales row -> ledger accounts.
+	CardPaymentTx
 }
 
 // MoneyStore runs units of work. fn's error rolls everything back.

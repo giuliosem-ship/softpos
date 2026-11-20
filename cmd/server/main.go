@@ -24,6 +24,7 @@ import (
 	_ "time/tzdata"
 
 	"softpos/migrations"
+	"softpos/pkg/acquirer"
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
 	"softpos/pkg/identity"
@@ -82,6 +83,11 @@ type Config struct {
 	OutboxPublisher    string        // OUTBOX_PUBLISHER: "log" (default) | "noop"
 	// OutboxPublishTimeout bounds each publish (OUTBOX_PUBLISH_TIMEOUT, default 30s).
 	OutboxPublishTimeout time.Duration
+
+	// AcquirerProvider selects the card processor adapter (ACQUIRER_PROVIDER):
+	// "mock" (tests / DEV_MODE; rejected in production) or empty = card
+	// payments disabled (503). DEV_MODE defaults it to "mock".
+	AcquirerProvider string
 
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
@@ -171,6 +177,7 @@ func LoadConfigFromEnv() Config {
 
 	return Config{
 		AllowCashierRefunds:     cashierRefunds,
+		AcquirerProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("ACQUIRER_PROVIDER"))),
 		DefaultPlatformFeeBps:   feeBps,
 		HasDefaultFeeBps:        hasFee,
 		AuthRateLimitPerMinute:  authRate,
@@ -321,6 +328,27 @@ func resolveWebhookSecrets(cfg Config) (stpSecret, codiSecret string, err error)
 	return stpSecret, codiSecret, nil
 }
 
+// buildAcquirerProvider resolves ACQUIRER_PROVIDER (DEV_MODE defaults to the
+// mock). nil means card payments are disabled.
+func buildAcquirerProvider(cfg Config) (acquirer.Provider, error) {
+	name := cfg.AcquirerProvider
+	if name == "" && cfg.DevMode {
+		name = acquirer.MockProviderName
+	}
+	if name == "" {
+		slog.Warn("ACQUIRER_PROVIDER not set: card payments disabled (503)")
+		return nil, nil
+	}
+	p, err := acquirer.New(name)
+	if err != nil {
+		return nil, fmt.Errorf("ACQUIRER_PROVIDER: %w", err)
+	}
+	if name == acquirer.MockProviderName {
+		slog.Warn("ACQUIRER_PROVIDER=mock: card payments use the deterministic mock processor (no real money)")
+	}
+	return p, nil
+}
+
 // BuildServer instantiates and connects all infrastructure, repositories, and domain services.
 func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.RedisClient, error) {
 	stpSecret, codiSecret, err := resolveWebhookSecrets(cfg)
@@ -399,6 +427,16 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
 	server.SetCashierRefundsAllowed(cfg.AllowCashierRefunds)
+	// Legacy client-trusted EMV approve/settle/reverse: demo only.
+	server.SetLegacyCardFlowEnabled(cfg.DevMode)
+	if prov, err := buildAcquirerProvider(cfg); err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, err
+	} else if prov != nil {
+		server.SetAcquirerProvider(prov)
+	}
 	if codiSecret != "" {
 		server.SetCoDiWebhookSecret(codiSecret)
 	}
@@ -449,6 +487,8 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	_, _ = ledgerEngine.CreateAccount("ASSET:ACQUIRER_RECEIVABLE", ledger.AccountAsset, "Acquirer Card Receivable")
 	_, _ = ledgerEngine.CreateAccount("REVENUE:FEES", ledger.AccountRevenue, "Platform SoftPOS Fee Revenue")
 	_, _ = ledgerEngine.CreateAccount("ASSET:RBF_LOANS_RECEIVABLE", ledger.AccountAsset, "Platform RBF Loans")
+	_, _ = ledgerEngine.CreateAccount(api.AccountAcquirerFees, ledger.AccountExpense, "Card Processor Fees")
+	_, _ = ledgerEngine.CreateAccount(api.AccountBankOperating, ledger.AccountAsset, "Kerno Operating Bank Account (processor payouts)")
 
 	// 6. Seed demo merchant if enabled
 	if cfg.SeedDemoMerchant {

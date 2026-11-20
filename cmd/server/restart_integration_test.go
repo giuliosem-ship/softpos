@@ -60,6 +60,7 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot 1: %v", err)
 	}
+	srv1.SetLegacyCardFlowEnabled(true) // legacy EMV endpoints are DEV_MODE-only in cmd/server
 	// Merchant registration needs a real user; the server generates the id and
 	// makes the caller owner (membership persisted in merchant_memberships).
 	owner, err := srv1.AuthService().EnsureUser(context.Background(), "+525512300001")
@@ -129,6 +130,7 @@ func TestPGIntegration_StateSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot 2: %v", err)
 	}
+	srv2.SetLegacyCardFlowEnabled(true) // legacy EMV endpoints are DEV_MODE-only in cmd/server
 	defer func() { _ = db2.Close() }()
 
 	if mem, found, err := srv2.AuthService().Repository().GetMembership(context.Background(), owner.ID, merchantID); err != nil || !found || mem.Role != auth.RoleOwner {

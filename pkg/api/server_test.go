@@ -35,6 +35,8 @@ func setupTestServer(t *testing.T) (*Server, *stp.STPSigner) {
 	_, _ = ledgerEngine.CreateAccount("ASSET:ACQUIRER_RECEIVABLE", ledger.AccountAsset, "Acquirer Receivable")
 	_, _ = ledgerEngine.CreateAccount("REVENUE:FEES", ledger.AccountRevenue, "Platform Fee Revenue")
 	_, _ = ledgerEngine.CreateAccount("ASSET:RBF_LOANS_RECEIVABLE", ledger.AccountAsset, "RBF Loans")
+	_, _ = ledgerEngine.CreateAccount(AccountAcquirerFees, ledger.AccountExpense, "Card Processor Fees")
+	_, _ = ledgerEngine.CreateAccount(AccountBankOperating, ledger.AccountAsset, "Operating Bank")
 
 	return server, stpSigner
 }

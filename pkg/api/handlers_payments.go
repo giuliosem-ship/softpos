@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -123,56 +124,12 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 			return payments.ErrInvalidStateTransition
 		}
 
-		gross := p.AmountCents
-		ym := currentYearMonth()
-		accumulated, err := tx.MonthlySalesForUpdate(ctx, tenant, ym)
-		if err != nil {
-			return err
-		}
-		split, err := fiscal.CalculateResicoTaxSplit(gross, accumulated, req.IsPersonaMoral)
-		if err != nil {
-			return err
-		}
-		fee := bpsHalfUp(gross, feeBps)
-		if fee+split.TotalTaxEscrowCents > gross {
-			return ledger.ErrDeductionsExceedGross
-		}
-		rbfSweep := s.rbfSweepCents(tenant, gross, gross-fee-split.TotalTaxEscrowCents)
-
-		journalID := "settle_" + p.ID
-		jnl, err := ledger.NewSplitPaymentJournal(journalID, nowUTC(), gross, tenant, fee, split.TotalTaxEscrowCents, rbfSweep)
-		if err != nil {
-			return err
-		}
-		jnl.Description = "EMV settlement " + p.ID
-		jnl.Metadata = map[string]string{"payment_id": p.ID, "merchant_id": tenant}
-		if err := tx.PostJournal(ctx, jnl); err != nil {
-			return err
+		var err2 error
+		rec, err2 = s.postSettlement(ctx, tx, tenant, p.ID, p.AmountCents, req.IsPersonaMoral, feeBps, "EMV settlement "+p.ID)
+		if err2 != nil {
+			return err2
 		}
 		if err := tx.SetPaymentStatus(ctx, p.ID, payments.PaymentAuthorized, payments.PaymentSettled); err != nil {
-			return err
-		}
-		if err := tx.AddMonthlySales(ctx, tenant, ym, split.BaseAmountCents); err != nil {
-			return err
-		}
-		rec = store.SettlementRecord{
-			PaymentID:        p.ID,
-			MerchantID:       tenant,
-			GrossCents:       gross,
-			BaseCents:        split.BaseAmountCents,
-			IVACents:         split.IVAAmountCents,
-			ISRCents:         split.ISREscrowCents,
-			ISRRateBps:       split.ISRRateBps,
-			TaxEscrowCents:   split.TotalTaxEscrowCents,
-			PlatformFeeBps:   feeBps,
-			PlatformFeeCents: fee,
-			RBFSweepCents:    rbfSweep,
-			NetCents:         gross - fee - split.TotalTaxEscrowCents - rbfSweep,
-			PersonaMoral:     split.IsPersonaMoralWithholding,
-			YearMonth:        ym,
-			JournalID:        journalID,
-		}
-		if err := tx.InsertSettlement(ctx, rec); err != nil {
 			return err
 		}
 		fresh = true
@@ -188,6 +145,63 @@ func (s *Server) HandlePaymentSettle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, settleResponseFromRecord(rec))
+}
+
+// postSettlement posts the settlement split of a captured sale inside tx:
+// RESICO month lock, tax split, platform fee (feeBps, half-up), RBF holdback,
+// journal settle_<paymentID>, RESICO accumulator and the settlement record.
+// Shared by the legacy EMV settle and processor card captures. The caller
+// holds the payment row lock and serializes RBF merchants (rbfMu).
+func (s *Server) postSettlement(ctx context.Context, tx store.MoneyTx, tenant, paymentID string, gross int64, personaMoral bool, feeBps int64, description string) (store.SettlementRecord, error) {
+	ym := currentYearMonth()
+	accumulated, err := tx.MonthlySalesForUpdate(ctx, tenant, ym)
+	if err != nil {
+		return store.SettlementRecord{}, err
+	}
+	split, err := fiscal.CalculateResicoTaxSplit(gross, accumulated, personaMoral)
+	if err != nil {
+		return store.SettlementRecord{}, err
+	}
+	fee := bpsHalfUp(gross, feeBps)
+	if fee+split.TotalTaxEscrowCents > gross {
+		return store.SettlementRecord{}, ledger.ErrDeductionsExceedGross
+	}
+	rbfSweep := s.rbfSweepCents(tenant, gross, gross-fee-split.TotalTaxEscrowCents)
+
+	journalID := "settle_" + paymentID
+	jnl, err := ledger.NewSplitPaymentJournal(journalID, nowUTC(), gross, tenant, fee, split.TotalTaxEscrowCents, rbfSweep)
+	if err != nil {
+		return store.SettlementRecord{}, err
+	}
+	jnl.Description = description
+	jnl.Metadata = map[string]string{"payment_id": paymentID, "merchant_id": tenant}
+	if err := tx.PostJournal(ctx, jnl); err != nil {
+		return store.SettlementRecord{}, err
+	}
+	if err := tx.AddMonthlySales(ctx, tenant, ym, split.BaseAmountCents); err != nil {
+		return store.SettlementRecord{}, err
+	}
+	rec := store.SettlementRecord{
+		PaymentID:        paymentID,
+		MerchantID:       tenant,
+		GrossCents:       gross,
+		BaseCents:        split.BaseAmountCents,
+		IVACents:         split.IVAAmountCents,
+		ISRCents:         split.ISREscrowCents,
+		ISRRateBps:       split.ISRRateBps,
+		TaxEscrowCents:   split.TotalTaxEscrowCents,
+		PlatformFeeBps:   feeBps,
+		PlatformFeeCents: fee,
+		RBFSweepCents:    rbfSweep,
+		NetCents:         gross - fee - split.TotalTaxEscrowCents - rbfSweep,
+		PersonaMoral:     split.IsPersonaMoralWithholding,
+		YearMonth:        ym,
+		JournalID:        journalID,
+	}
+	if err := tx.InsertSettlement(ctx, rec); err != nil {
+		return store.SettlementRecord{}, err
+	}
+	return rec, nil
 }
 
 var (

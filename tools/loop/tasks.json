@@ -1150,6 +1150,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 26/26; node --test 8/8; ./gradlew :app:test 78/78.",
       "audit_notes": "tools/loop/*.py untouched. Other web/pos pages (overview, economics) left as-is (product narrative, no README-level status claims).",
       "priority": 74
+    },
+    {
+      "id": "MVP-14",
+      "component": "payments",
+      "title": "AcquirerProvider port and persistent card payment model",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/acquirer/acquirer_test.go, pkg/api/card_payments_test.go, cmd/server/card_payments_integration_test.go",
+        "implementation": "pkg/acquirer/acquirer.go, pkg/acquirer/mock.go, pkg/store/card_payments.go, pkg/store/card_payments_memory.go, pkg/store/money.go, pkg/store/money_memory.go, migrations/010_card_payments_acquirer.*.sql, pkg/api/handlers_card_payments.go, pkg/api/handlers_acquirer_events.go, pkg/api/handlers_payments.go, pkg/api/handlers_emv_codi.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/ACQUIRER_INTEGRATION.md, docs/MONEY_FLOWS.md"
+      },
+      "spec": "Camino A: provider-agnostic acquirer.Provider port (CreatePaymentIntent/GetPayment/Capture/Refund/Cancel with idempotency keys, ParseWebhookEvent, optional WebhookVerifier) + deterministic MockProvider (amount ...51 decline, ...52 timeout, else approve; ids derived from idempotency keys). Migration 010: card_payments (state machine CREATED/AUTHORIZED/DECLINED/CANCELED/CAPTURED/PARTIALLY_REFUNDED/REFUNDED/CHARGEBACK/CHARGEBACK_REVERSED, provider_payment_id unique per provider, intent idempotency key unique per merchant, provider fee, settlement date, payout id), card_payment_refunds, acquirer_payouts, acquirer_reconciliation_items; payment_settlements FK to emv_payments dropped. MoneyTx gains CardPaymentTx (SQL + memory). API: POST /api/v1/card-payments/intents (Idempotency-Key required, tenant from token, amount validated, provider call outside the tx, returns client_secret for the Tap to Pay SDK), GET /api/v1/card-payments/{id}, POST /{id}/cancel. Provider confirmations (ApplyAcquirerEvent, exactly-once key acq:<provider>:evt:<id>) drive the state machine; capture posts the shared settle split (postSettlement extracted from the legacy settle) + processor fee journal (EXPENSE:ACQUIRER_FEES / ASSET:ACQUIRER_RECEIVABLE) + outbox card_payment.captured. Regressions ignored, capture before authorize accepted, capture of canceled/over amount = conflict. Legacy EMV authorize/settle/reverse are DEV_MODE-only in cmd/server (410 LEGACY_CARD_FLOW_DISABLED). ACQUIRER_PROVIDER (DEV_MODE default mock; mock rejected in production).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 27/27 (new: concurrent intents with one key -> one row, concurrent capture deliveries -> one posting); node --test 8/8.",
+      "audit_notes": "Pending for MVP-15/16: signed webhook endpoint, refunds/chargebacks, payout reconciliation.",
+      "priority": 75
     }
   ]
 }

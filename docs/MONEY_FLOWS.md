@@ -25,7 +25,22 @@ Account codes: `LIABILITY:MERCHANT:<id>:AVAILABLE`, `LIABILITY:MERCHANT:<id>:TAX
 `ASSET:RBF_LOANS_RECEIVABLE:<id>` (per merchant, created at registration) and the
 global `ASSET:ACQUIRER_RECEIVABLE`, `ASSET:STP_CONCENTRATOR`, `REVENUE:FEES`.
 
-## Card settle — `POST /api/v1/payments/settle`
+## Processor card payments (`/api/v1/card-payments/*`)
+
+Card payments go through the certified processor port `acquirer.Provider`
+(`docs/ACQUIRER_INTEGRATION.md`). The status of a `card_payments` row moves
+only on the processor's confirmations; a capture posts, in one transaction,
+the same split as the card settle below (`settle_<card_payment_id>`, RESICO
+accumulator, settlement record) plus the processor fee (`acq_fee_<id>`: Dr
+`EXPENSE:ACQUIRER_FEES`, Cr `ASSET:ACQUIRER_RECEIVABLE`) and outbox
+`card_payment.captured`. Lock order: card payment row → operation key →
+settlement row → monthly-sales row → ledger accounts.
+
+## Card settle (legacy, DEV_MODE only) — `POST /api/v1/payments/settle`
+
+`cmd/server` serves the legacy EMV authorize / settle / reverse endpoints only
+with `DEV_MODE=true` (`410 LEGACY_CARD_FLOW_DISABLED` otherwise): they trust
+the phone's TLV as the approval.
 
 Body: `payment_id` (required), `is_persona_moral`, optional
 `gross_amount_cents` (only cross-checked: a different value → `409

@@ -26,6 +26,7 @@ var (
 	ErrMissingDatabaseURL        = errors.New("insecure configuration: DATABASE_URL is required in production (without it all money state is in memory)")
 	ErrInsecureRedisPassword     = errors.New("insecure configuration: REDIS_PASSWORD must be set to at least 16 bytes when REDIS_ADDR is used in production")
 	ErrWeakPlayIntegritySecret   = errors.New("insecure configuration: PLAY_INTEGRITY_SECRET, when set, must be at least 32 bytes in production")
+	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
 
@@ -68,6 +69,7 @@ var ServerEnvVars = []EnvVar{
 	{Name: "VAULT_PREVIOUS_KEYS", Secret: true},
 	{Name: "DEFAULT_PLATFORM_FEE_BPS"},
 	{Name: "ALLOW_CASHIER_REFUNDS"},
+	{Name: "ACQUIRER_PROVIDER"},
 	{Name: "OUTBOX_POLL_INTERVAL"},
 	{Name: "OUTBOX_BATCH_SIZE"},
 	{Name: "OUTBOX_PUBLISHER"},
@@ -162,6 +164,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	}
 	if cfg.PlayIntegritySecret != "" && len(cfg.PlayIntegritySecret) < minSecretLen {
 		return ErrWeakPlayIntegritySecret
+	}
+
+	// 7. Card processor: the mock approves without a processor.
+	if cfg.AcquirerProvider == "mock" {
+		return ErrMockAcquirerInProduction
 	}
 
 	return nil

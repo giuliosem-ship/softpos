@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -177,6 +178,55 @@ func proportionalRefund(rec store.SettlementRecord, refundCents int64) refundSpl
 	return sp
 }
 
+// postRefundReversal reverses amount of a settlement inside tx
+// (proportionalRefund): journal refund_<paymentID>_<refunded_total> (Dr
+// available / tax escrow / fees, Cr acquirer receivable), RESICO accumulator
+// of the settlement month and the settlement refund columns. Shared by the
+// legacy EMV reverse and processor refund webhooks; amount must be within the
+// remaining refundable amount.
+func postRefundReversal(ctx context.Context, tx store.MoneyTx, tenant, paymentID string, rec store.SettlementRecord, amount int64, description string) (store.SettlementRecord, refundSplit, error) {
+	if amount <= 0 || amount > rec.GrossCents-rec.RefundedGrossCents {
+		return rec, refundSplit{}, errRefundExceedsBalance
+	}
+	// Lock order (docs/MONEY_FLOWS.md): the RESICO month row before the
+	// ledger accounts, as settles and CoDi confirmations do; otherwise
+	// concurrent settles and refunds of one merchant deadlock.
+	if _, err := tx.MonthlySalesForUpdate(ctx, tenant, rec.YearMonth); err != nil {
+		return rec, refundSplit{}, err
+	}
+	sp := proportionalRefund(rec, amount)
+	rec.RefundedGrossCents += sp.amount
+	rec.RefundedBaseCents += sp.base
+	rec.RefundedTaxEscrowCents += sp.taxEscrow
+	rec.RefundedFeeCents += sp.fee
+
+	var entries []ledger.Entry
+	add := func(account string, dir ledger.Direction, cents int64) {
+		if cents > 0 {
+			entries = append(entries, ledger.Entry{AccountID: account, Direction: dir, Money: ledger.NewMoney(cents, "MXN")})
+		}
+	}
+	add(fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant), ledger.Debit, sp.available)
+	add(fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", tenant), ledger.Debit, sp.taxEscrow)
+	add("REVENUE:FEES", ledger.Debit, sp.fee)
+	add("ASSET:ACQUIRER_RECEIVABLE", ledger.Credit, sp.amount)
+	jnl, err := ledger.NewJournalEntry(fmt.Sprintf("refund_%s_%d", paymentID, rec.RefundedGrossCents), nowUTC(), description, entries,
+		map[string]string{"payment_id": paymentID, "merchant_id": tenant})
+	if err != nil {
+		return rec, refundSplit{}, err
+	}
+	if err := tx.PostJournal(ctx, jnl); err != nil {
+		return rec, refundSplit{}, err
+	}
+	if err := tx.AddMonthlySales(ctx, tenant, rec.YearMonth, -sp.base); err != nil {
+		return rec, refundSplit{}, err
+	}
+	if err := tx.UpdateSettlementRefunds(ctx, rec); err != nil {
+		return rec, refundSplit{}, err
+	}
+	return rec, sp, nil
+}
+
 // HandleEMVReverse: POST /api/v1/payments/emv/reverse. AUTHORIZED -> VOIDED
 // (nothing was posted). SETTLED -> full or partial refund that reverses,
 // proportionally and in one transaction, the merchant available balance, the
@@ -264,40 +314,9 @@ func (s *Server) HandleEMVReverse(w http.ResponseWriter, r *http.Request) {
 			if amount <= 0 || amount > remaining {
 				return errRefundExceedsBalance
 			}
-			// Lock order (docs/MONEY_FLOWS.md): the RESICO month row before the
-			// ledger accounts, as settles and CoDi confirmations do; otherwise
-			// concurrent settles and refunds of one merchant deadlock.
-			if _, err := tx.MonthlySalesForUpdate(ctx, tenant, rec.YearMonth); err != nil {
-				return err
-			}
-			sp := proportionalRefund(rec, amount)
-			rec.RefundedGrossCents += sp.amount
-			rec.RefundedBaseCents += sp.base
-			rec.RefundedTaxEscrowCents += sp.taxEscrow
-			rec.RefundedFeeCents += sp.fee
-
-			var entries []ledger.Entry
-			add := func(account string, dir ledger.Direction, cents int64) {
-				if cents > 0 {
-					entries = append(entries, ledger.Entry{AccountID: account, Direction: dir, Money: ledger.NewMoney(cents, "MXN")})
-				}
-			}
-			add(fmt.Sprintf("LIABILITY:MERCHANT:%s:AVAILABLE", tenant), ledger.Debit, sp.available)
-			add(fmt.Sprintf("LIABILITY:MERCHANT:%s:TAX_ESCROW", tenant), ledger.Debit, sp.taxEscrow)
-			add("REVENUE:FEES", ledger.Debit, sp.fee)
-			add("ASSET:ACQUIRER_RECEIVABLE", ledger.Credit, sp.amount)
-			jnl, err := ledger.NewJournalEntry(fmt.Sprintf("refund_%s_%d", p.ID, rec.RefundedGrossCents), nowUTC(), "EMV refund "+p.ID, entries,
-				map[string]string{"payment_id": p.ID, "merchant_id": tenant})
+			var sp refundSplit
+			rec, sp, err = postRefundReversal(ctx, tx, tenant, p.ID, rec, amount, "EMV refund "+p.ID)
 			if err != nil {
-				return err
-			}
-			if err := tx.PostJournal(ctx, jnl); err != nil {
-				return err
-			}
-			if err := tx.AddMonthlySales(ctx, tenant, rec.YearMonth, -sp.base); err != nil {
-				return err
-			}
-			if err := tx.UpdateSettlementRefunds(ctx, rec); err != nil {
 				return err
 			}
 			resp.Status = payments.PaymentSettled

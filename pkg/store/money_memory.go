@@ -40,6 +40,7 @@ type MemoryMoneyStore struct {
 	events      []MemoryOutboxEvent
 	payouts     map[string]PayoutRecord // by clave_rastreo
 	payoutKeys  map[string]string       // merchant_id + "\x00" + idempotency key -> clave
+	card        memCardState            // processor card payments (card_payments_memory.go)
 }
 
 var (
@@ -60,6 +61,7 @@ func NewMemoryMoneyStore(le *ledger.LedgerEngine, processor func() payments.Paym
 		journalIDs:  make(map[string]bool),
 		payouts:     make(map[string]PayoutRecord),
 		payoutKeys:  make(map[string]string),
+		card:        newMemCardState(),
 	}
 }
 
@@ -124,6 +126,7 @@ func (s *MemoryMoneyStore) InTx(ctx context.Context, fn func(tx MoneyTx) error) 
 		pendingBal:  make(map[string]int64),
 		salesDelta:  make(map[[2]string]int64),
 		payouts:     make(map[string]PayoutRecord),
+		card:        newMemCardTxState(),
 	}
 	if err := fn(tx); err != nil {
 		return err
@@ -151,6 +154,7 @@ type memMoneyTx struct {
 	salesDelta  map[[2]string]int64
 	events      []MemoryOutboxEvent
 	payouts     map[string]PayoutRecord
+	card        memCardTxState
 }
 
 func payoutKey(merchantID, idemKey string) string { return merchantID + "\x00" + idemKey }
@@ -438,6 +442,7 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 		t.store.payouts[clave] = p
 		t.store.payoutKeys[payoutKey(p.MerchantID, p.IdempotencyKey)] = clave
 	}
+	t.commitCard()
 	t.store.events = append(t.store.events, t.events...)
 	return nil
 }

@@ -27,10 +27,14 @@ android {
             applicationIdSuffix = ".debug"
             // Android emulator alias of the host loopback (backend on :8080).
             buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080\"")
+            // In-memory card intents + sales and the mock Tap to Pay provider
+            // until the backend endpoints and the processor SDK exist.
+            buildConfigField("boolean", "MOCK_PAYMENTS", "true")
         }
         release {
             // Placeholder until the production gateway exists; HTTPS only.
             buildConfigField("String", "API_BASE_URL", "\"https://api.kerno.mx\"")
+            buildConfigField("boolean", "MOCK_PAYMENTS", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -85,6 +89,7 @@ dependencies {
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.core)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

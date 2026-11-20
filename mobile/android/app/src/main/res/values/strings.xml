@@ -23,6 +23,69 @@
     <string name="login_error_otp_locked">Demasiados intentos. Pide un código nuevo.</string>
 
     <!-- Sesión -->
-    <string name="session_signed_in">Sesión iniciada</string>
     <string name="action_logout">Cerrar sesión</string>
+    <string name="action_refresh">Actualizar</string>
+    <string name="action_back">Regresar</string>
+    <string name="error_no_merchant">Tu cuenta aún no tiene un comercio dado de alta.</string>
+    <string name="error_not_available">Esta función todavía no está disponible.</string>
+
+    <!-- Navegación -->
+    <string name="nav_home">Inicio</string>
+    <string name="nav_charge">Cobrar</string>
+    <string name="nav_sales">Ventas</string>
+    <string name="nav_settings">Perfil</string>
+
+    <!-- Inicio -->
+    <string name="home_title">Tu saldo</string>
+    <string name="home_available">Disponible</string>
+    <string name="home_available_caption">Lo que puedes retirar a tu cuenta.</string>
+    <string name="home_tax_set_aside">Apartado para impuestos</string>
+    <string name="home_tax_set_aside_caption">IVA e ISR reservados de tus ventas; no es parte de tu disponible.</string>
+    <string name="home_new_charge">Nuevo cobro</string>
+
+    <!-- Cobro -->
+    <string name="charge_title">Monto a cobrar</string>
+    <string name="charge_method_card">Tarjeta (Tap)</string>
+    <string name="charge_method_spei">SPEI QR</string>
+    <string name="keypad_clear">C</string>
+    <string name="keypad_backspace">Borrar</string>
+    <string name="charge_card_creating">Preparando el cobro…</string>
+    <string name="charge_card_waiting">Acerca la tarjeta a la parte trasera del celular</string>
+    <string name="charge_card_confirming">Confirmando el pago…</string>
+    <string name="charge_card_approved">Pago aprobado</string>
+    <string name="charge_card_pending">Pago en confirmación. Revisa el estado en Ventas.</string>
+    <string name="charge_new">Nuevo cobro</string>
+    <string name="charge_spei_loading">Generando QR de SPEI…</string>
+    <string name="charge_spei_title">Pago por transferencia SPEI</string>
+    <string name="charge_spei_clabe">CLABE: %1$s</string>
+    <string name="charge_spei_beneficiary">Beneficiario: %1$s</string>
+    <string name="charge_spei_reference">Referencia: %1$s</string>
+    <string name="charge_spei_hint">Tu cliente escanea el QR o captura la CLABE y la referencia en su banca. El pago se acredita al recibir la transferencia.</string>
+    <string name="charge_error_no_amount">Escribe un monto mayor a cero.</string>
+    <string name="charge_error_tap_unavailable">Cobro con tarjeta no disponible en este dispositivo.</string>
+    <string name="charge_error_no_clabe">Tu comercio aún no tiene CLABE para recibir SPEI.</string>
+    <string name="charge_error_declined">Tarjeta rechazada. Pide otra forma de pago.</string>
+    <string name="charge_error_cancelled">Cobro cancelado.</string>
+
+    <!-- Ventas -->
+    <string name="sales_title">Ventas</string>
+    <string name="sales_empty">Aún no tienes ventas.</string>
+    <string name="sale_not_found">Venta no encontrada.</string>
+    <string name="sale_amount">Monto</string>
+    <string name="sale_id">Folio: %1$s</string>
+    <string name="sale_date">Fecha: %1$s</string>
+    <string name="sale_reference">Referencia: %1$s</string>
+    <string name="method_card">Tarjeta</string>
+    <string name="method_spei">SPEI</string>
+    <string name="status_approved">Aprobada</string>
+    <string name="status_failed">Rechazada</string>
+    <string name="status_pending">Pendiente</string>
+
+    <!-- Perfil -->
+    <string name="settings_title">Perfil</string>
+    <string name="settings_business">Comercio</string>
+    <string name="settings_clabe">CLABE de cobro</string>
+    <string name="settings_clabe_caption">Cuenta a la que tus clientes te pagan por SPEI.</string>
+    <string name="settings_resico">Régimen: RESICO</string>
+    <string name="settings_role">Rol: %1$s</string>
 </resources>

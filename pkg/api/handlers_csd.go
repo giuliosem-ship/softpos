@@ -46,7 +46,9 @@ func csdSigner(csd identity.DecryptedCSD) (*fiscal.CSDSigner, error) {
 	return fiscal.NewCSDSignerFromSAT(csd.CERBytes, csd.KeyBytes, csd.Password)
 }
 
-func (s *Server) csdSigner(csd identity.DecryptedCSD) (*fiscal.CSDSigner, error) { return csdSigner(csd) }
+func (s *Server) csdSigner(csd identity.DecryptedCSD) (*fiscal.CSDSigner, error) {
+	return csdSigner(csd)
+}
 
 // merchantSigner opens the merchant's CSD and returns a signer; the
 // decrypted material is wiped before returning.

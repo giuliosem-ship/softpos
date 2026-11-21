@@ -1262,6 +1262,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; XSLT golden: 12 variants match the official SAT XSLT via xsltproc (macOS /usr/bin/xsltproc) + sello verification over the XSLT cadena; PGIntegration all pass (new: CSD upload and fiscal settings survive restart); node --test web/pos/softpos_sdk.test.js 8/8.",
       "audit_notes": "SAT root CA chain and LCO revocation checks are not done (the PAC validates). PBKDF2 takes the password as a string internally (stdlib API). Catalog subset transcribed from catCFDI_V_4; needs accountant review. Legacy client-amount /api/v1/invoices/{cfdi,global} now DEV_MODE-only (legacyCardOnly). Deflaked TestKYBRepository_MemoryContract (equal updated_at).",
       "priority": 81
+    },
+    {
+      "id": "MVP-22",
+      "component": "fiscal",
+      "title": "Invoice lifecycle: invoices from sales, PAC stamping/cancel/status, PDF with SAT QR, email port, automatic factura global, backoffice retry",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/invoices_test.go, pkg/fiscal/invoice_test.go, pkg/cfdipdf/pdf_test.go, pkg/pac/client_test.go, cmd/server/cfdi_integration_test.go, cmd/server/cfdi_worker_test.go",
+        "implementation": "migrations/017_invoices.*.sql, pkg/store/invoices.go, pkg/fiscal/invoice.go, pkg/cfdipdf/pdf.go, pkg/pac/client.go, pkg/api/handlers_cfdi_invoices.go, pkg/api/mailer.go, pkg/api/handlers_backoffice.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, go.mod (rsc.io/qr v0.2.0), docs/CFDI.md, docs/BACKOFFICE.md, docs/PERSISTENCE.md"
+      },
+      "spec": "POST/GET /api/v1/merchants/{id}/invoices (+ /{invoice_id}, /pdf, /xml, /cancel) per the shared contract: amounts from the posted split (card settlement minus refunds, SPEI/CoDi 16% split), int64 cents, one concepto per sale, ISR 1.25% retention for PM receptors of a RESICO PF; Idempotency-Key; a sale in at most one active invoice (unique partial index, 409 SALE_ALREADY_INVOICED); receptor validated against the SAT catalog rules (422 RECEPTOR_INVALID fields). Stamping via the multi-PAC orchestrator; PACClient gains Cancel and Status (mock simulates the SAT: no-acceptance <= $1,000 / público en general, 72h plazo vencido). Cancellation motivos 01-04 (01 needs a STAMPED replacement created with replaces_invoice_id, TipoRelacion 04), CANCEL_REQUESTED -> CANCELED/REJECTED by a polling worker. Pure-Go PDF (minimal writer + rsc.io/qr) with emisor/receptor, conceptos, totals, UUID, sellos, TFD cadena and SAT verification QR; Mailer interface with LogMailer. Factura global worker (MONTHLY default / DAILY) for sales not individually invoiced; individual invoices of sales in an active global are rejected (documented). Backoffice list/retry of FAILED/PENDING stampings (audited).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration all pass (new: InvoiceLifecycle with 8 concurrent invoices of one sale -> exactly one, cancel frees the sale, global, restart); XSLT golden incl. built individual/global invoices; node --test web/pos/softpos_sdk.test.js 8/8.",
+      "audit_notes": "Real PAC and email provider not contracted (mock + LogMailer). The ISR retention for PM receptors is in the CFDI but the original ledger split is not re-posted. Card FormaPago is always 04 (credit vs debit not exposed by the processor port). Individual invoices of sales already in a global are rejected; motivo 04 cancels the global. Accountant validation pending.",
+      "priority": 82
     }
   ]
 }

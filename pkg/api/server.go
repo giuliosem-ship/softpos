@@ -76,6 +76,8 @@ type Server struct {
 	sat69bShrinkPct   int
 	sat69bMu          sync.Mutex
 	fiscalSettings    store.FiscalSettingsRepository
+	invoices          store.InvoiceRepository
+	mailer            Mailer
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -92,8 +94,9 @@ func NewServer(
 	vault, _ := identity.NewCSDVaultServiceWithProvider(ephemeralKeys)
 	docVault, _ := identity.NewDocumentVault(ephemeralKeys)
 	kybMem := store.NewMemoryKYBRepository()
-	primaryPAC := pac.NewMockPACClient(false, "")
-	fallbackPAC := pac.NewMockPACClient(false, "")
+	mockSAT := pac.NewMockSAT()
+	primaryPAC := pac.NewMockPACClientWithSAT(false, "", mockSAT)
+	fallbackPAC := pac.NewMockPACClientWithSAT(false, "", mockSAT)
 
 	s := &Server{
 		ledger:            ledgerEngine,
@@ -114,6 +117,8 @@ func NewServer(
 		kycProvider:       kyb.MockKYCProvider{},
 		auditRepo:         store.NewMemoryAuditRepository(),
 		fiscalSettings:    store.NewMemoryFiscalSettingsRepository(),
+		invoices:          store.NewMemoryInvoiceRepository(),
+		mailer:            LogMailer{},
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -670,6 +675,13 @@ func (s *Server) routes() {
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/fiscal-settings", s.HandleGetFiscalSettings)
 	s.router.HandleFunc("PUT /api/v1/merchants/{id}/fiscal-settings", s.HandlePutFiscalSettings)
 	s.router.HandleFunc("GET /api/v1/catalogs/sat", s.HandleSATCatalogs)
+	// CFDI invoices from sales: lifecycle, PDF/XML, cancellation (docs/CFDI.md)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/invoices", s.HandleCreateInvoice)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices", s.HandleListInvoices)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}", s.HandleGetInvoice)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}/pdf", s.HandleInvoicePDF)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}/xml", s.HandleInvoiceXML)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/invoices/{invoice}/cancel", s.HandleCancelInvoice)
 	// Legacy client-amount stamping (DEV_MODE demo / Web POS only)
 	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.legacyCardOnly(s.HandleStampIndividualCFDI))
 	s.router.HandleFunc("POST /api/v1/invoices/global", s.legacyCardOnly(s.HandleStampFacturaGlobal))

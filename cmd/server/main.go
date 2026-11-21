@@ -116,6 +116,11 @@ type Config struct {
 	SAT69BRefreshInterval time.Duration // SAT_69B_REFRESH_INTERVAL, default 24h
 	SAT69BMaxAge          time.Duration // SAT_69B_MAX_AGE, default 7 days (older list -> UNKNOWN)
 	SAT69BMaxShrinkPct    int           // SAT_69B_MAX_SHRINK_PCT, default 10 (0..100)
+
+	// CFDI workers (MVP-22, docs/CFDI.md): automatic factura global and
+	// polling of cancellations waiting for the receptor's acceptance.
+	CFDIGlobalInvoiceInterval time.Duration // CFDI_GLOBAL_INVOICE_INTERVAL, default 1h
+	CFDICancelPollInterval    time.Duration // CFDI_CANCEL_POLL_INTERVAL, default 15m
 }
 
 func LoadConfigFromEnv() Config {
@@ -235,6 +240,8 @@ func LoadConfigFromEnv() Config {
 		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
 		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
 		SAT69BMaxShrinkPct:        shrinkPct,
+		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
+		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -565,6 +572,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		server.SetKYBRepository(sqlKYB, sqlKYB)
 		server.SetOperatorAuditRepository(store.NewSQLAuditRepository(db))
 		server.SetFiscalSettingsRepository(store.NewSQLFiscalSettingsRepository(db))
+		server.SetInvoiceRepository(store.NewSQLInvoiceRepository(db))
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
@@ -738,6 +746,67 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
+// CFDI worker defaults.
+const (
+	defaultCFDIGlobalInterval = time.Hour
+	defaultCFDICancelPoll     = 15 * time.Minute
+)
+
+// runEvery calls fn now and then every interval until ctx is cancelled.
+func runEvery(ctx context.Context, interval time.Duration, fn func(context.Context)) {
+	fn(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			fn(ctx)
+		}
+	}
+}
+
+// StartCFDIWorkers launches the factura global worker (issues each closed
+// period's global CFDI and retries PENDING ones) and the cancellation
+// poller (resolves CANCEL_REQUESTED invoices from the SAT status). The
+// returned wait function blocks until both loops exit after ctx is cancelled.
+func StartCFDIWorkers(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if server == nil {
+		return func() {}
+	}
+	globalEvery, pollEvery := cfg.CFDIGlobalInvoiceInterval, cfg.CFDICancelPollInterval
+	if globalEvery <= 0 {
+		globalEvery = defaultCFDIGlobalInterval
+	}
+	if pollEvery <= 0 {
+		pollEvery = defaultCFDICancelPoll
+	}
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		runEvery(ctx, globalEvery, func(ctx context.Context) {
+			n, err := server.RunGlobalInvoices(ctx, time.Now())
+			if err != nil {
+				slog.Error("factura global run failed", "error", err)
+			} else if n > 0 {
+				slog.Info("factura global run", "invoices", n)
+			}
+		})
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		runEvery(ctx, pollEvery, func(ctx context.Context) {
+			if n, err := server.PollCancellations(ctx); err != nil {
+				slog.Error("CFDI cancellation poll failed", "error", err)
+			} else if n > 0 {
+				slog.Info("CFDI cancellations resolved", "count", n)
+			}
+		})
+	}()
+	return func() { <-done; <-done }
+}
+
 // defaultSAT69BRefresh is how often the 69-B worker re-downloads the list.
 const defaultSAT69BRefresh = 24 * time.Hour
 
@@ -845,6 +914,7 @@ func main() {
 	waitPayouts := StartPayoutReconciler(dispatcherCtx, cfg, db, server)
 	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
 	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
+	waitCFDI := StartCFDIWorkers(dispatcherCtx, cfg, server)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -883,7 +953,14 @@ func main() {
 		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
 		stopDispatcher()
 		dispatcherDone := make(chan struct{})
-		go func() { waitDispatcher(); waitPayouts(); waitAcquirer(); wait69B(); close(dispatcherDone) }()
+		go func() {
+			waitDispatcher()
+			waitPayouts()
+			waitAcquirer()
+			wait69B()
+			waitCFDI()
+			close(dispatcherDone)
+		}()
 		select {
 		case <-dispatcherDone:
 		case <-shutdownCtx.Done():

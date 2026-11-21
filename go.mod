@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/jackc/pgx/v5 v5.13.0
 	golang.org/x/text v0.41.0
+	rsc.io/qr v0.2.0
 )
 
 require (

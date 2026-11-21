@@ -100,3 +100,68 @@ func TestInjectTimbreFiscal(t *testing.T) {
 		t.Errorf("missing TimbreFiscalDigital namespace")
 	}
 }
+
+func stampMock(t *testing.T, c pac.PACClient, total, receptor string) string {
+	t.Helper()
+	x := `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Sello="SELLO" Total="` + total + `"><cfdi:Receptor Rfc="` + receptor + `"/></cfdi:Comprobante>`
+	resp, err := c.Stamp(context.Background(), []byte(x))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Timbre.SelloCFD != "SELLO" {
+		t.Fatalf("SelloCFD must be the comprobante sello, got %q", resp.Timbre.SelloCFD)
+	}
+	return resp.Timbre.UUID
+}
+
+func TestMockPAC_CancelAndStatusFollowSATRules(t *testing.T) {
+	ctx := context.Background()
+	sat := pac.NewMockSAT()
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	sat.SetClock(func() time.Time { return now })
+	primary := pac.NewMockPACClientWithSAT(false, "", sat)
+	orch := pac.NewMultiPACOrchestrator(pac.NewMockPACClientWithSAT(true, "", sat), primary, 100*time.Millisecond)
+	csd := pac.CancelRequest{CertDER: []byte{1}, KeyPKCS8: []byte{1}, Motivo: "02"}
+
+	small := stampMock(t, primary, "999.99", "EKU9003173C9")
+	req := csd
+	req.UUID = small
+	if resp, err := orch.Cancel(ctx, req); err != nil || resp.State != pac.CancelCanceled {
+		t.Fatalf("<= $1,000 cancels without acceptance: %+v %v", resp, err)
+	}
+	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: small}); st.Estado != pac.EstadoCancelado {
+		t.Fatalf("status: %+v", st)
+	}
+
+	big := stampMock(t, primary, "5000.00", "EKU9003173C9")
+	req.UUID = big
+	if resp, err := orch.Cancel(ctx, req); err != nil || resp.State != pac.CancelInProcess {
+		t.Fatalf("> $1,000 needs acceptance: %+v %v", resp, err)
+	}
+	if !sat.ResolveCancellation(big, false) {
+		t.Fatal("resolve")
+	}
+	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: big}); st.Estado != pac.EstadoVigente || st.EstatusCancelacion != pac.CancelacionRechazada {
+		t.Fatalf("rejected: %+v", st)
+	}
+
+	expiring := stampMock(t, primary, "5000.00", "EKU9003173C9")
+	req.UUID = expiring
+	_, _ = orch.Cancel(ctx, req)
+	now = now.Add(73 * time.Hour)
+	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: expiring}); st.Estado != pac.EstadoCancelado || st.EstatusCancelacion != pac.CancelacionPlazoVencido {
+		t.Fatalf("plazo vencido: %+v", st)
+	}
+	global := stampMock(t, primary, "9000.00", "XAXX010101000")
+	req.UUID = global
+	if resp, _ := orch.Cancel(ctx, req); resp.State != pac.CancelCanceled {
+		t.Fatalf("general public cancels without acceptance: %+v", resp)
+	}
+	req.UUID = "00000000-0000-4000-8000-000000000000"
+	if _, err := orch.Cancel(ctx, req); !errors.Is(err, pac.ErrSATValidationError) {
+		t.Fatalf("unknown uuid: %v", err)
+	}
+	if got := pac.TFDCadenaOriginal(&pac.TimbreFiscalDigital{UUID: "U", FechaTimbrado: now, RfcProvCertif: "SPR190613I52", SelloCFD: "S", NoCertificadoSAT: "N"}); !strings.HasPrefix(got, "||1.1|U|") || !strings.HasSuffix(got, "|S|N||") {
+		t.Fatalf("tfd cadena: %s", got)
+	}
+}

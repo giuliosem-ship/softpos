@@ -54,6 +54,8 @@ any `operator` role, as before.)
 | `GET reconciliation?status=&limit=` | processor reconciliation report (same as `GET /api/v1/acquirer/reconciliation`) | — |
 | `POST reconciliation/{item}/resolve {"note"}` | resolve a difference (same as the acquirer endpoint) | `reconciliation.resolve` |
 | `GET audit-log?merchant_id=&action=&limit=` | the audit log, newest first | — |
+| `GET invoices?status=FAILED,PENDING&merchant_id=&limit=` | CFDI stampings to look at (default failed + pending), with attempts and error detail (`docs/CFDI.md`) | — |
+| `POST invoices/{invoice}/retry` | re-stamps a `PENDING` / `FAILED` invoice through the PAC (a `FAILED` one re-links its sales first): `409 INVOICE_NOT_RETRYABLE`, `409 SALE_ALREADY_INVOICED`, `422 RETRY_FAILED` (CSD unavailable) | `invoice.retry` |
 | `GET sat69b` | SAT 69-B list status: loaded, `stale`, version, source, published date, row / malformed counts, fetched / verified times, max age, configured source, last 20 load attempts (`docs/KYB.md`) | — |
 | `POST sat69b/sync {"override_shrink"?, "reason"?}` | downloads `SAT_69B_URL` now and swaps the list in; re-checks approved merchants (listed ones blocked). `409 LIST_SHRANK` (shrink protection; retry with `override_shrink: true` and a `reason`, `400 REASON_REQUIRED` without it), `422 SAT69B_INVALID_FILE`, `502 SAT69B_FETCH_FAILED`, `503 SAT69B_SOURCE_NOT_CONFIGURED` | `sat69b.sync` (every attempt, with result) |
 
@@ -95,5 +97,6 @@ search; payouts with "retry reconciliation"; processor reconciliation
 
 Per-operator permissions (all platform operators can do everything), 2FA /
 hardware keys for operators, IP allowlist / VPN in front of `/backoffice/`,
-correcting journals for reconciliation differences, retrying CFDI stamping
-(no real PAC yet), export of the audit log to immutable storage.
+correcting journals for reconciliation differences, export of the audit log
+to immutable storage. CFDI stamping retries exist (above) but run against
+the mock PAC until a real one is contracted.

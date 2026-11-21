@@ -74,7 +74,9 @@ Notes:
 - Batch I: migration 015 (SAT 69-B ingestion: staging table + atomic swap,
   `sat_blacklist_meta`, `sat_blacklist_loads`) and 016
   (`merchant_fiscal_settings`: CFDI defaults, `store.FiscalSettingsRepository`,
-  `docs/CFDI.md`).
+  `docs/CFDI.md`) and 017 (`invoices`, `invoice_sales` with a unique active
+  link per sale, `invoice_folios`; `store.InvoiceRepository`:
+  `store.SQLInvoiceRepository` / `store.MemoryInvoiceRepository`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements.
 - Payment state change, ledger journal, RESICO monthly accumulator,

@@ -91,6 +91,9 @@ data class SharedFile(val uri: String, val mimeType: String)
 fun interface InvoiceFileStore {
     /** Null if it could not be written. */
     fun save(invoiceId: String, kind: InvoiceFileKind, bytes: ByteArray): SharedFile?
+
+    /** Deletes every cached CFDI (logout: the next user must not find the last customer's invoice). */
+    fun clear() {}
 }
 
 enum class CancelError {

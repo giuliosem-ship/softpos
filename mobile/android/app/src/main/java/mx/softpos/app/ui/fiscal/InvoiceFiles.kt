@@ -20,8 +20,8 @@ class InvoiceFileProvider : FileProvider(R.xml.invoice_file_paths)
  */
 class CacheInvoiceFileStore(private val context: Context) : InvoiceFileStore {
     override fun save(invoiceId: String, kind: InvoiceFileKind, bytes: ByteArray): SharedFile? = try {
+        wipeInvoiceCache(context.cacheDir)
         val dir = File(context.cacheDir, DIR).apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
         val safeId = invoiceId.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(64).ifBlank { "factura" }
         val file = File(dir, "CFDI_$safeId.${kind.extension}")
         file.outputStream().use { it.write(bytes) }
@@ -33,8 +33,15 @@ class CacheInvoiceFileStore(private val context: Context) : InvoiceFileStore {
         null
     }
 
+    override fun clear() = wipeInvoiceCache(context.cacheDir)
+
     companion object {
         const val DIR = "invoices"
         const val AUTHORITY_SUFFIX = ".invoicefiles"
     }
+}
+
+/** Deletes every shared CFDI under `<cacheDir>/invoices/` (customer RFC / name inside). */
+internal fun wipeInvoiceCache(cacheDir: File) {
+    File(cacheDir, CacheInvoiceFileStore.DIR).listFiles()?.forEach { it.delete() }
 }

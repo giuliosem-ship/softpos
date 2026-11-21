@@ -104,6 +104,9 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
 
     /** Local wipe is immediate; the server revocation runs in [appScope]. */
     fun logout() {
-        appScope.launch { sessionManager.logout() }
+        appScope.launch {
+            invoiceFiles.clear()
+            sessionManager.logout()
+        }
     }
 }

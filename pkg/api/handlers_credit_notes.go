@@ -187,11 +187,12 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 	if err != nil || !found {
 		return wait(fmt.Sprintf("INVOICE_UNAVAILABLE: %v", err))
 	}
-	var prevBase, prevIVA int64
+	var prevBase, prevIVA, prevISR int64
 	for _, l := range links {
 		if l.Kind == store.InvoiceCreditNote && l.RelatedInvoiceID == credited.ID && l.Status != store.InvoiceCanceled {
 			prevBase += l.BaseCents
 			prevIVA += l.IVACents
+			prevISR += l.BaseCents + l.IVACents - l.TotalCents // one line per credit note
 		}
 	}
 	lineGross := active.BaseCents + active.IVACents
@@ -200,6 +201,17 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 		return notRequired("the invoice already reflects this movement")
 	}
 	base, iva := creditSplit(credit, active.BaseCents, active.IVACents, prevBase, prevIVA)
+	// ISR retention: 1.25 % half-up; the last credit of a line takes the
+	// line's remaining retention (within the SAT limits) so the credit notes
+	// add up to the invoice to the cent.
+	var isr int64
+	if credited.ISRRetenidoCents > 0 {
+		isr = (base*fiscal.ISRRetentionBps + 5000) / 10000
+		if rest := (active.BaseCents*fiscal.ISRRetentionBps+5000)/10000 - prevISR; base == active.BaseCents-prevBase &&
+			fiscal.ISRWithinSATLimits(base, rest) {
+			isr = rest
+		}
+	}
 
 	emisor, err := s.emisorProfile(ctx, j.MerchantID)
 	if err != nil {
@@ -211,7 +223,8 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 	}
 	rec := store.InvoiceRecord{ID: newInvoiceID(), MerchantID: j.MerchantID, Kind: store.InvoiceCreditNote, Status: store.InvoicePending,
 		IdempotencyKey: key, RequestHash: requestHash([]any{key, base, iva}), Serie: serieCreditNote, FormaPago: "04",
-		Receptor: credited.Receptor, GlobalPeriod: credited.GlobalPeriod, RelatedInvoiceID: credited.ID, StampAttempts: 1}
+		Receptor: credited.Receptor, GlobalPeriod: credited.GlobalPeriod, RelatedInvoiceID: credited.ID, StampAttempts: 1,
+		ISRRetenidoCents: isr}
 	lines := []saleLine{{InvoiceLine: fiscal.InvoiceLine{SaleID: j.SaleID, BaseCents: base, IVACents: iva}}}
 	spec, err := s.creditNoteSpec(rec, emisor, credited, lines, now)
 	if err != nil {
@@ -286,6 +299,9 @@ func (s *Server) creditNoteSpec(rec store.InvoiceRecord, emisor emisorProfile, c
 	spec.Egreso, spec.CreditNoteOf = true, []string{credited.UUID}
 	spec.Descripcion = creditNoteDescripcion(rec.IdempotencyKey)
 	spec.RetainISR = credited.ISRRetenidoCents > 0
+	if spec.RetainISR && len(spec.Lines) == 1 { // the stored retention (remainder of the line's ISR on its last credit)
+		spec.Lines[0].ISROverride, spec.Lines[0].ISRCents = true, rec.ISRRetenidoCents
+	}
 	return spec, nil
 }
 

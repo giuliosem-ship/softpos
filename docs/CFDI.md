@@ -335,7 +335,9 @@ produces a CFDI de egreso automatically:
   16 % formula if outside the SAT limits); the last credit of a line takes
   exactly its remaining base and IVA, so the credit notes of a line add up to
   it to the cent. ISR retention 1.25 % (half-up) when the credited invoice
-  withheld it. Receptor: the credited invoice's, with `UsoCFDI` G02
+  withheld it; the last credit of a line takes the line's remaining
+  retention (within the SAT limits), so base, IVA, ISR and total of the
+  credit notes add up to the invoice line. Receptor: the credited invoice's, with `UsoCFDI` G02
   ("Devoluciones, descuentos o bonificaciones") when the catalog allows it
   for the receptor's régimen (otherwise its original uso); for a factura
   global, `XAXX010101000` / `PUBLICO EN GENERAL` / S01 with the global's

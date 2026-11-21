@@ -14,6 +14,11 @@ type InvoiceLine struct {
 	SaleID    string
 	BaseCents int64 // valor unitario / importe (sin IVA)
 	IVACents  int64 // IVA trasladado 16 %
+	// ISROverride: with RetainISR, retain exactly ISRCents instead of 1.25 %
+	// of the base half-up (the last credit note of a line takes the remaining
+	// retention); it must be within ISRWithinSATLimits.
+	ISROverride bool
+	ISRCents    int64
 }
 
 // InvoiceSpec describes a CFDI de ingreso (or, with Egreso, de egreso) to build.
@@ -97,6 +102,12 @@ func BuildInvoiceComprobante(spec InvoiceSpec) (*CFDIComprobante, InvoiceTotals,
 		imp := &CFDIConceptoImpuestos{Traslados: []CFDITraslado{{Base: base, Impuesto: "002", TipoFactor: "Tasa", TasaOCuota: tasaIVA16, Importe: iva}}}
 		if spec.RetainISR {
 			isr := (l.BaseCents*ISRRetentionBps + 5000) / 10000
+			if l.ISROverride {
+				if !ISRWithinSATLimits(l.BaseCents, l.ISRCents) {
+					return nil, tot, fmt.Errorf("%w: ISR retention of sale %s outside the SAT limits", ErrInvalidCFDIData, l.SaleID)
+				}
+				isr = l.ISRCents
+			}
 			tot.ISRRetenidoCents += isr
 			imp.Retenciones = []CFDIRetencionConcepto{{Base: base, Impuesto: "001", TipoFactor: "Tasa", TasaOCuota: tasaISR, Importe: FormatCents(isr)}}
 		}
@@ -163,6 +174,15 @@ func IVAWithinSATLimits(baseCents, ivaCents int64) bool {
 	lo := (2*baseCents - 1) * 8 / 100
 	hi := ((2*baseCents+1)*8 + 99) / 100
 	return ivaCents >= lo && ivaCents <= hi
+}
+
+// ISRWithinSATLimits reports whether a 1.25 % ISR retention of isrCents is
+// within the CFDI 4.0 limits for baseCents: from (base - 0.005) * 0.0125
+// truncated to (base + 0.005) * 0.0125 rounded up, at 2 decimals.
+func ISRWithinSATLimits(baseCents, isrCents int64) bool {
+	lo := (2*baseCents - 1) * ISRRetentionBps / 20000
+	hi := ((2*baseCents+1)*ISRRetentionBps + 19999) / 20000
+	return isrCents >= lo && isrCents <= hi
 }
 
 // SATVerificationURL is the QR content of the representación impresa

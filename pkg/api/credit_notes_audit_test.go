@@ -97,3 +97,30 @@ func TestGlobalInvoices_RefreshesLinesBeforeIssuing(t *testing.T) {
 		t.Fatalf("the part must invoice the net amount at creation: total %d", out.TotalCents)
 	}
 }
+
+// TestCreditNotes_ISRRemainderAddsUpToTheInvoice: two half refunds of a
+// persona moral invoice (ISR 1.25 % of 100.00 = 1.25) credit 0.63 + 0.62,
+// not 0.63 + 0.63: the credit notes of a line add up to it to the cent,
+// retention and total included (0.62 is within the SAT limits of 50.00).
+func TestCreditNotes_ISRRemainderAddsUpToTheInvoice(t *testing.T) {
+	f := setupInvoiceServer(t)
+	s := f.s
+	intent := capturedCardPayment(t, s, f.mock, "cn-isr", 11600)
+	_, inv, _ := createInvoice(t, s, auth.RoleOwner, "cn-isr", map[string]any{"sale_ids": []string{intent.CardPaymentID}, "receptor": pmReceptor()})
+	for _, id := range []string{"re_isr_1", "re_isr_2"} {
+		f.deliverOK(t, refundEvent(intent, id, 5800))
+		if n, err := s.ProcessCreditNotes(context.Background(), time.Now()); err != nil || n != 1 {
+			t.Fatalf("process %s: %d %v", id, n, err)
+		}
+	}
+	var isr, total int64
+	for _, n := range creditNotesOf(t, s, inv.InvoiceID) {
+		if n.Status != store.InvoiceStamped {
+			t.Fatalf("credit note %s: %s %s", n.ID, n.Status, n.ErrorCode)
+		}
+		isr, total = isr+n.ISRRetenidoCents, total+n.TotalCents
+	}
+	if isr != inv.ISRRetenidoCents || total != inv.TotalCents {
+		t.Fatalf("credit notes ISR %d total %d, invoice ISR %d total %d", isr, total, inv.ISRRetenidoCents, inv.TotalCents)
+	}
+}

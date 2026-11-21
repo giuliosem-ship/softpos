@@ -131,3 +131,19 @@ func TestBuildInvoiceComprobante_Egreso(t *testing.T) {
 		}
 	}
 }
+
+func TestISRWithinSATLimits(t *testing.T) {
+	cases := []struct {
+		base, isr int64
+		ok        bool
+	}{
+		{5000, 62, true}, {5000, 63, true}, {5000, 61, false}, {5000, 64, false},
+		{10000, 125, true}, {10000, 124, true}, {10000, 126, true}, {10000, 127, false},
+		{1, 0, true}, {40, 0, true}, {40, 1, true},
+	}
+	for _, c := range cases {
+		if got := fiscal.ISRWithinSATLimits(c.base, c.isr); got != c.ok {
+			t.Errorf("ISRWithinSATLimits(%d, %d) = %v, want %v", c.base, c.isr, got, c.ok)
+		}
+	}
+}

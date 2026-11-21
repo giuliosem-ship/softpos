@@ -192,7 +192,9 @@ contribuyente,…`).
   69-B block of an RFC absent from a current list: a same-size file with
   other RFCs would pass the shrink protection and unblock every listed
   merchant (audit of Lote L); the net shrink stays the shrink protection's.
-  Additions only block more merchants (fail-closed) and are not changes. A real SAT update changes the
+  Additions only block more merchants (fail-closed) and are not changes. The
+  check needs a list loaded by the ingestion (`sat_blacklist_meta`):
+  pre-ingestion rows (`AddEntry`) only count for the shrink protection. A real SAT update changes the
   situation of a few hundred of ~14k RFCs (< 5 %). `operatorctl` uses the
   default thresholds.
 - **Staleness:** the same file again only moves `verified_at`. A list not

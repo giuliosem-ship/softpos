@@ -39,7 +39,8 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 	if err = tx.QueryRowContext(ctx, `SELECT row_count FROM sat_blacklist_meta WHERE id = 1`).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return load, fmt.Errorf("read 69-B meta: %w", err)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	ingested := !errors.Is(err, sql.ErrNoRows)
+	if !ingested {
 		// Rows written before the ingestion existed (AddEntry) count as the old list.
 		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sat_blacklist`).Scan(&prev); err != nil {
 			return load, fmt.Errorf("count 69-B rows: %w", err)
@@ -82,14 +83,15 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 		}
 	}
 	// Change protection: RFCs of the loaded list whose situation differs or
-	// that are missing from the new one (identity.ChangedSituations).
+	// that were replaced (identity.GuardedChanges). Only against a list loaded
+	// by the ingestion: pre-ingestion rows (AddEntry) are not a verified list.
 	var loaded, situation, removed int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE s.status <> b.status), COUNT(*) FILTER (WHERE s.rfc IS NULL)
 		FROM sat_blacklist b LEFT JOIN sat_blacklist_staging s ON s.rfc = b.rfc`).Scan(&loaded, &situation, &removed); err != nil {
 		return load, fmt.Errorf("compare 69-B lists: %w", err)
 	}
 	changed := identity.GuardedChanges(loaded, len(rows), situation, removed)
-	if !guard.AllowsChanges(loaded, changed) {
+	if ingested && !guard.AllowsChanges(loaded, changed) {
 		load.Status, load.Detail = identity.Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", identity.ErrList69BChanged, changed, loaded, guard.MaxChangePct)
 		if _, err = tx.ExecContext(ctx, `TRUNCATE sat_blacklist_staging`); err != nil {
 			_ = tx.Rollback()

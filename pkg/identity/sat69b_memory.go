@@ -76,7 +76,8 @@ func (m *MemoryList69BStore) ReplaceList(_ context.Context, rows []List69BRow, m
 	for rfc, e := range m.entries {
 		old[rfc] = e.Status
 	}
-	if loaded, changed := ChangedSituations(old, rows); !guard.AllowsChanges(loaded, changed) {
+	// Only against a list loaded by the ingestion (same rule as the SQL store).
+	if loaded, changed := ChangedSituations(old, rows); m.meta != nil && !guard.AllowsChanges(loaded, changed) {
 		load.Status, load.Detail = Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", ErrList69BChanged, changed, loaded, guard.MaxChangePct)
 		return m.addLoad(load), ErrList69BChanged
 	}

@@ -11,6 +11,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import mx.softpos.app.core.network.ApiResult
 import mx.softpos.app.core.network.KernoJson
 import mx.softpos.app.fiscal.CancelInvoiceRequest
+import mx.softpos.app.fiscal.CancelMotivo
+import mx.softpos.app.fiscal.CancellationStatus
+import mx.softpos.app.fiscal.Invoice
+import mx.softpos.app.fiscal.InvoiceKind
 import mx.softpos.app.fiscal.CreateInvoiceRequest
 import mx.softpos.app.fiscal.CsdFile
 import mx.softpos.app.fiscal.HttpCsdApi
@@ -224,6 +228,33 @@ class FiscalContractTest {
             assertEquals(code, (invoices().cancel("mer_1", "inv_01", CancelInvoiceRequest("02")) as ApiResult.Error).statusCode)
             server.takeRequest()
         }
+    }
+
+    @Test
+    fun invoiceShapeCarriesKindRetentionCancellationAndReplacement() {
+        fun decode(f: String) = KernoJson.decodeFromString(Invoice.serializer(), Fixtures.read(f))
+        val pm = decode("invoice_get_200.json")
+        assertEquals(InvoiceKind.INDIVIDUAL, pm.kind)
+        assertEquals(664L, pm.isrRetenidoCents)
+        assertEquals(pm.subtotalCents + pm.ivaCents - pm.isrRetenidoCents, pm.totalCents)
+        assertNull(pm.cancellation)
+
+        val global = decode("invoice_get_global_200.json")
+        assertTrue(global.isGlobal)
+        assertEquals("M2026-11", global.globalPeriod)
+        assertEquals(listOf("02", "03", "04"), CancelMotivo.allowedFor(global))
+        assertEquals(listOf("01", "02", "03"), CancelMotivo.allowedFor(pm))
+
+        val rejected = decode("invoice_get_cancel_rejected_200.json")
+        assertEquals(InvoiceStatus.STAMPED, rejected.status)
+        assertEquals(CancellationStatus.REJECTED, rejected.cancellation?.status)
+        assertTrue(rejected.cancellationRejected)
+        assertEquals(CancellationStatus.REQUESTED, decode("invoice_cancel_requested_202.json").cancellation?.status)
+
+        val canceled = decode("invoice_cancel_canceled_200.json")
+        assertEquals("01", canceled.cancellation?.motivo)
+        assertEquals("1C8799D7-BE03-431A-9B02-C138420A9C6C", canceled.cancellation?.folioSustitucion)
+        assertEquals(canceled.invoiceId, decode("invoice_create_201_replacement.json").replacesInvoiceId)
     }
 
     /** The backend sends no ETag (only Cache-Control and X-SAT-Catalog-Version): after the TTL the cache refetches in full. */

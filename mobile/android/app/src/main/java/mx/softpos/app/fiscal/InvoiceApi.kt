@@ -47,10 +47,37 @@ data class CreateInvoiceRequest(
     @SerialName("receptor") val receptor: Receptor
 )
 
-/** Invoice as returned by create / get / list / cancel. Money is Long cents. */
+object InvoiceKind {
+    const val INDIVIDUAL = "INDIVIDUAL"
+    /** Factura global a público en general, issued by the backend worker (never from the app). */
+    const val GLOBAL = "GLOBAL"
+}
+
+/** SAT cancellation request state: REQUESTED | ACCEPTED | REJECTED (a rejection leaves the invoice STAMPED). */
+object CancellationStatus {
+    const val REQUESTED = "REQUESTED"
+    const val ACCEPTED = "ACCEPTED"
+    const val REJECTED = "REJECTED"
+}
+
+@Serializable
+data class InvoiceCancellation(
+    @SerialName("motivo") val motivo: String = "",
+    @SerialName("folio_sustitucion") val folioSustitucion: String? = null,
+    @SerialName("status") val status: String = "",
+    @SerialName("requested_at") val requestedAt: String? = null,
+    @SerialName("resolved_at") val resolvedAt: String? = null
+)
+
+/**
+ * Invoice as returned by create / get / list / cancel. Money is Long cents;
+ * `total = subtotal + iva - isr_retenido` (1.25 % ISR withheld by a persona
+ * moral receptor of a RESICO persona física).
+ */
 @Serializable
 data class Invoice(
     @SerialName("invoice_id") val invoiceId: String,
+    @SerialName("kind") val kind: String = InvoiceKind.INDIVIDUAL,
     @SerialName("status") val status: String,
     @SerialName("uuid") val uuid: String? = null,
     @SerialName("serie") val serie: String? = null,
@@ -58,13 +85,22 @@ data class Invoice(
     @SerialName("total_cents") val totalCents: Long = 0L,
     @SerialName("subtotal_cents") val subtotalCents: Long = 0L,
     @SerialName("iva_cents") val ivaCents: Long = 0L,
+    @SerialName("isr_retenido_cents") val isrRetenidoCents: Long = 0L,
     @SerialName("receptor") val receptor: Receptor? = null,
     @SerialName("sale_ids") val saleIds: List<String> = emptyList(),
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("stamped_at") val stampedAt: String? = null,
-    @SerialName("error") val error: String? = null
+    @SerialName("error") val error: String? = null,
+    /** `M2026-10` (monthly) or `D2026-11-19` (daily) on a factura global. */
+    @SerialName("global_period") val globalPeriod: String? = null,
+    /** Set on a substitute CFDI (TipoRelacion 04): the invoice it replaces. */
+    @SerialName("replaces_invoice_id") val replacesInvoiceId: String? = null,
+    @SerialName("cancellation") val cancellation: InvoiceCancellation? = null
 ) {
     val isStamped: Boolean get() = status == InvoiceStatus.STAMPED
+    val isGlobal: Boolean get() = kind == InvoiceKind.GLOBAL
+    /** The last cancellation request was rejected by the receptor (the CFDI is still valid). */
+    val cancellationRejected: Boolean get() = isStamped && cancellation?.status == CancellationStatus.REJECTED
 }
 
 @Serializable
@@ -81,6 +117,14 @@ object CancelMotivo {
     const val NOT_EXECUTED = "03"
     const val NOMINATIVE_GLOBAL = "04"
     val ALL = listOf(WITH_RELATION, WITHOUT_RELATION, NOT_EXECUTED, NOMINATIVE_GLOBAL)
+
+    /**
+     * Motivos the backend accepts for [invoice]: 04 only for a factura global;
+     * 01 only for an individual one (its substitute must be individual).
+     */
+    fun allowedFor(invoice: Invoice?): List<String> =
+        if (invoice?.isGlobal == true) listOf(WITHOUT_RELATION, NOT_EXECUTED, NOMINATIVE_GLOBAL)
+        else listOf(WITH_RELATION, WITHOUT_RELATION, NOT_EXECUTED)
 }
 
 @Serializable

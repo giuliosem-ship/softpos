@@ -112,6 +112,7 @@ data class InvoiceDetailUiState(
     /** Only a stamped CFDI can be canceled, and only by the owner (backend enforces it too). */
     val canCancel: Boolean get() = isOwner && invoice?.isStamped == true && !isCanceling
     val needsFolio: Boolean get() = motivo == CancelMotivo.WITH_RELATION
+    val motivoOptions: List<String> get() = CancelMotivo.allowedFor(invoice)
 }
 
 class InvoiceDetailViewModel(
@@ -136,12 +137,16 @@ class InvoiceDetailViewModel(
             val r = withContext(io) { api.get(id, invoiceId) }
             _state.update {
                 when (r) {
-                    is ApiResult.Success -> it.copy(isLoading = false, invoice = r.data)
+                    is ApiResult.Success -> it.copy(isLoading = false, invoice = r.data).withAllowedMotivo()
                     is ApiResult.Error -> it.copy(isLoading = false, error = r.toLoadError())
                 }
             }
         }
     }
+
+    /** Keeps the selected motivo within what the backend accepts for this invoice kind. */
+    private fun InvoiceDetailUiState.withAllowedMotivo(): InvoiceDetailUiState =
+        if (motivo in motivoOptions) this else copy(motivo = CancelMotivo.WITHOUT_RELATION, folioSustitucion = "")
 
     fun share(kind: InvoiceFileKind) {
         val id = merchantId() ?: return
@@ -165,7 +170,7 @@ class InvoiceDetailViewModel(
     fun consumeShare() = _state.update { it.copy(share = null) }
 
     fun onMotivo(code: String) {
-        if (code in CancelMotivo.ALL) _state.update { it.copy(motivo = code, cancelError = null) }
+        _state.update { if (code in it.motivoOptions) it.copy(motivo = code, cancelError = null) else it }
     }
 
     fun onFolio(value: String) =
@@ -174,7 +179,7 @@ class InvoiceDetailViewModel(
     fun cancel() {
         val id = merchantId() ?: return
         val s = _state.value
-        if (!s.canCancel) return
+        if (!s.canCancel || s.motivo !in s.motivoOptions) return
         if (s.needsFolio && !ReceptorValidator.isValidUuid(s.folioSustitucion)) {
             _state.update { it.copy(cancelError = CancelError.FOLIO_REQUIRED) }
             return

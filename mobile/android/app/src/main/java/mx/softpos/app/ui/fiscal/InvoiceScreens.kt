@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import mx.softpos.app.R
 import mx.softpos.app.core.money.MoneyFormatter
 import mx.softpos.app.fiscal.CancelMotivo
+import mx.softpos.app.fiscal.CancellationStatus
 import mx.softpos.app.fiscal.Invoice
 import mx.softpos.app.fiscal.InvoiceFileKind
 import mx.softpos.app.fiscal.InvoiceStatus
@@ -285,6 +286,16 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit) {
             inv.uuid?.let { Text(stringResource(R.string.invoice_uuid, it)) }
             Text(stringResource(R.string.invoice_subtotal, MoneyFormatter.formatMxn(inv.subtotalCents)))
             Text(stringResource(R.string.invoice_iva, MoneyFormatter.formatMxn(inv.ivaCents)))
+            if (inv.isrRetenidoCents > 0) {
+                Text(stringResource(R.string.invoice_isr_retenido, MoneyFormatter.formatMxn(inv.isrRetenidoCents)))
+            }
+            if (inv.isGlobal) Text(stringResource(R.string.invoice_global, inv.globalPeriod ?: "—"))
+            inv.cancellation?.let { c ->
+                when {
+                    inv.cancellationRejected -> Text(stringResource(R.string.invoice_cancel_rejected, c.motivo), color = MaterialTheme.colorScheme.error)
+                    c.status == CancellationStatus.REQUESTED -> Text(stringResource(R.string.invoice_cancel_pending, c.motivo))
+                }
+            }
             inv.receptor?.let { Text(stringResource(R.string.invoice_receptor, it.nombre, it.rfc)) }
             if (inv.createdAt.isNotBlank()) Text(stringResource(R.string.sale_date, inv.createdAt))
             inv.stampedAt?.let { Text(stringResource(R.string.invoice_stamped_at, it)) }
@@ -327,7 +338,7 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit) {
 @Composable
 private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewModel, onConfirm: () -> Unit) {
     Text(stringResource(R.string.invoice_cancel_title), style = MaterialTheme.typography.titleMedium)
-    CancelMotivo.ALL.forEach { code ->
+    state.motivoOptions.forEach { code ->
         Row(
             Modifier.fillMaxWidth().clickable { vm.onMotivo(code) },
             verticalAlignment = Alignment.CenterVertically

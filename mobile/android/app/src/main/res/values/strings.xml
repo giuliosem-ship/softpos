@@ -268,6 +268,10 @@
     <string name="invoice_failed_text">No se pudo timbrar: %1$s</string>
     <string name="invoice_subtotal">Subtotal: %1$s</string>
     <string name="invoice_iva">IVA: %1$s</string>
+    <string name="invoice_isr_retenido">ISR retenido: %1$s</string>
+    <string name="invoice_global">Factura global (público en general) · periodo %1$s</string>
+    <string name="invoice_cancel_rejected">Tu cliente rechazó la cancelación (motivo %1$s). La factura sigue vigente.</string>
+    <string name="invoice_cancel_pending">Cancelación (motivo %1$s) en espera de la respuesta de tu cliente (hasta 72 h).</string>
     <string name="invoice_receptor">Cliente: %1$s (%2$s)</string>
     <string name="invoice_stamped_at">Timbrada: %1$s</string>
     <string name="invoice_share">Compartir factura</string>

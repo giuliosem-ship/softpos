@@ -12,6 +12,7 @@ import mx.softpos.app.fiscal.CancelMotivo
 import mx.softpos.app.fiscal.CsdInfo
 import mx.softpos.app.fiscal.FakeInvoiceApi
 import mx.softpos.app.fiscal.InvoiceFileKind
+import mx.softpos.app.fiscal.InvoiceKind
 import mx.softpos.app.fiscal.InvoicePage
 import mx.softpos.app.fiscal.InvoiceStatus
 import mx.softpos.app.fiscal.Persona
@@ -217,6 +218,23 @@ class InvoiceViewModelsTest {
         assertFalse(cashier.state.value.canCancel)
         cashier.cancel()
         assertEquals(1, api.cancels.size)
+    }
+
+    @Test
+    fun motivosFollowInvoiceKind() {
+        val individual = detail()
+        individual.onMotivo(CancelMotivo.NOMINATIVE_GLOBAL)
+        assertEquals(CancelMotivo.WITHOUT_RELATION, individual.state.value.motivo, "04 is only for a factura global")
+        assertEquals(listOf("01", "02", "03"), individual.state.value.motivoOptions)
+
+        api.invoice = ApiResult.Success(stamped().copy(kind = InvoiceKind.GLOBAL, globalPeriod = "M2026-10"), 200)
+        val global = detail()
+        assertEquals(listOf("02", "03", "04"), global.state.value.motivoOptions)
+        global.onMotivo(CancelMotivo.WITH_RELATION)
+        assertEquals(CancelMotivo.WITHOUT_RELATION, global.state.value.motivo, "01 needs an individual substitute")
+        global.onMotivo(CancelMotivo.NOMINATIVE_GLOBAL)
+        global.cancel()
+        assertEquals("04", api.cancels.single().motivo)
     }
 
     @Test

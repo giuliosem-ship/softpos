@@ -110,6 +110,13 @@ func TestPGIntegration_SAT69BLifecycle(t *testing.T) {
 	if st, _ := svc.Lookup(ctx, "ZZT160801AR0"); st != identity.BlacklistDefinitivo {
 		t.Fatalf("list kept: %q", st)
 	}
+	// Same size, every RFC replaced: refused too (removals would auto-unblock).
+	if _, err := guarded.Load(ctx, []byte("No,RFC,Nombre,Situación del contribuyente\n1,AAA080808HL8,C,Presunto\n2,AAA120730823,D,Presunto\n"), "it", "it", false); !errors.Is(err, identity.ErrList69BChanged) {
+		t.Fatalf("replaced RFCs must trip the change guard: %v", err)
+	}
+	if st, _ := svc.Lookup(ctx, "ZZT160801AR0"); st != identity.BlacklistDefinitivo {
+		t.Fatalf("list kept after replaced-RFC file: %q", st)
+	}
 	var staged int
 	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sat_blacklist_staging`).Scan(&staged)
 	if staged != 0 {

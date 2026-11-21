@@ -187,7 +187,17 @@ func TestReplaceGuard_AllowsChanges(t *testing.T) {
 	}
 	old := map[string]BlacklistStatus{"A": BlacklistPresunto, "B": BlacklistDefinitivo, "C": BlacklistPresunto}
 	common, changed := ChangedSituations(old, []List69BRow{{RFC: "A", Status: BlacklistPresunto}, {RFC: "B", Status: BlacklistDesvirtuado}, {RFC: "D", Status: BlacklistPresunto}})
-	if common != 2 || changed != 1 {
+	if common != 3 || changed != 2 { // B changed, C replaced by D
+		t.Fatalf("ChangedSituations: %d %d", common, changed)
+	}
+	// Net shrink is the shrink protection's; only replaced RFCs count here.
+	if c := GuardedChanges(10, 6, 0, 4); c != 0 {
+		t.Fatalf("pure shrink: %d", c)
+	}
+	if c := GuardedChanges(10, 10, 1, 3); c != 4 {
+		t.Fatalf("replaced: %d", c)
+	}
+	if c := GuardedChanges(10, 12, 0, 0); c != 0 {
 		t.Fatalf("ChangedSituations: %d %d", common, changed)
 	}
 }
@@ -216,5 +226,26 @@ func TestList69BSyncer_ChangeGuard(t *testing.T) {
 	}
 	if e, _, _ := st.GetEntry(ctx, "ZURC660122LUA"); e.Status != BlacklistDesvirtuado {
 		t.Fatalf("override must swap: %+v", e)
+	}
+}
+
+// TestList69BSyncer_ChangeGuardCountsRemovedRFCs (MVP-27 audit): a file of
+// the same size whose RFCs were replaced passes the shrink protection, and a
+// removed RFC is auto-unblocked by the retroscreen ("absent from a current
+// list" = clear): removals must count as changes.
+func TestList69BSyncer_ChangeGuardCountsRemovedRFCs(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemoryList69BStore()
+	sync := &List69BSyncer{Store: st}
+	head := "No,RFC,Nombre,Situación del contribuyente\n"
+	if _, err := sync.Load(ctx, []byte(head+"1,AAA080808HL8,A,Presunto\n2,ZURC660122LUA,B,Definitivo\n"), "f1", "t", false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sync.Load(ctx, []byte(head+"1,AAA120730823,C,Presunto\n2,ZZT160801AR0,D,Definitivo\n"), "f2", "t", false)
+	if !errors.Is(err, ErrList69BChanged) || res.Load.Status != Load69BRejectedChanges {
+		t.Fatalf("a same-size file with every RFC replaced must be refused, got %+v %v", res.Load, err)
+	}
+	if e, found, _ := st.GetEntry(ctx, "ZURC660122LUA"); !found || e.Status != BlacklistDefinitivo {
+		t.Fatalf("list must be kept: %+v %v", e, found)
 	}
 }

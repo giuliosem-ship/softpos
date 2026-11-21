@@ -242,34 +242,54 @@ const (
 type ReplaceGuard struct {
 	MaxShrinkPct int  // refuse when the new count < old count * (100-pct)/100
 	Override     bool // operator override of the shrink check
-	// MaxChangePct refuses a load in which more than pct% of the RFCs present
-	// in both the loaded and the new list changed their situation (<= 0 or
-	// >= 100 disables the check).
+	// MaxChangePct refuses a load in which more than pct% of the RFCs of the
+	// loaded list changed their situation or were replaced by other RFCs
+	// (GuardedChanges; <= 0 or >= 100 disables the check).
 	MaxChangePct    int
 	OverrideChanges bool // operator override of the change check
 }
 
-// AllowsChanges reports whether changed of the common RFCs (present in both
-// lists) may change their situation in one load.
-func (g ReplaceGuard) AllowsChanges(common, changed int) bool {
-	if g.OverrideChanges || common <= 0 || g.MaxChangePct <= 0 || g.MaxChangePct >= 100 {
+// AllowsChanges reports whether changed (GuardedChanges) of the loaded RFCs
+// may change in one load.
+func (g ReplaceGuard) AllowsChanges(loaded, changed int) bool {
+	if g.OverrideChanges || loaded <= 0 || g.MaxChangePct <= 0 || g.MaxChangePct >= 100 {
 		return true
 	}
-	return int64(changed)*100 <= int64(common)*int64(g.MaxChangePct)
+	return int64(changed)*100 <= int64(loaded)*int64(g.MaxChangePct)
 }
 
-// ChangedSituations counts the RFCs present in both old and rows and how
-// many of them have a different situation.
-func ChangedSituations(old map[string]BlacklistStatus, rows []List69BRow) (common, changed int) {
+// ChangedSituations counts the RFCs of the loaded list (old) and how many
+// of them count as changed by rows (see GuardedChanges).
+func ChangedSituations(old map[string]BlacklistStatus, rows []List69BRow) (loaded, changed int) {
+	seen := make(map[string]bool, len(rows))
+	situation := 0
 	for _, r := range rows {
-		if prev, ok := old[r.RFC]; ok {
-			common++
+		if prev, ok := old[r.RFC]; ok && !seen[r.RFC] {
+			seen[r.RFC] = true
 			if prev != r.Status {
-				changed++
+				situation++
 			}
 		}
 	}
-	return common, changed
+	return len(old), GuardedChanges(len(old), len(rows), situation, len(old)-len(seen))
+}
+
+// GuardedChanges is what the change protection counts: loaded RFCs whose
+// situation changed plus removed RFCs that were replaced by additions (the
+// net shrink, loaded - newCount, is the shrink protection's). Replaced RFCs
+// matter: a same-size file with other RFCs passes the shrink protection, and
+// the retroscreen lifts the 69-B block of an RFC absent from a current list.
+// RFCs only added are not changes.
+func GuardedChanges(loaded, newCount, situation, removed int) int {
+	netShrink := loaded - newCount
+	if netShrink < 0 {
+		netShrink = 0
+	}
+	replaced := removed - netShrink
+	if replaced < 0 {
+		replaced = 0
+	}
+	return situation + replaced
 }
 
 // Allows reports whether replacing a list of oldCount rows with newCount is allowed.

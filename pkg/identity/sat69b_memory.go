@@ -76,8 +76,8 @@ func (m *MemoryList69BStore) ReplaceList(_ context.Context, rows []List69BRow, m
 	for rfc, e := range m.entries {
 		old[rfc] = e.Status
 	}
-	if common, changed := ChangedSituations(old, rows); !guard.AllowsChanges(common, changed) {
-		load.Status, load.Detail = Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d common RFCs changed (max %d%%)", ErrList69BChanged, changed, common, guard.MaxChangePct)
+	if loaded, changed := ChangedSituations(old, rows); !guard.AllowsChanges(loaded, changed) {
+		load.Status, load.Detail = Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", ErrList69BChanged, changed, loaded, guard.MaxChangePct)
 		return m.addLoad(load), ErrList69BChanged
 	}
 	next := make(map[string]BlacklistEntry, len(rows))

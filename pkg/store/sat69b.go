@@ -81,14 +81,16 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 			return load, fmt.Errorf("fill 69-B staging: %w", err)
 		}
 	}
-	// Change protection: RFCs present in both lists whose situation differs.
-	var common, changed int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE s.status <> b.status)
-		FROM sat_blacklist_staging s JOIN sat_blacklist b ON b.rfc = s.rfc`).Scan(&common, &changed); err != nil {
+	// Change protection: RFCs of the loaded list whose situation differs or
+	// that are missing from the new one (identity.ChangedSituations).
+	var loaded, situation, removed int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE s.status <> b.status), COUNT(*) FILTER (WHERE s.rfc IS NULL)
+		FROM sat_blacklist b LEFT JOIN sat_blacklist_staging s ON s.rfc = b.rfc`).Scan(&loaded, &situation, &removed); err != nil {
 		return load, fmt.Errorf("compare 69-B lists: %w", err)
 	}
-	if !guard.AllowsChanges(common, changed) {
-		load.Status, load.Detail = identity.Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d common RFCs changed (max %d%%)", identity.ErrList69BChanged, changed, common, guard.MaxChangePct)
+	changed := identity.GuardedChanges(loaded, len(rows), situation, removed)
+	if !guard.AllowsChanges(loaded, changed) {
+		load.Status, load.Detail = identity.Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", identity.ErrList69BChanged, changed, loaded, guard.MaxChangePct)
 		if _, err = tx.ExecContext(ctx, `TRUNCATE sat_blacklist_staging`); err != nil {
 			_ = tx.Rollback()
 			return load, fmt.Errorf("truncate 69-B staging: %w", err)

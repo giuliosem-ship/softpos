@@ -181,15 +181,18 @@ contribuyente,…`).
 - **Change protection (MVP-27, migration 020):** the row count alone does not
   catch a wrong file of the same size (column shift, another list). Inside
   the swap transaction the new rows are compared with the loaded list: if
-  more than `SAT_69B_MAX_CHANGE_PCT` (default 10 %) of the RFCs present in
-  **both** lists changed situation, the load is refused
+  more than `SAT_69B_MAX_CHANGE_PCT` (default 10 %) of the RFCs of the
+  loaded list changed situation **or were replaced** by other RFCs (removed
+  beyond the net shrink, `identity.GuardedChanges`), the load is refused
   (`REJECTED_CHANGES`, `ALERT` ERROR log, `409 LIST_CHANGED` in the
   backoffice) and the previous list stays, until an operator overrides it
   (`override_changes` + reason in the backoffice, or
   `operatorctl load-69b --override-changes`; recorded in
-  `sat_blacklist_loads.override_changes`). New and removed RFCs are not
-  "changes" (removals are covered by the shrink protection; additions only
-  block more merchants, which is fail-closed). A real SAT update changes the
+  `sat_blacklist_loads.override_changes`). Removed RFCs count because the retroscreen lifts the
+  69-B block of an RFC absent from a current list: a same-size file with
+  other RFCs would pass the shrink protection and unblock every listed
+  merchant (audit of Lote L); the net shrink stays the shrink protection's.
+  Additions only block more merchants (fail-closed) and are not changes. A real SAT update changes the
   situation of a few hundred of ~14k RFCs (< 5 %). `operatorctl` uses the
   default thresholds.
 - **Staleness:** the same file again only moves `verified_at`. A list not

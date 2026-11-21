@@ -298,7 +298,11 @@ month of the purchase, which matches the SAT rule that a nominative CFDI for
 a sale must be issued within the same month; afterwards the merchant can
 cancel the global with **motivo 04** (frees its sales; the next worker run
 re-issues the global for the sales not invoiced meanwhile) and then invoice
-the sale individually. Accountant validation pending.
+the sale individually. Known gap (audit of batch K): the reconciliation runs every
+`CFDI_GLOBAL_INVOICE_INTERVAL` (1 h) and takes every freed sale, so the
+individual invoice must be issued before the next run or the sale goes back
+into a new global part; a hold for the sale being invoiced nominatively is
+pending the accountant's decision. Accountant validation pending.
 
 ### Notas de crédito (CFDI de egreso, MVP-23)
 
@@ -362,7 +366,13 @@ produces a CFDI de egreso automatically:
   accountant's guidance. Job updates only apply to `PENDING` jobs, so a
   worker holding a stale snapshot never brings a reversed job back to
   `PENDING`; if the reversal races a worker that already created the egreso,
-  the job ends `ISSUED`, still flagged, and an `ALERT` is logged.
+  the job ends `ISSUED`, still flagged, and an `ALERT` is logged. Later
+  movements of the sale are credited against the CFDI as they stand (invoice
+  − its live egresos − net after the movement): a refund after a reversed,
+  already credited chargeback is absorbed by that egreso first. So the
+  operator's manual ingreso must be for the sale's **current** net collected
+  minus its current fiscal net (active invoice − live credit notes), not for
+  the reversed amount.
 - **Limitations (accountant to confirm):** egreso vs. cancelación con
   sustitución; clave 84111506 / ACT and InformacionGlobal on the egreso of a
   global; G02. A credited invoice can only be canceled (e.g. motivo 01) after

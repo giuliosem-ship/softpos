@@ -39,9 +39,7 @@ type StampCFDIResponse struct {
 	StampedXML       string `json:"stamped_xml"`
 }
 
-func formatCents(cents int64) string {
-	return fmt.Sprintf("%d.%02d", cents/100, cents%100)
-}
+func formatCents(cents int64) string { return fiscal.FormatCents(cents) }
 
 func (s *Server) HandleStampIndividualCFDI(w http.ResponseWriter, r *http.Request) {
 	var req StampIndividualCFDIRequest
@@ -70,6 +68,7 @@ func (s *Server) HandleStampIndividualCFDI(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `{"error":"MERCHANT_CSD_NOT_CONFIGURED"}`, http.StatusBadRequest)
 		return
 	}
+	defer csd.Wipe()
 
 	taxSplit, err := fiscal.CalculateResicoTaxSplit(req.GrossAmountCents, s.GetMerchantMonthlySalesCents(req.MerchantID), false)
 	if err != nil {
@@ -149,9 +148,12 @@ func (s *Server) HandleStampIndividualCFDI(w http.ResponseWriter, r *http.Reques
 				ValorUnitario: baseStr,
 				Importe:       baseStr,
 				ObjetoImp:     "02",
+				Impuestos: &fiscal.CFDIConceptoImpuestos{Traslados: []fiscal.CFDITraslado{
+					{Base: baseStr, Impuesto: "002", TipoFactor: "Tasa", TasaOCuota: "0.160000", Importe: ivaStr},
+				}},
 			},
 		},
-		Impuestos: fiscal.CFDIImpuestos{
+		Impuestos: &fiscal.CFDIImpuestos{
 			TotalImpuestosTrasladados: ivaStr,
 			Traslados: []fiscal.CFDITraslado{
 				{
@@ -165,15 +167,18 @@ func (s *Server) HandleStampIndividualCFDI(w http.ResponseWriter, r *http.Reques
 		},
 	}
 
-	unsignedXML, err := fiscal.BuildCFDI40XML(comp)
-	if err != nil {
-		http.Error(w, `{"error":"CFDI_BUILD_FAILED"}`, http.StatusBadRequest)
-		return
-	}
-
-	signedXML, err := fiscal.SignCFDI(unsignedXML, csd.KeyBytes, csd.CERBytes)
+	signer, err := s.csdSigner(csd)
 	if err != nil {
 		http.Error(w, `{"error":"CFDI_SIGNING_FAILED"}`, http.StatusInternalServerError)
+		return
+	}
+	if _, err := signer.Seal(comp); err != nil {
+		http.Error(w, `{"error":"CFDI_SIGNING_FAILED"}`, http.StatusInternalServerError)
+		return
+	}
+	signedXML, err := fiscal.BuildCFDI40XML(comp)
+	if err != nil {
+		http.Error(w, `{"error":"CFDI_BUILD_FAILED"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -214,6 +219,13 @@ func (s *Server) HandleStampFacturaGlobal(w http.ResponseWriter, r *http.Request
 		http.Error(w, `{"error":"MERCHANT_CSD_NOT_CONFIGURED"}`, http.StatusBadRequest)
 		return
 	}
+	defer csd.Wipe()
+	plainKey, err := plainCSDKey(csd)
+	if err != nil {
+		http.Error(w, `{"error":"CFDI_SIGNING_FAILED"}`, http.StatusInternalServerError)
+		return
+	}
+	defer clear(plainKey)
 
 	baseCents := req.BaseCents
 	ivaCents := req.IVACents
@@ -238,7 +250,7 @@ func (s *Server) HandleStampFacturaGlobal(w http.ResponseWriter, r *http.Request
 		req.TotalGrossCents,
 		baseCents,
 		ivaCents,
-		csd.KeyBytes,
+		plainKey,
 		csd.CERBytes,
 	)
 	if err != nil {

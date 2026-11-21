@@ -3,15 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +23,7 @@ import (
 	"softpos/pkg/acquirer"
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
+	"softpos/pkg/fiscal/fiscaltest"
 	"softpos/pkg/identity"
 	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
@@ -111,6 +108,19 @@ type Config struct {
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
 	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
+
+	// SAT 69-B list ingestion (MVP-20, docs/KYB.md). SAT69BURL
+	// (SAT_69B_URL, e.g. the SAT's Listado_Completo_69-B.csv) enables the
+	// download worker; empty = lists are loaded only with cmd/operatorctl.
+	SAT69BURL             string
+	SAT69BRefreshInterval time.Duration // SAT_69B_REFRESH_INTERVAL, default 24h
+	SAT69BMaxAge          time.Duration // SAT_69B_MAX_AGE, default 7 days (older list -> UNKNOWN)
+	SAT69BMaxShrinkPct    int           // SAT_69B_MAX_SHRINK_PCT, default 10 (0..100)
+
+	// CFDI workers (MVP-22, docs/CFDI.md): automatic factura global and
+	// polling of cancellations waiting for the receptor's acceptance.
+	CFDIGlobalInvoiceInterval time.Duration // CFDI_GLOBAL_INVOICE_INTERVAL, default 1h
+	CFDICancelPollInterval    time.Duration // CFDI_CANCEL_POLL_INTERVAL, default 15m
 }
 
 func LoadConfigFromEnv() Config {
@@ -189,6 +199,15 @@ func LoadConfigFromEnv() Config {
 		integrityPkg = DefaultPlayIntegrityPackage
 	}
 
+	shrinkPct := 0
+	if val := os.Getenv("SAT_69B_MAX_SHRINK_PCT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+			shrinkPct = n
+		} else {
+			slog.Warn("invalid SAT_69B_MAX_SHRINK_PCT, using default", "value", val)
+		}
+	}
+
 	cashierRefunds := false
 	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
 		cashierRefunds = true
@@ -217,6 +236,12 @@ func LoadConfigFromEnv() Config {
 		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
 		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
 		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		SAT69BURL:                 strings.TrimSpace(os.Getenv("SAT_69B_URL")),
+		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
+		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
+		SAT69BMaxShrinkPct:        shrinkPct,
+		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
+		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -457,7 +482,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 
 		sqlBlacklist := store.NewSQLBlacklistRepository(db)
 		blacklistService.SetRepository(sqlBlacklist)
+	} else {
+		// In-memory 69-B list (lost on restart): loadable through the backoffice.
+		blacklistService.SetRepository(identity.NewMemoryList69BStore())
 	}
+	blacklistService.SetMaxAge(cfg.SAT69BMaxAge)
 
 	// 2. Initialize STP Signer
 	stpSigner := stp.NewSTPSigner(nil, nil, stpSecret)
@@ -489,6 +518,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetDevMode(cfg.DevMode)
+	if cfg.SAT69BURL != "" {
+		server.SetSAT69BSource(cfg.SAT69BURL, identity.HTTP69BFetcher(cfg.SAT69BURL, nil), cfg.SAT69BMaxShrinkPct)
+	} else {
+		slog.Warn("SAT_69B_URL not set: the 69-B list is only loaded with cmd/operatorctl load-69b (KYB lookups stay UNKNOWN until then)")
+	}
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
@@ -537,6 +571,8 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		sqlKYB := store.NewSQLKYBRepository(db)
 		server.SetKYBRepository(sqlKYB, sqlKYB)
 		server.SetOperatorAuditRepository(store.NewSQLAuditRepository(db))
+		server.SetFiscalSettingsRepository(store.NewSQLFiscalSettingsRepository(db))
+		server.SetInvoiceRepository(store.NewSQLInvoiceRepository(db))
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
@@ -592,7 +628,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	// 6. Seed demo merchant if enabled
 	if cfg.SeedDemoMerchant {
 		demoID := "merch_demo_01"
-		demoRFC := "TAQ850101XYZ"
+		demoRFC := demoMerchantRFC
 		demoCLABE := "646180123400000007"
 		if err := server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC); err != nil {
 			slog.Warn("demo merchant seeding failed", "error", err)
@@ -614,6 +650,10 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		privDER, certDER, err := generateSelfSignedCSD()
 		if err == nil {
 			_ = server.RegisterMerchantCSD(demoID, privDER, certDER)
+		}
+		// CFDI lugar de expedición (the provisioned demo KYB has no address).
+		if err := server.SeedFiscalSettings(ctx, demoID, "06000"); err != nil {
+			slog.Warn("demo fiscal settings seeding failed", "error", err)
 		}
 	}
 
@@ -706,28 +746,125 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
-func generateSelfSignedCSD() ([]byte, []byte, error) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, nil, err
+// CFDI worker defaults.
+const (
+	defaultCFDIGlobalInterval = time.Hour
+	defaultCFDICancelPoll     = 15 * time.Minute
+)
+
+// runEvery calls fn now and then every interval until ctx is cancelled.
+func runEvery(ctx context.Context, interval time.Duration, fn func(context.Context)) {
+	fn(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			fn(ctx)
+		}
 	}
-	privDER, err := x509.MarshalPKCS8PrivateKey(privKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	serial, _ := new(big.Int).SetString("30001000000400002434", 10)
-	tpl := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "TAQUERIA SOFTPOS DEMO"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, &tpl, &tpl, &privKey.PublicKey, privKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	return privDER, certDER, nil
 }
+
+// StartCFDIWorkers launches the factura global worker (issues each closed
+// period's global CFDI and retries PENDING ones) and the cancellation
+// poller (resolves CANCEL_REQUESTED invoices from the SAT status). The
+// returned wait function blocks until both loops exit after ctx is cancelled.
+func StartCFDIWorkers(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if server == nil {
+		return func() {}
+	}
+	globalEvery, pollEvery := cfg.CFDIGlobalInvoiceInterval, cfg.CFDICancelPollInterval
+	if globalEvery <= 0 {
+		globalEvery = defaultCFDIGlobalInterval
+	}
+	if pollEvery <= 0 {
+		pollEvery = defaultCFDICancelPoll
+	}
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		runEvery(ctx, globalEvery, func(ctx context.Context) {
+			n, err := server.RunGlobalInvoices(ctx, time.Now())
+			if err != nil {
+				slog.Error("factura global run failed", "error", err)
+			} else if n > 0 {
+				slog.Info("factura global run", "invoices", n)
+			}
+		})
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		runEvery(ctx, pollEvery, func(ctx context.Context) {
+			if n, err := server.PollCancellations(ctx); err != nil {
+				slog.Error("CFDI cancellation poll failed", "error", err)
+			} else if n > 0 {
+				slog.Info("CFDI cancellations resolved", "count", n)
+			}
+		})
+	}()
+	return func() { <-done; <-done }
+}
+
+// defaultSAT69BRefresh is how often the 69-B worker re-downloads the list.
+const defaultSAT69BRefresh = 24 * time.Hour
+
+// StartSAT69BWorker downloads and loads the SAT 69-B list at boot and then
+// every SAT_69B_REFRESH_INTERVAL (only with SAT_69B_URL). Each successful
+// load re-checks approved merchants. The returned wait function blocks until
+// the loop has exited after ctx is cancelled.
+func StartSAT69BWorker(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if cfg.SAT69BURL == "" || server == nil {
+		return func() {}
+	}
+	interval := cfg.SAT69BRefreshInterval
+	if interval <= 0 {
+		interval = defaultSAT69BRefresh
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run := func() {
+			runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", false)
+			if err != nil {
+				slog.Error("SAT 69-B sync failed; previous list kept", "error", err, "status", res.Load.Status)
+				return
+			}
+			slog.Info("SAT 69-B sync", "status", res.Load.Status, "rows", res.Load.RowCount, "malformed", res.Malformed,
+				"retroscreen_checked", retro.Checked, "retroscreen_blocked", len(retro.Blocked))
+		}
+		run()
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				run()
+			}
+		}
+	}()
+	return func() { <-done }
+}
+
+// generateSelfSignedCSD returns a self-signed, SAT-shaped demo CSD (never a
+// real SAT certificate) for the demo merchant: plaintext PKCS#8 key and DER
+// certificate.
+func generateSelfSignedCSD() ([]byte, []byte, error) {
+	c, err := fiscaltest.NewCSD(fiscaltest.CSDOptions{RFC: demoMerchantRFC, Name: "TAQUERIA SOFTPOS DEMO",
+		Serial: "30001000000400002434", NotAfter: time.Now().Add(365 * 24 * time.Hour)})
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.PlainKey, c.CertDER, nil
+}
+
+// demoMerchantRFC is the RFC of the seeded demo merchant.
+const demoMerchantRFC = "TAQ850101XYZ"
 
 func main() {
 	cfg := LoadConfigFromEnv()
@@ -776,6 +913,8 @@ func main() {
 	}
 	waitPayouts := StartPayoutReconciler(dispatcherCtx, cfg, db, server)
 	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
+	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
+	waitCFDI := StartCFDIWorkers(dispatcherCtx, cfg, server)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -814,7 +953,14 @@ func main() {
 		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
 		stopDispatcher()
 		dispatcherDone := make(chan struct{})
-		go func() { waitDispatcher(); waitPayouts(); waitAcquirer(); close(dispatcherDone) }()
+		go func() {
+			waitDispatcher()
+			waitPayouts()
+			waitAcquirer()
+			wait69B()
+			waitCFDI()
+			close(dispatcherDone)
+		}()
 		select {
 		case <-dispatcherDone:
 		case <-shutdownCtx.Done():

@@ -82,6 +82,12 @@ var ServerEnvVars = []EnvVar{
 	{Name: "OUTBOX_PUBLISH_TIMEOUT"},
 	{Name: "PAYOUT_RECONCILE_INTERVAL"},
 	{Name: "PAYOUT_RECONCILE_AFTER"},
+	{Name: "SAT_69B_URL"},
+	{Name: "SAT_69B_REFRESH_INTERVAL"},
+	{Name: "SAT_69B_MAX_AGE"},
+	{Name: "SAT_69B_MAX_SHRINK_PCT"},
+	{Name: "CFDI_GLOBAL_INVOICE_INTERVAL"},
+	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.

@@ -71,6 +71,13 @@ type Server struct {
 	kycProvider       kyb.KYCProvider
 	auditRepo         store.OperatorAuditRepository
 	backofficeDir     string
+	sat69bSource      string
+	sat69bFetch       SAT69BFetcher
+	sat69bShrinkPct   int
+	sat69bMu          sync.Mutex
+	fiscalSettings    store.FiscalSettingsRepository
+	invoices          store.InvoiceRepository
+	mailer            Mailer
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -87,8 +94,9 @@ func NewServer(
 	vault, _ := identity.NewCSDVaultServiceWithProvider(ephemeralKeys)
 	docVault, _ := identity.NewDocumentVault(ephemeralKeys)
 	kybMem := store.NewMemoryKYBRepository()
-	primaryPAC := pac.NewMockPACClient(false, "")
-	fallbackPAC := pac.NewMockPACClient(false, "")
+	mockSAT := pac.NewMockSAT()
+	primaryPAC := pac.NewMockPACClientWithSAT(false, "", mockSAT)
+	fallbackPAC := pac.NewMockPACClientWithSAT(false, "", mockSAT)
 
 	s := &Server{
 		ledger:            ledgerEngine,
@@ -108,6 +116,9 @@ func NewServer(
 		docVault:          docVault,
 		kycProvider:       kyb.MockKYCProvider{},
 		auditRepo:         store.NewMemoryAuditRepository(),
+		fiscalSettings:    store.NewMemoryFiscalSettingsRepository(),
+		invoices:          store.NewMemoryInvoiceRepository(),
+		mailer:            LogMailer{},
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -303,7 +314,7 @@ func (s *Server) vault() *identity.CSDVaultService {
 // RegisterMerchantCSD encrypts and stores a merchant's CSD certificate and private key in the envelope-encrypted vault.
 // The merchant must already be registered.
 func (s *Server) RegisterMerchantCSD(merchantID string, keyDER []byte, certDER []byte) error {
-	enc, err := s.vault().StoreCSD(merchantID, certDER, keyDER, "vault-managed")
+	enc, err := s.vault().StoreCSD(merchantID, certDER, keyDER, identity.CSDPlaintextKeyMarker)
 	if err != nil {
 		return err
 	}
@@ -658,9 +669,22 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/payments/settle", s.legacyCardOnly(s.HandlePaymentSettle))
 	s.router.HandleFunc("POST /api/v1/dev/codi/simulate-confirm", s.HandleDevCoDiSimulate) // DEV_MODE only
 
-	// CFDI 4.0 Invoicing & Multi-PAC Stamping
-	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.HandleStampIndividualCFDI)
-	s.router.HandleFunc("POST /api/v1/invoices/global", s.HandleStampFacturaGlobal)
+	// CFDI 4.0: merchant CSD, fiscal defaults and SAT catalogs (docs/CFDI.md)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/csd", s.HandlePutCSD)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/csd", s.HandleGetCSD)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/fiscal-settings", s.HandleGetFiscalSettings)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/fiscal-settings", s.HandlePutFiscalSettings)
+	s.router.HandleFunc("GET /api/v1/catalogs/sat", s.HandleSATCatalogs)
+	// CFDI invoices from sales: lifecycle, PDF/XML, cancellation (docs/CFDI.md)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/invoices", s.HandleCreateInvoice)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices", s.HandleListInvoices)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}", s.HandleGetInvoice)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}/pdf", s.HandleInvoicePDF)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/invoices/{invoice}/xml", s.HandleInvoiceXML)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/invoices/{invoice}/cancel", s.HandleCancelInvoice)
+	// Legacy client-amount stamping (DEV_MODE demo / Web POS only)
+	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.legacyCardOnly(s.HandleStampIndividualCFDI))
+	s.router.HandleFunc("POST /api/v1/invoices/global", s.legacyCardOnly(s.HandleStampFacturaGlobal))
 
 	// Revenue-Based Financing (RBF) & Merchant Balances
 	s.router.HandleFunc("POST /api/v1/rbf/loans", s.HandleOriginateRBFLoan)

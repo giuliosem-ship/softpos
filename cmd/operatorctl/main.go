@@ -4,6 +4,11 @@
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl add +525512345678
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl remove +525512345678
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl check +525512345678
+//	DATABASE_URL=postgres://… go run ./cmd/operatorctl load-69b Listado_Completo_69-B.csv [--override-shrink]
+//
+// load-69b loads the SAT Article 69-B list from a local file (same parser,
+// atomic swap and shrink protection as the server worker, docs/KYB.md) and
+// re-checks approved merchants.
 //
 // The database must already be migrated (cmd/server applies migrations at
 // boot). SQL_DRIVER is optional (default pgx). See docs/BACKOFFICE.md.
@@ -14,20 +19,29 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"softpos/pkg/auth"
+	"softpos/pkg/identity"
 	"softpos/pkg/store"
 )
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: operatorctl add|remove|check <E.164 phone>   (DATABASE_URL required)")
+	fmt.Fprintln(os.Stderr, "       operatorctl load-69b <file.csv> [--override-shrink]")
 	os.Exit(2)
 }
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "load-69b" {
+		mainLoad69B(os.Args[2:])
+		return
+	}
 	if len(os.Args) != 3 {
 		usage()
 	}
@@ -36,6 +50,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "invalid phone: must be E.164, e.g. +525512345678")
 		os.Exit(2)
 	}
+	db := openDB()
+	defer func() { _ = db.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := run(ctx, store.NewSQLAuthRepository(db), cmd, phone, actor()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func openDB() *sql.DB {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		fmt.Fprintln(os.Stderr, "DATABASE_URL is required")
@@ -46,13 +71,72 @@ func main() {
 		fmt.Fprintln(os.Stderr, "open database:", err)
 		os.Exit(1)
 	}
+	return db
+}
+
+func mainLoad69B(args []string) {
+	path, override := "", false
+	for _, a := range args {
+		switch {
+		case a == "--override-shrink":
+			override = true
+		case path == "" && !strings.HasPrefix(a, "-"):
+			path = a
+		default:
+			usage()
+		}
+	}
+	if path == "" {
+		usage()
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "read file:", err)
+		os.Exit(1)
+	}
+	db := openDB()
 	defer func() { _ = db.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if err := run(ctx, store.NewSQLAuthRepository(db), cmd, phone, actor()); err != nil {
+	if err := runLoad69B(ctx, store.NewSQLBlacklistRepository(db), store.NewSQLKYBRepository(db), store.NewSQLAuditRepository(db),
+		raw, "file:"+filepath.Base(path), actor(), override, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// list69BRepo is the SQL 69-B repository surface load-69b needs.
+type list69BRepo interface {
+	identity.List69BStore
+	identity.BlacklistRepository
+}
+
+// runLoad69B loads raw as the SAT 69-B list and re-checks approved merchants.
+func runLoad69B(ctx context.Context, repo list69BRepo, kybRepo store.KYBRepository, audit store.OperatorAuditRepository, raw []byte, source, actor string, override bool, out io.Writer) error {
+	if override {
+		fmt.Fprintln(out, "WARNING: --override-shrink lifts the shrink protection")
+	}
+	syncer := &identity.List69BSyncer{Store: repo, MaxShrinkPct: identity.DefaultMax69BShrinkPct}
+	res, err := syncer.Load(ctx, raw, source, actor, override)
+	fmt.Fprintln(out, identity.FormatLoad(res.Load))
+	detail := identity.FormatLoad(res.Load) + fmt.Sprintf(" source=%s override_shrink=%t", source, override)
+	if err != nil {
+		detail += " error=" + err.Error()
+	}
+	if aerr := audit.AppendAudit(ctx, store.AuditEntry{OperatorID: actor, Action: "sat69b.load_file", Target: res.Load.Version, Detail: detail}); aerr != nil {
+		fmt.Fprintln(out, "WARNING: audit write failed:", aerr)
+	}
+	if err != nil {
+		return err
+	}
+	svc := identity.NewBlacklistService()
+	svc.SetRepository(repo)
+	retro, err := store.Retroscreen69B(ctx, kybRepo, audit, svc.Lookup, actor)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "retroscreen: %d approved merchants checked, %d blocked %v, %d not conclusive\n", retro.Checked, len(retro.Blocked), retro.Blocked, retro.Unknown)
+	return nil
 }
 
 func actor() string {

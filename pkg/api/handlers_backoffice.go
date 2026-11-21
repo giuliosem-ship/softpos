@@ -131,6 +131,10 @@ func (s *Server) backoffice(h func(w http.ResponseWriter, r *http.Request, opera
 
 func (s *Server) backofficeRoutes() {
 	s.router.HandleFunc("GET "+backofficePrefix+"me", s.backoffice(s.handleBOMe))
+	s.router.HandleFunc("GET "+backofficePrefix+"sat69b", s.backoffice(s.handleBOSAT69BStatus))
+	s.router.HandleFunc("POST "+backofficePrefix+"sat69b/sync", s.backoffice(s.handleBOSAT69BSync))
+	s.router.HandleFunc("GET "+backofficePrefix+"invoices", s.backoffice(s.handleBOInvoices))
+	s.router.HandleFunc("POST "+backofficePrefix+"invoices/{invoice}/retry", s.backoffice(s.handleBORetryInvoice))
 	s.router.HandleFunc("GET "+backofficePrefix+"merchants", s.backoffice(s.handleBOListMerchants))
 	s.router.HandleFunc("GET "+backofficePrefix+"merchants/{merchant}", s.backoffice(s.handleBOMerchantDetail))
 	s.router.HandleFunc("GET "+backofficePrefix+"merchants/{merchant}/documents/{document}", s.backoffice(s.handleBODownloadDocument))

@@ -121,11 +121,11 @@ Then the status becomes `SUBMITTED` (`submitted_at`) and:
 1. **SAT 69-B** lookup (`identity.BlacklistService.Lookup`): `PRESUNTO` /
    `DEFINITIVO` → `LISTED` → automatic `REJECTED` (`RFC_LISTED_69B`,
    `decided_by = system:69b`); `CLEAN` / `DESVIRTUADO` / `SENTENCIA_FAVORABLE`
-   → `CLEAR`. An RFC is only `CLEAR` against a **loaded** list: with no 69-B
-   record loaded (in memory or in `sat_blacklist`), a failed repository
-   lookup or an unrecognized status it stays `UNKNOWN` and the operator
-   checks the RFC by hand (the ingestion worker is not wired yet, see the
-   gap analysis).
+   → `CLEAR`. An RFC is only `CLEAR` against a **loaded, current** list: with
+   no 69-B list loaded, a **stale** list (not re-verified for
+   `SAT_69B_MAX_AGE`), a failed repository lookup or an unrecognized status
+   it stays `UNKNOWN` and the operator checks the RFC by hand. The list is
+   ingested as described in "SAT 69-B list ingestion" below.
 2. **Identity verification** through `kyb.KYCProvider` (liveness + INE +
    face match) over the latest `INE_FRONT`, `INE_BACK` and `SELFIE`
    (decrypted in memory only, 20 s timeout). The result (`PASSED`,
@@ -145,6 +145,54 @@ content starts with `FAIL` / `REVIEW`, `TIMEOUT` = unavailable; DEV_MODE
 default, rejected by the production guard) or empty (identity check
 `UNKNOWN`, operators verify the documents manually). A real provider
 (Truora, Metamap, …) implements `kyb.KYCProvider`.
+
+## SAT 69-B list ingestion (MVP-20)
+
+The SAT publishes the complete Article 69-B list as one CSV
+(`http://omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv`,
+~14k rows, Windows-1252/Latin-1, two banner rows — "Información actualizada
+al …" — then the header `No,RFC,Nombre del Contribuyente,Situación del
+contribuyente,…`).
+
+- **Parser** (`identity.Parse69BCSV`): UTF-8 (with or without BOM) is kept,
+  anything else is decoded as Windows-1252; the header row is found by its
+  `RFC` and `Situación…` columns (banner rows ignored); data rows with a bad
+  RFC (e.g. the SAT's redacted `XXXXXXXXXXXX` rows), an unknown situation or
+  too few columns are **counted and logged** as malformed, never fatal; an
+  RFC listed twice keeps its most severe situation. A file without header or
+  without any valid row is refused (`FAILED`). Validated against the real
+  file of 2026-11-20 (published "31 de diciembre de 2025"): 14,054 RFCs
+  loaded, 91 malformed (redacted) rows, 89 duplicates, ~0.1 s into Postgres.
+- **Mapping** (`kyb.Classify69B`): `Presunto` / `Definitivo` → `LISTED`;
+  `Desvirtuado` / `Sentencia Favorable` / not in a current list → `CLEAR`.
+- **Atomic swap** (`identity.List69BStore.ReplaceList`, migration 015): in
+  one transaction (serialized by a lock on `sat_blacklist_meta`) the rows go
+  to `sat_blacklist_staging`, `sat_blacklist` is replaced from it and
+  `sat_blacklist_meta` records `list_version` (SHA-256 of the file),
+  `source`, `published`, `row_count`, `malformed_count`, `fetched_at`,
+  `verified_at`. Lookups (MVCC) see either the old or the new list, never a
+  half one. Every attempt is a `sat_blacklist_loads` row (`LOADED`,
+  `UNCHANGED`, `REJECTED_SHRINK`, `FAILED`).
+- **Shrink protection:** a list with more than `SAT_69B_MAX_SHRINK_PCT`
+  (default 10 %) fewer rows than the loaded one is refused
+  (`REJECTED_SHRINK`, ERROR log) and the previous list stays, until an
+  operator overrides it (backoffice with a reason, or
+  `operatorctl load-69b --override-shrink`).
+- **Staleness:** the same file again only moves `verified_at`. A list not
+  verified for `SAT_69B_MAX_AGE` (default 7 days) makes every lookup
+  `UNKNOWN` (`identity.ErrBlacklistStale`).
+- **Retroscreen:** after each load (or unchanged verification) every
+  `APPROVED` merchant is re-checked (`store.Retroscreen69B`): a `LISTED` RFC
+  **blocks** the merchant (`blocked_reason = RFC_LISTED_69B`, money routes
+  `403 MERCHANT_BLOCKED`, audit `kyb.retroscreen_69b_block` by
+  `system:69b`, ERROR alert); the operator reviews and may unblock.
+  `list_69b` is refreshed for the rest.
+- **Ways to load:** worker in `cmd/server` (`SAT_69B_URL`, at boot and every
+  `SAT_69B_REFRESH_INTERVAL`, default 24 h; no URL = no worker); backoffice
+  `POST /api/v1/backoffice/sat69b/sync` and `GET /api/v1/backoffice/sat69b`
+  (`docs/BACKOFFICE.md`); `DATABASE_URL=… go run ./cmd/operatorctl load-69b
+  <file.csv> [--override-shrink]` (audited as `sat69b.load_file`). Without
+  `DATABASE_URL` the list is kept in memory (`identity.MemoryList69BStore`).
 
 ## Operator decision (backoffice)
 

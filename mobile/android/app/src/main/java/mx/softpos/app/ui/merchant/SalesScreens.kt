@@ -12,7 +12,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +45,12 @@ import mx.softpos.app.payments.SaleStatus
 import mx.softpos.app.payments.SaleStatusGroup
 
 @Composable
-fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
+fun SalesScreen(
+    viewModel: SalesViewModel,
+    onOpen: (String) -> Unit,
+    onInvoice: (List<String>) -> Unit = {},
+    onInvoices: () -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
 
@@ -54,14 +61,39 @@ fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
         if (!state.isLoading && state.error == null && state.sales.isEmpty()) {
             Text(stringResource(R.string.sales_empty))
         }
-        TextButton(onClick = viewModel::load) { Text(stringResource(R.string.action_refresh)) }
+        Row {
+            TextButton(onClick = viewModel::load) { Text(stringResource(R.string.action_refresh)) }
+            TextButton(onClick = onInvoices) { Text(stringResource(R.string.invoices_title)) }
+            if (state.isSelecting) {
+                TextButton(onClick = viewModel::cancelSelection) { Text(stringResource(R.string.sales_select_cancel)) }
+            } else {
+                TextButton(onClick = viewModel::startSelection) { Text(stringResource(R.string.sales_select)) }
+            }
+        }
+        val selection = state.selection
+        if (selection != null) {
+            Button(
+                onClick = { onInvoice(state.sales.map { it.id }.filter { it in selection }) },
+                enabled = selection.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(stringResource(R.string.invoice_selected, selection.size)) }
+        }
         LazyColumn(Modifier.weight(1f)) {
             items(state.sales, key = { it.id }) { sale ->
                 ListItem(
                     headlineContent = { Text(MoneyFormatter.formatMxn(sale.amountCents)) },
                     supportingContent = { Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))) },
                     trailingContent = { Text(sale.createdAt.take(10)) },
-                    modifier = Modifier.clickable { onOpen(sale.id) }
+                    leadingContent = selection?.let { sel ->
+                        {
+                            Checkbox(
+                                checked = sale.id in sel,
+                                onCheckedChange = { viewModel.toggle(sale.id) },
+                                enabled = sale.isInvoiceable()
+                            )
+                        }
+                    },
+                    modifier = Modifier.clickable { if (selection != null) viewModel.toggle(sale.id) else onOpen(sale.id) }
                 )
                 HorizontalDivider()
             }
@@ -78,7 +110,7 @@ fun SalesScreen(viewModel: SalesViewModel, onOpen: (String) -> Unit) {
 }
 
 @Composable
-fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit) {
+fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoice: ((String) -> Unit)? = null) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
     var confirm by remember { mutableStateOf<RefundChoice?>(null) }
@@ -99,6 +131,11 @@ fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit) {
             )
             Text(stringResource(R.string.sale_id, sale.id))
             if (sale.createdAt.isNotBlank()) Text(stringResource(R.string.sale_date, sale.createdAt))
+            if (onInvoice != null && sale.copy(status = status).isInvoiceable()) {
+                OutlinedButton(onClick = { onInvoice(sale.id) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.invoice_action))
+                }
+            }
         }
         if (state.isLoading) CircularProgressIndicator()
         state.error?.let { LoadErrorMessage(it, viewModel::load) }

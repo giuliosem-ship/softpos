@@ -24,7 +24,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.net.Uri
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -46,6 +49,14 @@ import mx.softpos.app.ui.merchant.SalesScreen
 import mx.softpos.app.ui.merchant.SalesViewModel
 import mx.softpos.app.ui.merchant.SettingsScreen
 import mx.softpos.app.ui.merchant.SettingsViewModel
+import mx.softpos.app.ui.fiscal.CsdScreen
+import mx.softpos.app.ui.fiscal.CsdViewModel
+import mx.softpos.app.ui.fiscal.InvoiceDetailScreen
+import mx.softpos.app.ui.fiscal.InvoiceDetailViewModel
+import mx.softpos.app.ui.fiscal.InvoiceFormScreen
+import mx.softpos.app.ui.fiscal.InvoiceFormViewModel
+import mx.softpos.app.ui.fiscal.InvoicesScreen
+import mx.softpos.app.ui.fiscal.InvoicesViewModel
 import mx.softpos.app.ui.onboarding.KybScreen
 import mx.softpos.app.ui.onboarding.KybViewModel
 
@@ -57,6 +68,15 @@ private object Routes {
     const val SETTINGS = "settings"
     const val PICKER = "merchant-picker"
     const val ONBOARDING = "onboarding"
+    const val CSD = "csd"
+    const val INVOICES = "invoices"
+    const val INVOICE_NEW = "invoice-new?sales={sales}&replaces={replaces}"
+    const val INVOICE_DETAIL = "invoices/{invoiceId}?substitute={substitute}"
+    fun invoiceNew(saleIds: List<String>) = "invoice-new?sales=" + Uri.encode(saleIds.joinToString(","))
+    /** Motivo 01: substitute of a STAMPED invoice (sales and receptor come from it). */
+    fun invoiceReplacement(invoiceId: String) = "invoice-new?replaces=" + Uri.encode(invoiceId)
+    fun invoiceDetail(id: String, substituteUuid: String? = null) =
+        "invoices/" + Uri.encode(id) + (substituteUuid?.let { "?substitute=" + Uri.encode(it) } ?: "")
     fun saleDetail(id: String) = "sales/$id"
 }
 
@@ -121,7 +141,15 @@ private fun MerchantApp(container: AppContainer) {
             }
             composable(Routes.SALES) { entry ->
                 val vm = viewModel(entry) { SalesViewModel(container.salesApi, container::currentMerchantId) }
-                SalesScreen(vm, onOpen = { nav.navigate(Routes.saleDetail(it)) })
+                SalesScreen(
+                    vm,
+                    onOpen = { nav.navigate(Routes.saleDetail(it)) },
+                    onInvoice = { ids ->
+                        vm.cancelSelection()
+                        nav.navigate(Routes.invoiceNew(ids))
+                    },
+                    onInvoices = { nav.navigate(Routes.INVOICES) }
+                )
             }
             composable(Routes.SALE_DETAIL) { entry ->
                 // The list's ViewModel holds the loaded sale; the detail reads the card payment.
@@ -131,7 +159,7 @@ private fun MerchantApp(container: AppContainer) {
                 val vm = viewModel(entry) {
                     SaleDetailViewModel(sale, container.cardPaymentsApi, container::currentRole, container.devCardSimulator)
                 }
-                SaleDetailScreen(vm, onBack = { nav.popBackStack() })
+                SaleDetailScreen(vm, onBack = { nav.popBackStack() }, onInvoice = { nav.navigate(Routes.invoiceNew(listOf(it))) })
             }
             composable(Routes.SETTINGS) {
                 val vm = viewModel {
@@ -140,7 +168,58 @@ private fun MerchantApp(container: AppContainer) {
                         membershipCount = { container.memberships().size }
                     )
                 }
-                SettingsScreen(vm, onSwitchMerchant = { nav.navigate(Routes.PICKER) })
+                SettingsScreen(vm, onSwitchMerchant = { nav.navigate(Routes.PICKER) }, onCsd = { nav.navigate(Routes.CSD) }, onInvoices = { nav.navigate(Routes.INVOICES) })
+            }
+            composable(Routes.CSD) {
+                val vm = viewModel {
+                    CsdViewModel(container.csdApi, container.merchantApi, container::currentMerchantId, container::currentRole)
+                }
+                CsdScreen(vm, container.csdFileReader, onBack = { nav.popBackStack() })
+            }
+            composable(Routes.INVOICES) {
+                val vm = viewModel { InvoicesViewModel(container.invoiceApi, container::currentMerchantId) }
+                InvoicesScreen(vm, onOpen = { nav.navigate(Routes.invoiceDetail(it)) }, onBack = { nav.popBackStack() })
+            }
+            composable(
+                Routes.INVOICE_NEW,
+                arguments = listOf(
+                    navArgument("sales") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("replaces") { type = NavType.StringType; defaultValue = "" }
+                )
+            ) { entry ->
+                val ids = entry.arguments?.getString("sales").orEmpty().split(',').filter { it.isNotBlank() }
+                val replaces = entry.arguments?.getString("replaces").orEmpty().ifBlank { null }
+                val vm = viewModel(entry) {
+                    InvoiceFormViewModel(
+                        ids, container.invoiceApi, container.csdApi, container.satCatalogs, container::currentMerchantId,
+                        replacesInvoiceId = replaces
+                    )
+                }
+                InvoiceFormScreen(
+                    vm,
+                    onCsd = { nav.navigate(Routes.CSD) },
+                    onOpenInvoice = { id ->
+                        nav.navigate(Routes.invoiceDetail(id)) { popUpTo(Routes.INVOICE_NEW) { inclusive = true } }
+                    },
+                    onBack = { nav.popBackStack() },
+                    onCancelOriginal = { original, uuid ->
+                        nav.navigate(Routes.invoiceDetail(original, uuid)) { popUpTo(Routes.INVOICE_NEW) { inclusive = true } }
+                    }
+                )
+            }
+            composable(
+                Routes.INVOICE_DETAIL,
+                arguments = listOf(navArgument("substitute") { type = NavType.StringType; defaultValue = "" })
+            ) { entry ->
+                val id = entry.arguments?.getString("invoiceId").orEmpty()
+                val substitute = entry.arguments?.getString("substitute").orEmpty().ifBlank { null }
+                val vm = viewModel(entry) {
+                    InvoiceDetailViewModel(
+                        id, container.invoiceApi, container::currentMerchantId, container::currentRole, container.invoiceFiles,
+                        substituteUuid = substitute
+                    )
+                }
+                InvoiceDetailScreen(vm, onBack = { nav.popBackStack() }, onReplace = { nav.navigate(Routes.invoiceReplacement(it)) })
             }
             composable(Routes.PICKER) {
                 val vm = viewModel {

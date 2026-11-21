@@ -11,9 +11,17 @@ import mx.softpos.app.auth.MembershipInfo
 import mx.softpos.app.auth.SessionManager
 import mx.softpos.app.auth.authenticatedClient
 import mx.softpos.app.auth.keystoreTokenStore
+import mx.softpos.app.fiscal.CsdApi
+import mx.softpos.app.fiscal.HttpCsdApi
+import mx.softpos.app.fiscal.HttpInvoiceApi
+import mx.softpos.app.fiscal.InvoiceApi
+import mx.softpos.app.fiscal.SatCatalogCache
 import mx.softpos.app.kyb.HttpKybApi
 import mx.softpos.app.kyb.KybApi
 import mx.softpos.app.merchant.HttpMerchantApi
+import mx.softpos.app.ui.fiscal.CacheInvoiceFileStore
+import mx.softpos.app.ui.fiscal.CsdFileReader
+import mx.softpos.app.ui.fiscal.InvoiceFileStore
 import mx.softpos.app.ui.onboarding.DocumentReader
 import mx.softpos.app.merchant.MerchantApi
 import mx.softpos.app.payments.CardPaymentsApi
@@ -55,6 +63,17 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
 
     val documentReader: DocumentReader by lazy { DocumentReader(appContext) }
 
+    val csdApi: CsdApi by lazy { HttpCsdApi(baseUrl, apiClient) }
+
+    val csdFileReader: CsdFileReader by lazy { CsdFileReader(appContext) }
+
+    val invoiceApi: InvoiceApi by lazy { HttpInvoiceApi(baseUrl, apiClient) }
+
+    /** SAT catalogs, in memory for the process (TTL + ETag revalidation). */
+    val satCatalogs: SatCatalogCache by lazy { SatCatalogCache(invoiceApi) }
+
+    val invoiceFiles: InvoiceFileStore by lazy { CacheInvoiceFileStore(appContext) }
+
     /** Real `/api/v1/card-payments/...` contract (docs/ACQUIRER_INTEGRATION.md) in every build. */
     val cardPaymentsApi: CardPaymentsApi by lazy { HttpCardPaymentsApi(baseUrl, apiClient) }
 
@@ -85,6 +104,9 @@ class AppContainer(context: Context, baseUrl: String = BuildConfig.API_BASE_URL)
 
     /** Local wipe is immediate; the server revocation runs in [appScope]. */
     fun logout() {
-        appScope.launch { sessionManager.logout() }
+        appScope.launch {
+            invoiceFiles.clear()
+            sessionManager.logout()
+        }
     }
 }

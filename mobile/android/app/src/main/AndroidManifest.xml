@@ -41,6 +41,17 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/kyb_file_paths" />
         </provider>
+
+        <!-- Shares downloaded CFDI PDF/XML (cache/invoices/ only) with the share sheet. -->
+        <provider
+            android:name=".ui.fiscal.InvoiceFileProvider"
+            android:authorities="${applicationId}.invoicefiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/invoice_file_paths" />
+        </provider>
     </application>
 
 </manifest>

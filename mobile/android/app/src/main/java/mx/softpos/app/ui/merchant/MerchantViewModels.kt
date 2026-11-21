@@ -19,6 +19,8 @@ import mx.softpos.app.kyb.KybApi
 import mx.softpos.app.kyb.KybStatus
 import mx.softpos.app.kyb.KybStatusValue
 import mx.softpos.app.payments.Sale
+import mx.softpos.app.payments.SaleStatus
+import mx.softpos.app.payments.SaleStatusGroup
 import mx.softpos.app.payments.SalesApi
 
 /** Tenant of the current session, or null when no merchant is selected. */
@@ -103,10 +105,17 @@ data class SalesUiState(
     val sales: List<Sale> = emptyList(),
     /** Cursor for `before=`; null once the last page was read. */
     val nextCursor: String? = null,
-    val error: LoadError? = null
+    val error: LoadError? = null,
+    /** Multi-select for one CFDI covering several sales; null = not selecting. */
+    val selection: Set<String>? = null
 ) {
     val canLoadMore: Boolean get() = nextCursor != null && !isLoading && !isLoadingMore
+    val isSelecting: Boolean get() = selection != null
 }
+
+/** Sales that can go on a CFDI: money actually received (the backend re-checks, `409 SALE_ALREADY_INVOICED`). */
+fun Sale.isInvoiceable(): Boolean =
+    SaleStatus.group(status).let { it == SaleStatusGroup.APPROVED || it == SaleStatusGroup.PARTIALLY_REFUNDED }
 
 /** Sales history with cursor pagination (`next_cursor` → `before`). */
 class SalesViewModel(
@@ -129,7 +138,11 @@ class SalesViewModel(
         viewModelScope.launch {
             val result = withContext(io) { salesApi.listSales(id) }
             _state.value = when (result) {
-                is ApiResult.Success -> SalesUiState(sales = result.data.items, nextCursor = result.data.nextCursor)
+                is ApiResult.Success -> SalesUiState(
+                    sales = result.data.items,
+                    nextCursor = result.data.nextCursor,
+                    selection = _state.value.selection?.let { sel -> sel.filterTo(HashSet()) { id -> result.data.items.any { it.id == id } } }
+                )
                 is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
             }
         }
@@ -161,6 +174,21 @@ class SalesViewModel(
     }
 
     fun sale(id: String): Sale? = _state.value.sales.firstOrNull { it.id == id }
+
+    fun startSelection() = _state.update { it.copy(selection = emptySet()) }
+
+    fun cancelSelection() = _state.update { it.copy(selection = null) }
+
+    /** Only invoiceable sales can be selected. */
+    fun toggle(id: String) = _state.update { s ->
+        val sel = s.selection ?: return@update s
+        val sale = s.sales.firstOrNull { it.id == id } ?: return@update s
+        when {
+            id in sel -> s.copy(selection = sel - id)
+            sale.isInvoiceable() -> s.copy(selection = sel + id)
+            else -> s
+        }
+    }
 }
 
 data class SettingsUiState(

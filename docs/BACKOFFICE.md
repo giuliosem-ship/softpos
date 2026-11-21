@@ -93,10 +93,44 @@ document download, approve / reject / block / unblock and ledger; payment
 search; payouts with "retry reconciliation"; processor reconciliation
 (resolve); audit log.
 
+## Audit log immutability and KYB retention (MVP-28, migration 021)
+
+- **Database-enforced append-only:** triggers on `operator_audit_log` reject
+  `UPDATE`, `DELETE` (row level) and `TRUNCATE` (statement level) with
+  `insufficient_privilege` ("operator_audit_log is append-only") for every
+  role, including the table owner. `INSERT` and `SELECT` are unchanged.
+  Removing the trigger requires DDL (`DROP TRIGGER`), which the app role
+  must not be able to run (see below).
+- **Defense in depth — grants:** in production the server should connect
+  with an application role that does not own the schema (so it cannot drop
+  the trigger) and has no `UPDATE`/`DELETE`/`TRUNCATE` on the log. Run as the
+  schema owner after the migrations (example role `kerno_app`):
+
+  ```sql
+  -- the app role never owns tables (ownership implies every privilege)
+  REVOKE UPDATE, DELETE, TRUNCATE ON operator_audit_log FROM kerno_app;
+  GRANT SELECT, INSERT ON operator_audit_log TO kerno_app;
+  GRANT USAGE ON SEQUENCE operator_audit_log_id_seq TO kerno_app;
+  -- KYB files are kept: no deletes of onboarding records / documents
+  REVOKE DELETE, TRUNCATE ON merchant_kyb, kyb_documents, kyb_document_blobs, sat69b_exceptions FROM kerno_app;
+  ```
+
+  Migrations then run with the owner role (a separate `DATABASE_URL` for the
+  migration step), which is a deployment change still pending (today one
+  role runs migrations and the app).
+- **KYB retention:** `merchant_kyb.merchant_id` and `kyb_documents.merchant_id`
+  are `ON DELETE RESTRICT` (were `CASCADE`): deleting a merchant with an
+  onboarding file or documents fails instead of silently erasing the
+  expediente. A retention / deletion policy (PLD, LFPDPPP) must remove them
+  explicitly (pending, `docs/KYB.md`).
+- **Still pending:** periodic export of the log to immutable storage
+  (e.g. S3 Object Lock / WORM) with hash chaining, so that even the database
+  owner cannot rewrite history unnoticed.
+
 ## Pending
 
 Per-operator permissions (all platform operators can do everything), 2FA /
 hardware keys for operators, IP allowlist / VPN in front of `/backoffice/`,
 correcting journals for reconciliation differences, export of the audit log
-to immutable storage. CFDI stamping retries exist (above) but run against
+to immutable storage (the database already rejects changes, see above). CFDI stamping retries exist (above) but run against
 the mock PAC until a real one is contracted.

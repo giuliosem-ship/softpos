@@ -40,7 +40,7 @@ var (
 	// ErrInvoiceExists: the merchant already used the idempotency key (the
 	// existing invoice is returned with it).
 	ErrInvoiceExists = errors.New("invoice idempotency key already used")
-	// ErrGlobalInvoiceExists: a live factura global already covers the period.
+	// ErrGlobalInvoiceExists: a live factura global already has that part of the period.
 	ErrGlobalInvoiceExists = errors.New("a live global invoice exists for the period")
 	// ErrInvoiceConflict: the invoice is not in the expected status.
 	ErrInvoiceConflict = errors.New("invoice changed concurrently")
@@ -73,6 +73,7 @@ type InvoiceRecord struct {
 	FormaPago              string
 	Receptor               json.RawMessage
 	GlobalPeriod           string
+	GlobalPart             int // GLOBAL: part number within the period (1, 2, … when split)
 	ReplacesInvoiceID      string
 	RelatedInvoiceID       string // CREDIT_NOTE: the credited invoice (TipoRelacion 01)
 	XML                    []byte
@@ -122,6 +123,7 @@ type InvoiceQuery struct {
 	Kind       string
 	// RelatedInvoiceID lists the credit notes of one invoice.
 	RelatedInvoiceID string
+	GlobalPeriod     string
 	Before           *SalesCursor
 	Limit            int
 }
@@ -197,7 +199,7 @@ func NewSQLInvoiceRepository(db *sql.DB) *SQLInvoiceRepository { return &SQLInvo
 
 const invoiceColumns = `id, merchant_id, kind, status, idempotency_key, request_hash, serie, folio, COALESCE(uuid, ''),
 	subtotal_cents, iva_cents, isr_retenido_cents, total_cents, forma_pago, receptor_json, global_period, replaces_invoice_id,
-	related_invoice_id, xml, sealed_at, error_code, error_detail, stamp_attempts, stamp_lease_until, cancel_motivo, cancel_folio_sustitucion,
+	related_invoice_id, global_part, xml, sealed_at, error_code, error_detail, stamp_attempts, stamp_lease_until, cancel_motivo, cancel_folio_sustitucion,
 	cancel_status, cancel_requested_at, cancel_resolved_at, emailed_at, created_at, stamped_at, updated_at`
 
 func utcPtr(t sql.NullTime) *time.Time {
@@ -214,7 +216,7 @@ func scanInvoice(s rowScanner) (InvoiceRecord, error) {
 	var sealed, lease, creq, cres, emailed, stamped sql.NullTime
 	err := s.Scan(&r.ID, &r.MerchantID, &r.Kind, &r.Status, &r.IdempotencyKey, &r.RequestHash, &r.Serie, &r.Folio, &r.UUID,
 		&r.SubtotalCents, &r.IVACents, &r.ISRRetenidoCents, &r.TotalCents, &r.FormaPago, &receptor, &r.GlobalPeriod, &r.ReplacesInvoiceID,
-		&r.RelatedInvoiceID, &r.XML, &sealed, &r.ErrorCode, &r.ErrorDetail, &r.StampAttempts, &lease, &r.CancelMotivo, &r.CancelFolioSustitucion,
+		&r.RelatedInvoiceID, &r.GlobalPart, &r.XML, &sealed, &r.ErrorCode, &r.ErrorDetail, &r.StampAttempts, &lease, &r.CancelMotivo, &r.CancelFolioSustitucion,
 		&r.CancelStatus, &creq, &cres, &emailed, &r.CreatedAt, &stamped, &r.UpdatedAt)
 	if err != nil {
 		return r, err
@@ -281,6 +283,9 @@ func (r *SQLInvoiceRepository) CreateInvoice(ctx context.Context, rec InvoiceRec
 	} else if found {
 		return existing, ErrInvoiceExists
 	}
+	if rec.GlobalPart <= 0 {
+		rec.GlobalPart = 1
+	}
 	if err := tx.QueryRowContext(ctx, `INSERT INTO invoice_folios (merchant_id, serie, last_folio) VALUES ($1, $2, 1)
 		ON CONFLICT (merchant_id, serie) DO UPDATE SET last_folio = invoice_folios.last_folio + 1 RETURNING last_folio`,
 		rec.MerchantID, rec.Serie).Scan(&rec.Folio); err != nil {
@@ -290,11 +295,11 @@ func (r *SQLInvoiceRepository) CreateInvoice(ctx context.Context, rec InvoiceRec
 	rec.CreatedAt, rec.UpdatedAt = now, now
 	res, err := tx.ExecContext(ctx, `INSERT INTO invoices (id, merchant_id, kind, status, idempotency_key, request_hash, serie, folio,
 		subtotal_cents, iva_cents, isr_retenido_cents, total_cents, forma_pago, receptor_json, global_period, replaces_invoice_id,
-		related_invoice_id, stamp_attempts, stamp_lease_until, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20) ON CONFLICT DO NOTHING`,
+		related_invoice_id, global_part, stamp_attempts, stamp_lease_until, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21) ON CONFLICT DO NOTHING`,
 		rec.ID, rec.MerchantID, rec.Kind, rec.Status, rec.IdempotencyKey, rec.RequestHash, rec.Serie, rec.Folio,
 		rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents, rec.FormaPago, []byte(rec.Receptor), rec.GlobalPeriod,
-		rec.ReplacesInvoiceID, rec.RelatedInvoiceID, rec.StampAttempts, rec.StampLeaseUntil, now)
+		rec.ReplacesInvoiceID, rec.RelatedInvoiceID, rec.GlobalPart, rec.StampAttempts, rec.StampLeaseUntil, now)
 	if err != nil {
 		return InvoiceRecord{}, fmt.Errorf("insert invoice: %w", err)
 	}
@@ -369,6 +374,9 @@ func (r *SQLInvoiceRepository) ListInvoices(ctx context.Context, q InvoiceQuery)
 	}
 	if q.RelatedInvoiceID != "" {
 		conds = append(conds, "related_invoice_id = "+arg(q.RelatedInvoiceID))
+	}
+	if q.GlobalPeriod != "" {
+		conds = append(conds, "global_period = "+arg(q.GlobalPeriod))
 	}
 	if q.Before != nil {
 		conds = append(conds, fmt.Sprintf("(created_at, id) < (%s, %s)", arg(q.Before.CreatedAt.UTC()), arg(q.Before.ID)))
@@ -599,9 +607,12 @@ func (m *MemoryInvoiceRepository) CreateInvoice(_ context.Context, rec InvoiceRe
 		}
 	}
 	credit := rec.Kind == InvoiceCreditNote
+	if rec.GlobalPart <= 0 {
+		rec.GlobalPart = 1
+	}
 	if rec.Kind == InvoiceGlobal {
 		for _, r := range m.recs {
-			if r.MerchantID == rec.MerchantID && r.Kind == InvoiceGlobal && r.GlobalPeriod == rec.GlobalPeriod && r.Live() {
+			if r.MerchantID == rec.MerchantID && r.Kind == InvoiceGlobal && r.GlobalPeriod == rec.GlobalPeriod && r.GlobalPart == rec.GlobalPart && r.Live() {
 				return InvoiceRecord{}, ErrGlobalInvoiceExists
 			}
 		}
@@ -672,7 +683,7 @@ func (m *MemoryInvoiceRepository) ListInvoices(_ context.Context, q InvoiceQuery
 	var out []InvoiceRecord
 	for _, r := range m.recs {
 		if (q.MerchantID != "" && r.MerchantID != q.MerchantID) || (q.Kind != "" && r.Kind != q.Kind) ||
-			(q.RelatedInvoiceID != "" && r.RelatedInvoiceID != q.RelatedInvoiceID) ||
+			(q.RelatedInvoiceID != "" && r.RelatedInvoiceID != q.RelatedInvoiceID) || (q.GlobalPeriod != "" && r.GlobalPeriod != q.GlobalPeriod) ||
 			(len(q.Statuses) > 0 && !containsStr(q.Statuses, r.Status)) || !q.Before.admits(r.CreatedAt, r.ID) {
 			continue
 		}
@@ -794,7 +805,7 @@ func (m *MemoryInvoiceRepository) UpdateInvoice(_ context.Context, rec InvoiceRe
 	rec.MerchantID, rec.Kind, rec.IdempotencyKey, rec.RequestHash, rec.Serie, rec.Folio = cur.MerchantID, cur.Kind, cur.IdempotencyKey, cur.RequestHash, cur.Serie, cur.Folio
 	rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents = cur.SubtotalCents, cur.IVACents, cur.ISRRetenidoCents, cur.TotalCents
 	rec.FormaPago, rec.Receptor, rec.GlobalPeriod, rec.ReplacesInvoiceID, rec.StampAttempts = cur.FormaPago, cur.Receptor, cur.GlobalPeriod, cur.ReplacesInvoiceID, cur.StampAttempts
-	rec.RelatedInvoiceID = cur.RelatedInvoiceID
+	rec.RelatedInvoiceID, rec.GlobalPart = cur.RelatedInvoiceID, cur.GlobalPart
 	rec.CreatedAt, rec.UpdatedAt = cur.CreatedAt, time.Now().UTC()
 	rec.XML = append([]byte(nil), rec.XML...)
 	m.recs[rec.ID] = rec

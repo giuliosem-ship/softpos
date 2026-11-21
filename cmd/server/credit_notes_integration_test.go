@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,6 +13,8 @@ import (
 
 	"softpos/pkg/acquirer"
 	"softpos/pkg/fiscal/fiscaltest"
+	"softpos/pkg/store/pgtest"
+	"softpos/pkg/stp"
 )
 
 // TestPGIntegration_CreditNoteJobsExactlyOnce: on PostgreSQL, a refund
@@ -97,5 +100,61 @@ func TestPGIntegration_CreditNoteJobsExactlyOnce(t *testing.T) {
 	if n := countRows(t, db, `SELECT COUNT(*) FROM credit_note_jobs WHERE source_kind = 'CHARGEBACK' AND source_id = 'cb_pg'
 		AND status = 'NOT_REQUIRED' AND flag = 'CHARGEBACK_REVERSED'`); n != 1 {
 		t.Fatal("reversed chargeback job must be flagged and not required")
+	}
+}
+
+// TestPGIntegration_GlobalInvoiceParts: on PostgreSQL a period with more
+// sales than fit in one CFDI gets several live globals (one per part);
+// concurrent worker runs never link a sale twice.
+func TestPGIntegration_GlobalInvoiceParts(t *testing.T) {
+	cfg := Config{SQLDriver: "pgx", DatabaseURL: pgtest.URL(t), STPHMACSecret: "test_secret", JWTSecret: testJWTSecret, VaultMasterKeyHex: testVaultKeyHex}
+	srv, db, _, err := BuildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	const m, clabe, rfc = "merch_pg_parts", "646180123400000007", "CACX7605101P8"
+	if err := srv.RegisterMerchantCLABE(clabe, m, rfc); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := fiscaltest.NewCSD(fiscaltest.CSDOptions{RFC: rfc})
+	if err := srv.RegisterMerchantCSD(m, c.PlainKey, c.CertDER); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.SeedFiscalSettings(context.Background(), m, "06000"); err != nil {
+		t.Fatal(err)
+	}
+	signer := stp.NewSTPSigner(nil, nil, cfg.STPHMACSecret)
+	for i := 0; i < 5; i++ {
+		clave := fmt.Sprintf("PGPART%04d", i)
+		canonical := signer.BuildAbonoCanonicalString(clabe, 11600, clave, "40012", "012180001234567890")
+		rec := doJSON(t, srv, "", http.MethodPost, "/api/v1/webhooks/stp/abono", map[string]any{
+			"id": i + 1, "fechaOperacion": 20261120, "institucionOrdenante": "40012", "institucionBeneficiaria": "646",
+			"claveRastreo": clave, "monto": json.Number("116.00"), "cuentaOrdenante": "012180001234567890",
+			"cuentaBeneficiario": clabe, "firma": signer.SignHMAC(canonical)})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("abono: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	srv.SetGlobalInvoiceMaxConcepts(2)
+	next := time.Now().AddDate(0, 1, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = srv.RunGlobalInvoices(context.Background(), next)
+		}()
+	}
+	wg.Wait()
+	_, _ = srv.RunGlobalInvoices(context.Background(), next) // picks up parts a racing run skipped
+	if n := countRows(t, db, `SELECT COUNT(DISTINCT global_part) FROM invoices WHERE merchant_id = $1 AND kind = 'GLOBAL' AND status = 'STAMPED'`, m); n != 3 {
+		t.Fatalf("expected 3 stamped parts, got %d", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM invoice_sales WHERE merchant_id = $1 AND active`, m); n != 5 {
+		t.Fatalf("each sale in exactly one active global (got %d links)", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM (SELECT sale_id FROM invoice_sales WHERE merchant_id = $1 AND active GROUP BY sale_id HAVING COUNT(*) > 1) d`, m); n != 0 {
+		t.Fatal("a sale linked twice")
 	}
 }

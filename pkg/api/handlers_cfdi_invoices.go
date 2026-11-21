@@ -39,7 +39,7 @@ const (
 	defaultInvoicePg  = 50
 	maxInvoicePg      = 100
 	globalSalesPage   = 1000
-	maxGlobalConcepts = 5000
+	maxGlobalConcepts = 5000 // conceptos per factura global part
 )
 
 // SetInvoiceRepository replaces the in-memory invoice store.
@@ -94,6 +94,7 @@ type InvoiceResponse struct {
 	StampedAt         string          `json:"stamped_at,omitempty"`
 	Error             string          `json:"error,omitempty"`
 	GlobalPeriod      string          `json:"global_period,omitempty"`
+	GlobalPart        int             `json:"global_part,omitempty"` // GLOBAL: part of the period (1, 2, … when split)
 	ReplacesInvoiceID string          `json:"replaces_invoice_id,omitempty"`
 	// RelatedInvoiceID: the invoice a CREDIT_NOTE credits (TipoRelacion 01).
 	RelatedInvoiceID string               `json:"related_invoice_id,omitempty"`
@@ -112,6 +113,9 @@ func invoiceResponse(r store.InvoiceRecord) InvoiceResponse {
 		TotalCents: r.TotalCents, SubtotalCents: r.SubtotalCents, IVACents: r.IVACents, ISRRetenidoCents: r.ISRRetenidoCents,
 		Receptor: r.Receptor, SaleIDs: r.SaleIDs, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339), StampedAt: rfc3339(r.StampedAt),
 		Error: r.ErrorCode, GlobalPeriod: r.GlobalPeriod, ReplacesInvoiceID: r.ReplacesInvoiceID, RelatedInvoiceID: r.RelatedInvoiceID}
+	if r.Kind == store.InvoiceGlobal {
+		out.GlobalPart = max(r.GlobalPart, 1)
+	}
 	if r.Folio > 0 {
 		out.Folio = strconv.FormatInt(r.Folio, 10)
 	}
@@ -964,32 +968,60 @@ type globalPeriod struct {
 	start, end time.Time
 }
 
-// closedGlobalPeriods returns the last two closed periods before now
-// (America/Mexico_City boundaries).
-func closedGlobalPeriods(periodicity string, now time.Time) []globalPeriod {
+// globalPeriodOf is the period (America/Mexico_City boundaries) that t falls in.
+func globalPeriodOf(periodicity string, t time.Time) globalPeriod {
 	loc := fiscal.MexicoCityLocation()
-	local := now.In(loc)
-	var out []globalPeriod
+	local := t.In(loc)
 	if periodicity == store.GlobalDaily {
-		today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-		for i := 1; i <= 2; i++ {
-			start := today.AddDate(0, 0, -i)
-			out = append(out, globalPeriod{key: "D" + start.Format("2006-01-02"), start: start, end: start.AddDate(0, 0, 1)})
-		}
-		return out
+		start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+		return globalPeriod{key: "D" + start.Format("2006-01-02"), start: start, end: start.AddDate(0, 0, 1)}
 	}
-	month := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
-	for i := 1; i <= 2; i++ {
-		start := month.AddDate(0, -i, 0)
-		out = append(out, globalPeriod{key: "M" + start.Format("2006-01"), start: start, end: start.AddDate(0, 1, 0)})
-	}
-	return out
+	start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
+	return globalPeriod{key: "M" + start.Format("2006-01"), start: start, end: start.AddDate(0, 1, 0)}
 }
 
-// RunGlobalInvoices issues, per approved merchant with a CSD, the factura
-// global of each closed period (MONTHLY or DAILY per fiscal settings) for
-// the sales of the period not individually invoiced. It returns the
-// invoices created or retried.
+// DefaultGlobalInvoiceMaxAge bounds the reconciliation of un-invoiced sales
+// (CFDI_GLOBAL_MAX_AGE): the SAT expects the factura global within 72 h of
+// the period end (RMF 2.7.1.21); later parts are still issued (and logged)
+// for sales up to this age; older ones are alerted for manual handling.
+const DefaultGlobalInvoiceMaxAge = 90 * 24 * time.Hour
+
+// SetGlobalInvoiceMaxAge sets how old an un-invoiced sale may be to still
+// get into an automatic factura global (<= 0 keeps the default).
+func (s *Server) SetGlobalInvoiceMaxAge(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.globalMaxAge = d
+}
+
+// SetGlobalInvoiceMaxConcepts sets the conceptos per factura global part
+// (<= 0 keeps maxGlobalConcepts; tests and tuning).
+func (s *Server) SetGlobalInvoiceMaxConcepts(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.globalMaxConcepts = n
+}
+
+func (s *Server) globalLimits() (maxAge time.Duration, maxConcepts int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	maxAge, maxConcepts = s.globalMaxAge, s.globalMaxConcepts
+	if maxAge <= 0 {
+		maxAge = DefaultGlobalInvoiceMaxAge
+	}
+	if maxConcepts <= 0 {
+		maxConcepts = maxGlobalConcepts
+	}
+	return maxAge, maxConcepts
+}
+
+// RunGlobalInvoices, per approved merchant with a CSD: retries its PENDING
+// globals, then reconciles every eligible sale of a closed period that is in
+// no active invoice and is at most the max age old (late captures, sales
+// freed by a motivo 04 cancellation or by a FAILED stamp...) into new
+// factura global parts of its period, at most maxGlobalConcepts conceptos
+// each; eligible sales older than the window without invoice are alerted.
+// It returns the invoices created or retried.
 func (s *Server) RunGlobalInvoices(ctx context.Context, now time.Time) (int, error) {
 	repo, _ := s.kybStore()
 	recs, err := repo.ListKYB(ctx, store.KYBQuery{Status: kyb.StatusApproved, Limit: 100000})
@@ -1009,10 +1041,65 @@ func (s *Server) RunGlobalInvoices(ctx context.Context, now time.Time) (int, err
 			slog.Warn("factura global skipped: fiscal profile incomplete", "merchant_id", k.MerchantID, "error", err)
 			continue
 		}
-		for _, p := range closedGlobalPeriods(emisor.Settings.GlobalPeriodicity, now) {
-			out, err := s.issueGlobal(ctx, k.MerchantID, emisor, p, now)
+		m, err := s.reconcileGlobals(ctx, k.MerchantID, emisor, now)
+		if err != nil {
+			slog.Error("factura global failed", "merchant_id", k.MerchantID, "error", err)
+		}
+		n += m
+	}
+	return n, nil
+}
+
+func (s *Server) reconcileGlobals(ctx context.Context, merchantID string, emisor emisorProfile, now time.Time) (int, error) {
+	n := 0
+	pending, err := s.invoiceRepo().ListInvoices(ctx, store.InvoiceQuery{MerchantID: merchantID, Kind: store.InvoiceGlobal,
+		Statuses: []string{store.InvoicePending}, Limit: 1000})
+	if err != nil {
+		return 0, err
+	}
+	for _, g := range pending {
+		if g.StampLeaseUntil != nil && g.StampLeaseUntil.After(now) {
+			continue
+		}
+		if _, err := s.RetryInvoice(ctx, merchantID, g.ID); err == nil {
+			n++
+		} else if !errors.Is(err, errInvoiceNotRetryable) {
+			slog.Warn("factura global retry failed", "merchant_id", merchantID, "invoice_id", g.ID, "error", err)
+		}
+	}
+
+	maxAge, maxConcepts := s.globalLimits()
+	periodicity := emisor.Settings.GlobalPeriodicity
+	windowStart, open := now.Add(-maxAge), globalPeriodOf(periodicity, now).start
+	byPeriod := map[string][]saleLine{}
+	periods := map[string]globalPeriod{}
+	if windowStart.Before(open) {
+		err = s.eachUninvoicedSale(ctx, merchantID, windowStart, open, 0, func(l saleLine) {
+			p := globalPeriodOf(periodicity, l.createdAt)
+			periods[p.key] = p
+			byPeriod[p.key] = append(byPeriod[p.key], l)
+		})
+		if err != nil {
+			return n, err
+		}
+	}
+	keys := make([]string, 0, len(byPeriod))
+	for k := range byPeriod {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines := byPeriod[k]
+		sort.Slice(lines, func(i, j int) bool {
+			if !lines[i].createdAt.Equal(lines[j].createdAt) {
+				return lines[i].createdAt.Before(lines[j].createdAt)
+			}
+			return lines[i].SaleID < lines[j].SaleID
+		})
+		for i := 0; i < len(lines); i += maxConcepts {
+			out, err := s.issueGlobalPart(ctx, merchantID, emisor, periods[k], lines[i:min(i+maxConcepts, len(lines))], now)
 			if err != nil {
-				slog.Error("factura global failed", "merchant_id", k.MerchantID, "period", p.key, "error", err)
+				slog.Error("factura global part failed", "merchant_id", merchantID, "period", k, "error", err)
 				continue
 			}
 			if out != nil {
@@ -1020,66 +1107,82 @@ func (s *Server) RunGlobalInvoices(ctx context.Context, now time.Time) (int, err
 			}
 		}
 	}
+
+	// Eligible sales older than the window that still have no invoice.
+	var stale []string
+	staleBefore := windowStart
+	if open.Before(staleBefore) {
+		staleBefore = open
+	}
+	if err := s.eachUninvoicedSale(ctx, merchantID, time.Time{}, staleBefore, staleSalesScan, func(l saleLine) {
+		stale = append(stale, l.SaleID)
+	}); err != nil {
+		return n, err
+	}
+	if len(stale) > 0 {
+		slog.Error("ALERT eligible sales older than the factura global window have no invoice", "merchant_id", merchantID,
+			"count", len(stale), "max_age", maxAge.String(), "sale_ids", strings.Join(stale[:min(len(stale), 20)], ","))
+	}
 	return n, nil
 }
 
-func (s *Server) issueGlobal(ctx context.Context, merchantID string, emisor emisorProfile, p globalPeriod, now time.Time) (*store.InvoiceRecord, error) {
+// staleSalesScan bounds the alert scan to the newest sales before the window.
+const staleSalesScan = 1000
+
+// eachUninvoicedSale calls fn for every invoiceable sale created in
+// [from, to) that is in no active invoice (newest first; limit 0 = all).
+func (s *Server) eachUninvoicedSale(ctx context.Context, merchantID string, from, to time.Time, limit int, fn func(saleLine)) error {
 	sales, ok := s.salesRepo()
 	if !ok {
-		return nil, errSalesUnavailable
+		return errSalesUnavailable
 	}
-	var all []store.SaleRecord
 	var before *store.SalesCursor
+	seen := 0
 	for {
-		page, err := sales.ListSales(ctx, store.SalesQuery{MerchantID: merchantID, From: p.start, To: p.end, Before: before, Limit: globalSalesPage})
+		page, err := sales.ListSales(ctx, store.SalesQuery{MerchantID: merchantID, From: from, To: to, Before: before, Limit: globalSalesPage})
 		if err != nil {
-			return nil, err
+			return err
 		}
-		all = append(all, page...)
-		if len(page) < globalSalesPage || len(all) >= maxGlobalConcepts {
-			break
+		ids := make([]string, len(page))
+		for i, r := range page {
+			ids[i] = r.ID
+		}
+		holders, err := s.invoiceRepo().ActiveInvoicesForSales(ctx, merchantID, ids)
+		if err != nil {
+			return err
+		}
+		for _, rec := range page {
+			if _, taken := holders[rec.ID]; taken {
+				continue
+			}
+			l, err := s.invoiceableLine(ctx, rec)
+			if err != nil {
+				var se *saleError
+				if errors.As(err, &se) {
+					continue // refunded / declined / uncaptured sales are not invoiced
+				}
+				return err
+			}
+			fn(l)
+		}
+		seen += len(page)
+		if len(page) < globalSalesPage || (limit > 0 && seen >= limit) {
+			return nil
 		}
 		last := page[len(page)-1]
 		before = &store.SalesCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 	}
-	ids := make([]string, len(all))
-	for i, r := range all {
-		ids[i] = r.ID
-	}
-	holders, err := s.invoiceRepo().ActiveInvoicesForSales(ctx, merchantID, ids)
-	if err != nil {
-		return nil, err
-	}
-	var lines []saleLine
-	for _, rec := range all {
-		if _, taken := holders[rec.ID]; taken {
-			continue
-		}
-		l, err := s.invoiceableLine(ctx, rec)
-		if err != nil {
-			var se *saleError
-			if errors.As(err, &se) {
-				continue // refunded / declined sales are not invoiced
-			}
-			return nil, err
-		}
-		lines = append(lines, l)
-	}
-	if len(lines) == 0 {
-		return nil, nil
-	}
-	sort.Slice(lines, func(i, j int) bool {
-		if !lines[i].createdAt.Equal(lines[j].createdAt) {
-			return lines[i].createdAt.Before(lines[j].createdAt)
-		}
-		return lines[i].SaleID < lines[j].SaleID
-	})
+}
+
+// issueGlobalPart issues one factura global part for lines (sales of period
+// p in no active invoice). The idempotency key is derived from the period and
+// the part's sale set, so reruns never duplicate it: a FAILED part waits for
+// the backoffice retry, a CANCELED one (motivo 04) moves to the next suffix.
+func (s *Server) issueGlobalPart(ctx context.Context, merchantID string, emisor emisorProfile, p globalPeriod, lines []saleLine, now time.Time) (*store.InvoiceRecord, error) {
 	saleIDs := make([]string, len(lines))
 	for i, l := range lines {
 		saleIDs[i] = l.SaleID
 	}
-	// Deterministic key per (period, sale set); a canceled global of the same
-	// set (motivo 04 and the sales freed again) moves to the next suffix.
 	base := "global:" + p.key + ":" + requestHash(saleIDs)[:16]
 	key := base
 	for i := 1; ; i++ {
@@ -1090,18 +1193,18 @@ func (s *Server) issueGlobal(ctx context.Context, merchantID string, emisor emis
 		if !found {
 			break
 		}
-		switch existing.Status {
-		case store.InvoicePending:
-			out, err := s.RetryInvoice(ctx, merchantID, existing.ID)
-			if errors.Is(err, errInvoiceNotRetryable) {
-				return nil, nil
-			}
-			return &out, err
-		case store.InvoiceCanceled:
-			key = fmt.Sprintf("%s:%d", base, i)
-			continue
+		if existing.Status != store.InvoiceCanceled {
+			return nil, nil // live (another worker) or FAILED (backoffice retry)
 		}
-		return nil, nil // FAILED globals are retried from the backoffice
+		key = fmt.Sprintf("%s:%d", base, i)
+	}
+	part := 1
+	prior, err := s.invoiceRepo().ListInvoices(ctx, store.InvoiceQuery{MerchantID: merchantID, Kind: store.InvoiceGlobal, GlobalPeriod: p.key, Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range prior {
+		part = max(part, g.GlobalPart+1)
 	}
 	signer, err := s.activeSigner(merchantID, now)
 	if err != nil {
@@ -1112,7 +1215,7 @@ func (s *Server) issueGlobal(ctx context.Context, merchantID string, emisor emis
 		"regimen_fiscal": "616", "codigo_postal": emisor.LugarExpedicion, "uso_cfdi": "S01"})
 	rec := store.InvoiceRecord{ID: newInvoiceID(), MerchantID: merchantID, Kind: store.InvoiceGlobal, Status: store.InvoicePending,
 		IdempotencyKey: key, RequestHash: requestHash(saleIDs), Serie: serieGlobal, FormaPago: formaPagoFor(lines),
-		Receptor: receptorJSON, GlobalPeriod: p.key, StampAttempts: 1}
+		Receptor: receptorJSON, GlobalPeriod: p.key, GlobalPart: part, StampAttempts: 1}
 	_, tot, err := fiscal.BuildInvoiceComprobante(s.invoiceSpec(rec, emisor, fiscal.Receptor{}, lines, "", global, now))
 	if err != nil {
 		return nil, err
@@ -1122,7 +1225,7 @@ func (s *Server) issueGlobal(ctx context.Context, merchantID string, emisor emis
 	rec.StampLeaseUntil = &lease
 	created, err := s.invoiceRepo().CreateInvoice(ctx, rec, storeLines(lines))
 	if errors.Is(err, store.ErrGlobalInvoiceExists) || errors.Is(err, store.ErrInvoiceExists) {
-		return nil, nil
+		return nil, nil // a concurrent run took the part number: next run
 	}
 	var si *store.SaleInvoicedError
 	if errors.As(err, &si) {
@@ -1132,7 +1235,7 @@ func (s *Server) issueGlobal(ctx context.Context, merchantID string, emisor emis
 		return nil, err
 	}
 	if late := now.Sub(p.end); late > 72*time.Hour {
-		slog.Warn("factura global issued after the 72 h SAT window", "merchant_id", merchantID, "period", p.key, "late", late.Truncate(time.Hour))
+		slog.Warn("factura global issued after the 72 h SAT window", "merchant_id", merchantID, "period", p.key, "part", part, "late", late.Truncate(time.Hour))
 	}
 	out := s.stampInvoice(ctx, created, signer, now)
 	return &out, nil

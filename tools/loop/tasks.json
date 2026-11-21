@@ -1290,6 +1290,20 @@
       "test_results": "go vet clean; go test -race all ok; PGIntegration CreditNoteJobsExactlyOnce (concurrent duplicate refund deliveries -> one job; rolled-back refund leaves none; 3 concurrent workers -> one stamped egreso; chargeback opened+reversed -> NOT_REQUIRED + flag); xsltproc golden 14 variants + built egresos.",
       "audit_notes": "Accountant to confirm egreso (vs. cancelación con sustitución), 84111506/ACT, G02 and InformacionGlobal on the egreso of a global. A credited invoice later replaced with motivo 01 keeps its egreso related to the canceled UUID. Reversal racing an issuing worker ends ISSUED and flagged.",
       "priority": 83
+    },
+    {
+      "id": "MVP-24",
+      "component": "fiscal",
+      "title": "Factura global robustness (parts per period, reconciliation of all un-invoiced sales, stale-sale ALERT) and CFDI Fecha in the LugarExpedicion time zone",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/global_invoices_test.go, pkg/fiscal/timezone_test.go, pkg/api/invoices_test.go, cmd/server/credit_notes_integration_test.go (GlobalInvoiceParts)",
+        "implementation": "migrations/018_credit_notes_and_global_parts.*.sql (global_part, unique live global per period+part), pkg/store/invoices.go, pkg/api/handlers_cfdi_invoices.go, pkg/api/server.go, pkg/fiscal/timezone.go, pkg/fiscal/invoice.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/CFDI.md, docs/KERNO_MVP_GAP_ANALYSIS.md"
+      },
+      "spec": "RunGlobalInvoices retries PENDING globals and reconciles every eligible sale of a closed period with no active invoice and at most CFDI_GLOBAL_MAX_AGE (default 90 days) old into new factura global parts of its period (global_part 1..n, <= 5,000 conceptos each; idempotency key per period + part sale set; FAILED parts wait for the backoffice, CANCELED ones move to the next suffix); late captures and sales freed by motivo 04 / FAILED stamps get a new part; eligible sales older than the window log one ERROR-level ALERT per merchant. CFDI Fecha is rendered in the zone of LugarExpedicion: compact CP-range table (Baja California -> America/Tijuana; BCS, Sinaloa, Nayarit -> America/Mazatlan except Bahía de Banderas; Sonora -> America/Hermosillo; Quintana Roo -> America/Cancun; Ciudad Juárez / Ojinaga / rest of Chihuahua), default America/Mexico_City.",
+      "test_results": "go vet clean; go test -race all ok; PGIntegration GlobalInvoiceParts (5 sales, 2 per part, 3 concurrent runs -> 3 stamped parts, each sale linked once).",
+      "audit_notes": "Bahía de Banderas / Juárez / Ojinaga CP sub-ranges are best-effort; the Coahuila/NL/Tamaulipas border strip (America/Matamoros) is not mapped (Fecha up to 1 h in the past there, accepted). The exact source is the huso horario columns of c_CodigoPostal (not embedded yet). Each run scans the window's sales per merchant (no un-invoiced index yet). Global period boundaries remain in CDMX time.",
+      "priority": 84
     }
   ]
 }

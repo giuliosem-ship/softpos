@@ -89,6 +89,7 @@ var ServerEnvVars = []EnvVar{
 	{Name: "CFDI_GLOBAL_INVOICE_INTERVAL"},
 	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
 	{Name: "CFDI_CREDIT_NOTE_INTERVAL"},
+	{Name: "CFDI_GLOBAL_MAX_AGE"},
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.

@@ -143,8 +143,9 @@ blocked merchant; header `Idempotency-Key` ≤ 200 chars)
   (`NoIdentificacion` = sale id, the merchant's ClaveProdServ / ClaveUnidad /
   descripción), IVA 16 % trasladado per concepto and in total, int64 cents.
   `FormaPago` is the one of the largest amount (04 card, 03 transfer),
-  `MetodoPago` PUE, `Fecha` in America/Mexico_City, serie `K` (individual) /
-  `G` (global) with a per-merchant folio sequence.
+  `MetodoPago` PUE, `Fecha` in the local time of `LugarExpedicion` (see
+  "Fecha and time zone"), serie `K` (individual) / `G` (global) / `E`
+  (nota de crédito) with a per-merchant folio sequence.
 - **ISR retention:** a persona moral receptor (12-char RFC) of a RESICO
   persona física emisor gets the Art. 113-J retention (1.25 % of the base,
   `isr_retenido_cents`; `total = subtotal + iva − isr`). The ledger split of
@@ -172,6 +173,34 @@ blocked merchant; header `Idempotency-Key` ≤ 200 chars)
   `GET …/invoices/{invoice_id}`; `GET …/{invoice_id}/xml`
   (`application/xml`) and `GET …/{invoice_id}/pdf` (`application/pdf`); both
   `409 INVOICE_NOT_STAMPED` before stamping. Any member of the merchant.
+
+### Fecha and time zone (MVP-24)
+
+The SAT / PAC validate `Fecha` against the local time of the
+`LugarExpedicion` postal code, so it is rendered in the zone of that CP
+(`fiscal.LocationForPostalCode`; IANA zoneinfo embedded with `time/tzdata`):
+
+| CP range | Zone | Offset |
+|---|---|---|
+| 21000–22999 (Baja California) | America/Tijuana | UTC−8, US DST |
+| 23000–23999 (Baja California Sur), 80000–82999 (Sinaloa), 63000–63999 (Nayarit) | America/Mazatlan | UTC−7 |
+| 63730–63739, 63842 (Bahía de Banderas, Nayarit) | America/Bahia_Banderas | UTC−6 |
+| 83000–85999 (Sonora) | America/Hermosillo | UTC−7 |
+| 77000–77999 (Quintana Roo) | America/Cancun | UTC−5 |
+| 32000–32699 (Ciudad Juárez) | America/Ciudad_Juarez | UTC−7, US DST |
+| 32880–32889 (Ojinaga) | America/Ojinaga | UTC−6, US DST |
+| 31000–33999 (rest of Chihuahua) | America/Chihuahua | UTC−6 |
+| anything else / malformed | America/Mexico_City | UTC−6 |
+
+Source: SEPOMEX assigns the first two CP digits by state; zones follow the
+Ley del Sistema de Horario (2022) and the IANA tz database. Limitations: the
+municipal sub-ranges (Bahía de Banderas, Juárez, Ojinaga) are best-effort,
+and the northern border strip of Coahuila / Nuevo León / Tamaulipas (US DST,
+America/Matamoros) and other Chihuahua border municipalities are not mapped:
+there `Fecha` is up to 1 h behind local time (in the past, which the PAC
+accepts). The exact fix is embedding the huso horario columns of the SAT
+`c_CodigoPostal` catalog. The factura global *period* boundaries stay in
+America/Mexico_City.
 
 ### Representación impresa (PDF) and email
 
@@ -215,17 +244,42 @@ drawn as vector modules with `rsc.io/qr` (pure Go). When the receptor has an
 
 Worker (`CFDI_GLOBAL_INVOICE_INTERVAL`, default 1 h; `Server.RunGlobalInvoices`):
 for every approved, unblocked merchant with a CSD and a complete fiscal
-profile, for the last two **closed** periods (`MONTHLY` default or `DAILY`,
-America/Mexico_City boundaries) it issues one CFDI to `XAXX010101000 /
-PUBLICO EN GENERAL / 616 / S01` with `DomicilioFiscalReceptor` =
-`LugarExpedicion` and `InformacionGlobal` (Periodicidad 04 or 01, Meses,
-Año), one concepto per sale (`01010101`, `ACT`, "Venta", `NoIdentificacion` =
-sale id) for every invoiceable sale of the period **not in an active
-invoice**. A unique partial index allows one live global per merchant and
-period; the idempotency key is derived from the period and the sale set, so
-reruns never duplicate it; `PENDING` globals are retried by the worker,
-`FAILED` ones from the backoffice. A late run (> 72 h after the period end)
-still issues it and logs a warning.
+profile it (1) retries the merchant's `PENDING` globals and (2) **reconciles
+every eligible sale** (card `CAPTURED` / `PARTIALLY_REFUNDED`, SPEI
+`RECEIVED`, CoDi `CONFIRMED`) of a **closed** period (`MONTHLY` default or
+`DAILY`, America/Mexico_City boundaries) that is in no active invoice and is
+at most `CFDI_GLOBAL_MAX_AGE` old (default 90 days). Each CFDI goes to
+`XAXX010101000 / PUBLICO EN GENERAL / 616 / S01` with
+`DomicilioFiscalReceptor` = `LugarExpedicion` and `InformacionGlobal`
+(Periodicidad 04 or 01, Meses, Año), one concepto per sale (`01010101`,
+`ACT`, "Venta", `NoIdentificacion` = sale id).
+
+- **Parts (MVP-24):** a period with more sales than fit in one CFDI (5,000
+  conceptos) is split into several globals of the same period — `global_part`
+  1, 2, … (migration 018; the unique partial index is now one live global per
+  merchant, period **and part**; API field `global_part`). Nothing is
+  truncated.
+- **Late and freed sales:** because every un-invoiced sale is reconciled (not
+  only "the last two closed periods"), a capture confirmed after its period's
+  global was issued, a sale released by a motivo 04 cancellation or by a
+  `FAILED` stamp months later, or periods missed while the worker was down
+  all get into a **new part** of their own period. The SAT expects the global
+  within 72 h after the period ends (RMF 2.7.1.21); a later part is still
+  issued and logged as a warning.
+- **Window and alert:** eligible sales older than `CFDI_GLOBAL_MAX_AGE`
+  without an invoice are not issued automatically; each run logs one
+  `ERROR`-level `ALERT eligible sales older than the factura global window
+  have no invoice` line per merchant (count + up to 20 sale ids; scan bounded
+  to the newest 1,000 sales before the window) for manual handling with the
+  accountant.
+- **Idempotency:** the key of a part is derived from the period and its sale
+  set, so reruns and concurrent workers never duplicate it; a concurrent run
+  that loses the race for a part number or a sale skips it until the next
+  run. `FAILED` parts are retried from the backoffice; a `CANCELED` part's set
+  moves to the next key suffix.
+- **Cost:** each run scans the window's sales of every merchant (paged by
+  1,000; one card settlement read per un-invoiced card sale). Fine for the
+  MVP; a dedicated "un-invoiced" index is the next step at volume.
 
 **Sales already in a global (documented choice):** an individual invoice for
 a sale included in an active factura global is **rejected** (`409

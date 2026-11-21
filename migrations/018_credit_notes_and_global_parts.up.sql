@@ -3,7 +3,10 @@
 --    CREDIT_NOTE, related to the credited invoice (related_invoice_id). Their
 --    invoice_sales lines are stored inactive: a credit note never holds a
 --    sale (the one-active-invoice-per-sale index keeps working).
--- 2. credit_note_jobs: one durable job per refund / chargeback of a card
+-- 2. Factura global parts (MVP-24): a period with more sales than fit in one
+--    CFDI is split into several globals; each live global of a period has its
+--    own part number (unique per merchant, period and part).
+-- 3. credit_note_jobs: one durable job per refund / chargeback of a card
 --    sale, written in the same money transaction as the ledger movement; the
 --    credit-note worker decides whether the sale was invoiced and stamps the
 --    egreso through the PAC port. See docs/CFDI.md.
@@ -42,3 +45,8 @@ CREATE TABLE IF NOT EXISTS credit_note_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_credit_note_jobs_due ON credit_note_jobs(next_attempt_at, id) WHERE status = 'PENDING';
 CREATE INDEX IF NOT EXISTS idx_credit_note_jobs_flag ON credit_note_jobs(updated_at) WHERE flag <> '';
+
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS global_part INTEGER NOT NULL DEFAULT 1 CHECK (global_part > 0);
+DROP INDEX IF EXISTS idx_invoices_one_live_global;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_one_live_global_part ON invoices(merchant_id, global_period, global_part)
+    WHERE kind = 'GLOBAL' AND status IN ('PENDING', 'STAMPED', 'CANCEL_REQUESTED');

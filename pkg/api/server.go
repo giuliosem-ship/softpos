@@ -77,6 +77,8 @@ type Server struct {
 	sat69bMu          sync.Mutex
 	fiscalSettings    store.FiscalSettingsRepository
 	invoices          store.InvoiceRepository
+	globalMaxAge      time.Duration // factura global reconciliation window (0 = default)
+	globalMaxConcepts int           // conceptos per factura global part (0 = maxGlobalConcepts)
 	mailer            Mailer
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex

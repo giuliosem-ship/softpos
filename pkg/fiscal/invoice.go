@@ -19,7 +19,7 @@ type InvoiceLine struct {
 // InvoiceSpec describes a CFDI de ingreso (or, with Egreso, de egreso) to build.
 type InvoiceSpec struct {
 	Serie, Folio    string
-	Fecha           time.Time // rendered in America/Mexico_City
+	Fecha           time.Time // rendered in the zone of LugarExpedicion (LocationForPostalCode)
 	FormaPago       string    // c_FormaPago (04 tarjeta, 03 transferencia, …)
 	LugarExpedicion string
 	Emisor          CFDIEmisor
@@ -121,7 +121,7 @@ func BuildInvoiceComprobante(spec InvoiceSpec) (*CFDIComprobante, InvoiceTotals,
 	}
 	comp := &CFDIComprobante{
 		Version: "4.0", Serie: spec.Serie, Folio: spec.Folio,
-		Fecha:     spec.Fecha.In(MexicoCityLocation()).Format("2006-01-02T15:04:05"),
+		Fecha:     spec.Fecha.In(LocationForPostalCode(spec.LugarExpedicion)).Format("2006-01-02T15:04:05"),
 		FormaPago: formaPago, SubTotal: FormatCents(tot.SubtotalCents), Moneda: "MXN", Total: FormatCents(tot.TotalCents),
 		TipoDeComprobante: tipo, Exportacion: "01", MetodoPago: "PUE", LugarExpedicion: spec.LugarExpedicion,
 		InformacionGlobal: spec.Global, Emisor: spec.Emisor, Receptor: spec.Receptor, Conceptos: conceptos, Impuestos: impuestos,

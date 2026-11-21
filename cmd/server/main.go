@@ -124,6 +124,10 @@ type Config struct {
 	// CFDICreditNoteInterval: credit-note worker (MVP-23; refunds and
 	// chargebacks after the sale was invoiced -> CFDI de egreso).
 	CFDICreditNoteInterval time.Duration // CFDI_CREDIT_NOTE_INTERVAL, default 1m
+	// CFDIGlobalMaxAge bounds the factura global reconciliation (MVP-24):
+	// un-invoiced eligible sales up to this age get into a new global part;
+	// older ones are alerted (CFDI_GLOBAL_MAX_AGE, default 90 days).
+	CFDIGlobalMaxAge time.Duration
 }
 
 func LoadConfigFromEnv() Config {
@@ -246,6 +250,7 @@ func LoadConfigFromEnv() Config {
 		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
 		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		CFDICreditNoteInterval:    parseDurationEnv("CFDI_CREDIT_NOTE_INTERVAL"),
+		CFDIGlobalMaxAge:          parseDurationEnv("CFDI_GLOBAL_MAX_AGE"),
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -531,6 +536,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
 	server.SetCashierRefundsAllowed(cfg.AllowCashierRefunds)
+	server.SetGlobalInvoiceMaxAge(cfg.CFDIGlobalMaxAge)
 	// Legacy client-trusted EMV approve/settle/reverse: demo only.
 	server.SetLegacyCardFlowEnabled(cfg.DevMode)
 	if prov, err := buildAcquirerProvider(cfg); err != nil {

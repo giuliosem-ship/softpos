@@ -148,6 +148,7 @@ func TestValidateProductionConfig_CoversEverySecret(t *testing.T) {
 		CoDiWebhookSecret:   "prod_codi_webhook_secret_with_32_random_bytes",
 		PlayIntegritySecret: "prod_play_integrity_secret_32_random_bytes",
 		VaultPreviousKeys:   "v0:b1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
+		ReceiptTokenSecret:  "prod_receipt_token_secret_32_random_bytes!",
 	}
 	if err := ValidateProductionConfig(good, "production"); err != nil {
 		t.Fatalf("baseline production config rejected: %v", err)
@@ -191,6 +192,11 @@ func TestValidateProductionConfig_CoversEverySecret(t *testing.T) {
 		},
 		"VAULT_PREVIOUS_KEYS": {
 			{func(c *Config) { c.VaultPreviousKeys = "v0:nothex" }, ErrInvalidVaultKey},
+		},
+		"RECEIPT_TOKEN_SECRET": {
+			{func(c *Config) { c.ReceiptTokenSecret = "" }, ErrWeakReceiptTokenSecret},
+			{func(c *Config) { c.ReceiptTokenSecret = "short" }, ErrWeakReceiptTokenSecret},
+			{func(c *Config) { c.ReceiptTokenSecret = "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME" }, ErrPlaceholderSecret},
 		},
 	}
 	for _, ev := range ServerEnvVars {

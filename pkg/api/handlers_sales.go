@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -48,6 +49,12 @@ type SaleCreditNote struct {
 // SaleDetail is GET /api/v1/merchants/{id}/sales/{sale_id}.
 type SaleDetail struct {
 	SaleItem
+	// Card details of a card sale (MVP-26; last 4 digits only).
+	Card *ReceiptCard `json:"card,omitempty"`
+	// ReceiptURL is the public receipt (autofactura) link to share, for a
+	// confirmed sale when receipts are configured.
+	ReceiptURL       string `json:"receipt_url,omitempty"`
+	ReceiptExpiresAt string `json:"receipt_expires_at,omitempty"`
 }
 
 // SalesPage is the response of the sales listing.
@@ -232,5 +239,20 @@ func (s *Server) HandleGetSale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "SALES_UNAVAILABLE")
 		return
 	}
-	writeJSON(w, http.StatusOK, SaleDetail{SaleItem: items[0]})
+	d := SaleDetail{SaleItem: items[0]}
+	if rec.Kind == store.SaleCard {
+		if cp, _, err := s.loadCardPayment(r.Context(), tenant, rec.ID); err == nil {
+			d.Card = &ReceiptCard{Brand: cp.CardBrand, AuthCode: cp.AuthCode}
+			if cp.CardLast4 != "" {
+				d.Card.MaskedPAN = "**** " + cp.CardLast4
+			}
+		}
+	}
+	// The receipt is created on first use (idempotent, one per sale).
+	if receipt, url, err := s.ensureReceipt(r.Context(), rec); err == nil {
+		d.ReceiptURL, d.ReceiptExpiresAt = url, receipt.ExpiresAt.UTC().Format(time.RFC3339)
+	} else if !errors.Is(err, errReceiptsNotConfigured) && !errors.Is(err, errSaleNotConfirmed) {
+		slog.Error("receipt not created", "sale_id", rec.ID, "error", err)
+	}
+	writeJSON(w, http.StatusOK, d)
 }

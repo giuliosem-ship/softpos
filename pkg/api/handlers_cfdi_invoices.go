@@ -314,43 +314,64 @@ func (s *Server) HandleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_SALE_IDS")
 		return
 	}
-	req.Receptor = req.Receptor.Normalize()
-	if bad := fiscal.ValidateReceptor(req.Receptor); len(bad) > 0 {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "RECEPTOR_INVALID", "fields": bad})
+	rec, err := s.issueIndividualInvoice(r.Context(), tenant, key, req)
+	var re *invoiceRequestError
+	if errors.As(err, &re) {
+		writeJSON(w, re.status, re.body)
 		return
 	}
-	ctx := r.Context()
+	if err != nil {
+		writeInvoiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, invoiceResponse(rec))
+}
+
+// invoiceRequestError is a request-level rejection of issueIndividualInvoice.
+type invoiceRequestError struct {
+	status int
+	body   any
+}
+
+func (e *invoiceRequestError) Error() string { return fmt.Sprintf("invoice request rejected (%d)", e.status) }
+
+// issueIndividualInvoice is the invoicing service behind POST …/invoices and
+// the receipt's autofactura: validates the receptor, replays an idempotency
+// key, computes the amounts from what was posted, enforces one active
+// invoice per sale and stamps. req.SaleIDs must already be validated (1–100
+// unique ids). Errors: *invoiceRequestError (HTTP status + body),
+// *saleError, *store.SaleInvoicedError, errFiscalProfile, CSD errors.
+func (s *Server) issueIndividualInvoice(ctx context.Context, tenant, key string, req CreateInvoiceRequest) (store.InvoiceRecord, error) {
+	req.Receptor = req.Receptor.Normalize()
+	if bad := fiscal.ValidateReceptor(req.Receptor); len(bad) > 0 {
+		return store.InvoiceRecord{}, &invoiceRequestError{http.StatusUnprocessableEntity, map[string]any{"error": "RECEPTOR_INVALID", "fields": bad}}
+	}
+	reused := &invoiceRequestError{http.StatusConflict, map[string]string{"error": "IDEMPOTENCY_KEY_REUSED"}}
 	repo := s.invoiceRepo()
 	hash := requestHash(req)
 	if existing, found, err := repo.FindInvoiceByIdempotencyKey(ctx, tenant, key); err != nil {
-		writeInvoiceError(w, err)
-		return
+		return store.InvoiceRecord{}, err
 	} else if found {
 		if existing.RequestHash != hash {
-			writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED")
-			return
+			return store.InvoiceRecord{}, reused
 		}
-		writeJSON(w, http.StatusCreated, invoiceResponse(existing))
-		return
+		return existing, nil
 	}
 	now := nowUTC()
 	emisor, err := s.emisorProfile(ctx, tenant)
 	if err != nil {
-		writeInvoiceError(w, err)
-		return
+		return store.InvoiceRecord{}, err
 	}
 	signer, err := s.activeSigner(tenant, now)
 	if err != nil {
-		writeInvoiceError(w, err)
-		return
+		return store.InvoiceRecord{}, err
 	}
 
 	var replaced store.InvoiceRecord
 	if req.ReplacesInvoiceID != "" {
 		old, found, err := repo.GetInvoice(ctx, tenant, req.ReplacesInvoiceID)
 		if err != nil {
-			writeInvoiceError(w, err)
-			return
+			return store.InvoiceRecord{}, err
 		}
 		covered := map[string]bool{}
 		for _, id := range old.SaleIDs {
@@ -361,45 +382,38 @@ func (s *Server) HandleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 			valid = valid && covered[id]
 		}
 		if !valid {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "REPLACEMENT_INVALID",
-				"detail": "replaces_invoice_id must be a STAMPED individual invoice covering every sale_id"})
-			return
+			return store.InvoiceRecord{}, &invoiceRequestError{http.StatusUnprocessableEntity, map[string]string{"error": "REPLACEMENT_INVALID",
+				"detail": "replaces_invoice_id must be a STAMPED individual invoice covering every sale_id"}}
 		}
 		replaced = old
 	}
 
 	sales, ok := s.salesRepo()
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "SALES_UNAVAILABLE")
-		return
+		return store.InvoiceRecord{}, &invoiceRequestError{http.StatusServiceUnavailable, map[string]string{"error": "SALES_UNAVAILABLE"}}
 	}
 	var lines []saleLine
 	for _, id := range req.SaleIDs {
 		recs, err := sales.ListSales(ctx, store.SalesQuery{MerchantID: tenant, ID: id, Limit: 1})
 		if err != nil {
-			writeInvoiceError(w, err)
-			return
+			return store.InvoiceRecord{}, err
 		}
 		if len(recs) == 0 {
-			writeInvoiceError(w, &saleError{code: "SALE_NOT_FOUND", saleID: id, status: http.StatusUnprocessableEntity})
-			return
+			return store.InvoiceRecord{}, &saleError{code: "SALE_NOT_FOUND", saleID: id, status: http.StatusUnprocessableEntity}
 		}
 		l, err := s.invoiceableLine(ctx, recs[0])
 		if err != nil {
-			writeInvoiceError(w, err)
-			return
+			return store.InvoiceRecord{}, err
 		}
 		lines = append(lines, l)
 	}
 	holders, err := repo.ActiveInvoicesForSales(ctx, tenant, req.SaleIDs)
 	if err != nil {
-		writeInvoiceError(w, err)
-		return
+		return store.InvoiceRecord{}, err
 	}
 	for _, id := range req.SaleIDs {
 		if h, taken := holders[id]; taken && h != replaced.ID {
-			writeInvoiceError(w, &store.SaleInvoicedError{SaleID: id, InvoiceID: h})
-			return
+			return store.InvoiceRecord{}, &store.SaleInvoicedError{SaleID: id, InvoiceID: h}
 		}
 	}
 
@@ -408,29 +422,24 @@ func (s *Server) HandleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: key, RequestHash: hash, Serie: serieIndividual, FormaPago: formaPagoFor(lines), Receptor: receptorJSON,
 		ReplacesInvoiceID: replaced.ID, StampAttempts: 1}
 	spec := s.invoiceSpec(rec, emisor, req.Receptor, lines, replaced.UUID, nil, now)
-	if _, tot, err := fiscal.BuildInvoiceComprobante(spec); err != nil {
-		writeInvoiceError(w, err)
-		return
-	} else {
-		rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents = tot.SubtotalCents, tot.IVACents, tot.ISRRetenidoCents, tot.TotalCents
+	_, tot, err := fiscal.BuildInvoiceComprobante(spec)
+	if err != nil {
+		return store.InvoiceRecord{}, err
 	}
+	rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents = tot.SubtotalCents, tot.IVACents, tot.ISRRetenidoCents, tot.TotalCents
 	lease := now.Add(stampLease)
 	rec.StampLeaseUntil = &lease
 	created, err := repo.CreateInvoice(ctx, rec, storeLines(lines))
 	if errors.Is(err, store.ErrInvoiceExists) {
 		if created.RequestHash != hash {
-			writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED")
-			return
+			return store.InvoiceRecord{}, reused
 		}
-		writeJSON(w, http.StatusCreated, invoiceResponse(created))
-		return
+		return created, nil
 	}
 	if err != nil {
-		writeInvoiceError(w, err)
-		return
+		return store.InvoiceRecord{}, err
 	}
-	out := s.stampInvoice(ctx, created, signer, now)
-	writeJSON(w, http.StatusCreated, invoiceResponse(out))
+	return s.stampInvoice(ctx, created, signer, now), nil
 }
 
 func storeLines(lines []saleLine) []store.InvoiceSaleLine {

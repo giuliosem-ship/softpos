@@ -116,6 +116,7 @@ Public allowlist (`publicRoutes` in `pkg/api/middleware_auth.go`):
 | `GET`/`POST /api/v1/auth/attestation-nonce`, `POST /api/v1/auth/attestation/verify` | Play Integrity handshake |
 | `POST /api/v1/auth/dev-session` | `404` unless `DEV_MODE` |
 | `POST /api/v1/webhooks/stp/abono`, `POST /api/v1/webhooks/codi/confirm`, `POST /api/v1/webhooks/acquirer/{provider}` | Authenticated by their own signatures |
+| `GET /r/{token}`, `POST /r/{token}/invoice`, `GET /r/{token}/invoice/{pdf\|xml}` | Public sale receipt + autofactura (MVP-26): the HMAC-signed, expiring receipt token is the credential; per-IP limit 60/min (`docs/CFDI.md`) |
 
 Rules for protected handlers:
 

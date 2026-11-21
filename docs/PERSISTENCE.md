@@ -80,7 +80,10 @@ Notes:
 - Batch K: migration 018 (`invoices.kind` `CREDIT_NOTE` +
   `related_invoice_id`; `credit_note_jobs`, written in the money transaction
   of a refund / chargeback, `store.CreditNoteJobRepository` on
-  `SQLMoneyStore` / `MemoryMoneyStore`).
+  `SQLMoneyStore` / `MemoryMoneyStore`; `invoices.global_part`, one live
+  global per period and part) and 019 (`card_payments.card_brand` /
+  `card_last4` / `auth_code`, `sale_receipts`, `merchant_fiscal_settings.autofactura`;
+  `store.SQLReceiptRepository` / `store.MemoryReceiptRepository`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements.
 - Payment state change, ledger journal, RESICO monthly accumulator,

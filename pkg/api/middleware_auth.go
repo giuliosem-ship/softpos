@@ -161,6 +161,22 @@ func isPublicRoute(r *http.Request) bool {
 		rest := strings.TrimPrefix(r.URL.Path, acquirerWebhookPrefix)
 		return rest != "" && !strings.Contains(rest, "/")
 	}
+	// Public sale receipts (MVP-26): GET /r/{token}, POST /r/{token}/invoice,
+	// GET /r/{token}/invoice/{pdf|xml}; the signed token is the credential.
+	if rest, ok := strings.CutPrefix(r.URL.Path, receiptPathPrefix); ok {
+		parts := strings.Split(rest, "/")
+		switch {
+		case parts[0] == "":
+			return false
+		case len(parts) == 1:
+			return method == http.MethodGet
+		case len(parts) == 2 && parts[1] == "invoice":
+			return method == http.MethodPost
+		case len(parts) == 3 && parts[1] == "invoice" && (parts[2] == "pdf" || parts[2] == "xml"):
+			return method == http.MethodGet
+		}
+		return false
+	}
 	return publicRoutes[method+" "+r.URL.Path]
 }
 
@@ -174,6 +190,16 @@ func (s *Server) authGate(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
 			s.mu.RLock()
 			limiter := s.authLimiter
+			s.mu.RUnlock()
+			if ok, retryAfter := limiter.Allow(clientIP(r)); !ok {
+				w.Header().Set("Retry-After", retryAfter)
+				writeError(w, http.StatusTooManyRequests, "RATE_LIMITED")
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, receiptPathPrefix) {
+			s.mu.RLock()
+			limiter := s.receiptLimiter
 			s.mu.RUnlock()
 			if ok, retryAfter := limiter.Allow(clientIP(r)); !ok {
 				w.Header().Set("Retry-After", retryAfter)

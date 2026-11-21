@@ -263,7 +263,9 @@ invoicing, `"credit_notes":[{"invoice_id","status","uuid"?,"related_invoice_id",
 
 `GET /api/v1/merchants/{id}/sales/{sale_id}` (any member; `404
 SALE_NOT_FOUND`, other tenant `403`) returns one item with the same fields
-(sale detail; the receipt fields of MVP-26 are added there).
+(sale detail), plus `card` (`brand`, `masked_pan` `**** 1234`, `auth_code`)
+for card sales and `receipt_url` / `receipt_expires_at` of the public receipt
+for confirmed sales (MVP-26, `docs/CFDI.md`).
 
 ## Not covered yet
 

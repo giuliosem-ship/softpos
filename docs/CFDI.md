@@ -102,9 +102,10 @@ catalog, allowed for the persona type and compatible with the régimen,
 ## Merchant fiscal settings
 
 `GET /api/v1/merchants/{id}/fiscal-settings` (any member) / `PUT` (owner)
-`{"clave_prod_serv","clave_unidad","descripcion","lugar_expedicion","global_periodicity":"MONTHLY"|"DAILY"}`
+`{"clave_prod_serv","clave_unidad","descripcion","lugar_expedicion","global_periodicity":"MONTHLY"|"DAILY","autofactura":"SAME_MONTH"|"DISABLED"}`
 (`merchant_fiscal_settings`, migration 016). Defaults: `01010101`, `H87`,
-`Venta`, the KYB address postal code, `MONTHLY`. Codes must be in the
+`Venta`, the KYB address postal code, `MONTHLY`, `SAME_MONTH` (receipt
+autofactura window, migration 019). Codes must be in the
 embedded subset (`422 FISCAL_SETTINGS_INVALID` with `fields`). The emisor
 of every CFDI is the KYB `legal_name` (upper case), RFC and régimen
 (`RESICO_PF` → 626, `ACTIVIDAD_EMPRESARIAL_PF` → 612,
@@ -351,6 +352,67 @@ produces a CFDI de egreso automatically:
   global; G02; the egreso of a credited invoice later replaced with motivo 01
   stays related to the canceled UUID (the replacement is built from the net
   amount, so it is not credited twice, but the old egreso is not canceled).
+
+### Comprobante de venta y autofactura (MVP-26)
+
+Every **confirmed** sale (card `CAPTURED` and later states, SPEI `RECEIVED`,
+CoDi `CONFIRMED`) has one public receipt (`sale_receipts`, migration 019).
+
+- **Link:** `GET /api/v1/merchants/{id}/sales/{sale_id}` returns
+  `receipt_url` (+ `receipt_expires_at`, and `card` with brand, `masked_pan`
+  `**** 1234` and auth code); the receipt row is created on first use
+  (idempotent, one per sale) and renewed with a new link once expired.
+  `RECEIPT_BASE_URL` prefixes it (empty = relative `/r/…`).
+- **Token:** `base64url(id[12] ‖ expiry[8] ‖ HMAC-SHA256(RECEIPT_TOKEN_SECRET,
+  "kerno-receipt-v1" ‖ id ‖ expiry)[:16])`: 96 random bits (unguessable), the
+  MAC rejects forged / altered tokens before any lookup, the expiry
+  (`RECEIPT_TTL`, default 90 days) must match the stored one, and the token
+  carries no merchant or sale id. Unknown, forged and expired tokens all
+  answer `404 RECEIPT_NOT_FOUND`. `RECEIPT_TOKEN_SECRET` (≥ 32 bytes) is
+  required by the production guard; `DEV_MODE` uses an ephemeral random one
+  when unset; otherwise receipts are disabled (`503 RECEIPTS_NOT_CONFIGURED`).
+- **Public endpoints** (explicit allowlist, no JWT, per-IP limit 60/min,
+  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`):
+  - `GET /r/{token}` → JSON (`?format=json` or `Accept: application/json`) or a
+    simple HTML page (CSP `default-src 'none'`, no scripts) with a plain HTML
+    autofactura form: `{"merchant_name","merchant_rfc","folio","kind","status"
+    (APPROVED | PARTIALLY_REFUNDED | REFUNDED | CHARGEBACK…),"amount_cents","amount",
+    "refunded_cents"?,"currency","date","date_local","card"?:{"brand","masked_pan","auth_code"},
+    "reference"? (SPEI clave de rastreo),"autofactura":{"available","reason"?,"deadline"?,"url"?},
+    "invoice"?:{"status","uuid","pdf_url","xml_url"},"expires_at"}`. Never
+    the full PAN (only the last 4 digits are ever stored) and no tenant ids.
+  - `POST /r/{token}/invoice` (JSON receptor or the urlencoded form; the HTML
+    form gets an HTML answer): the end customer's receptor data is validated
+    with the same catalog rules (`422 RECEPTOR_INVALID {"fields"}`) and an
+    individual invoice is issued through the same invoicing service as
+    `POST /api/v1/merchants/{id}/invoices` (amounts from the posted split,
+    ISR retention for a persona moral, stamping, email to the receptor).
+    Idempotency key `autofactura:<receipt id>:<hash of the receptor>`: the same
+    data replays `201` with the same invoice; `409 SALE_ALREADY_INVOICED`
+    (without invoice ids) when the sale is in any active invoice — e.g. a
+    factura global or an earlier autofactura with other data; `422
+    AUTOFACTURA_NOT_AVAILABLE {"reason"}` for `DISABLED`, `WINDOW_CLOSED`,
+    `SALE_NOT_INVOICEABLE` (refunded / chargeback) or `MERCHANT_UNAVAILABLE`
+    (not approved / blocked); `503 AUTOFACTURA_UNAVAILABLE` when the merchant's
+    CSD or fiscal profile is not ready (details only in the logs). `201`
+    `{"invoice_id","status","total_cents","uuid"?,"pdf_url"?,"xml_url"?,"error"?}`.
+  - `GET /r/{token}/invoice/pdf` / `…/xml`: the CFDI requested through this
+    receipt (`409 INVOICE_NOT_STAMPED` before stamping).
+- **Window:** merchant setting `autofactura` in `PUT …/fiscal-settings`:
+  `SAME_MONTH` (default) — until the end of the sale's calendar month in
+  America/Mexico_City (a nominative CFDI belongs to the month of the sale;
+  afterwards the sale is in the factura global, and with the default monthly
+  periodicity the global is only issued after the month closes) — or
+  `DISABLED`. With `DAILY` globals the sale is usually already in a global
+  the next day, so autofactura answers `409`.
+- **Sending:** `POST /api/v1/merchants/{id}/sales/{sale_id}/receipt` (owner
+  or cashier) `{"email"?,"phone"? (E.164)}` → `200 {"receipt_url","expires_at",
+  "sent":{"email","sms"}}` (`502` if a port failed, `422
+  RECEIPT_DESTINATION_INVALID {"fields"}`, `409 SALE_NOT_CONFIRMED`). Email
+  goes through `api.Mailer`, SMS through the `api.SMSSender` port
+  (`LogSMSSender` logs a masked phone; no provider contracted yet). The text
+  carries merchant name / RFC, amount, local date, folio, brand + `**** 1234`,
+  auth code and the link.
 
 ### Backoffice
 

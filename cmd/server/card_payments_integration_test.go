@@ -153,11 +153,12 @@ func TestBuildServer_AcquirerSelection(t *testing.T) {
 
 func TestValidateProductionConfig_RejectsMockAcquirer(t *testing.T) {
 	good := Config{
-		DatabaseURL:       "postgres://softpos:Str0ngRandomPassw0rd@db.prod.internal:5432/softpos?sslmode=require",
-		VaultMasterKeyHex: "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
-		STPHMACSecret:     "prod_stp_hmac_secret_very_long_and_random_string_xyz",
-		JWTSecret:         "prod_jwt_secret_with_at_least_32_random_bytes",
-		CoDiWebhookSecret: "prod_codi_webhook_secret_with_32_random_bytes",
+		DatabaseURL:        "postgres://softpos:Str0ngRandomPassw0rd@db.prod.internal:5432/softpos?sslmode=require",
+		VaultMasterKeyHex:  "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
+		STPHMACSecret:      "prod_stp_hmac_secret_very_long_and_random_string_xyz",
+		JWTSecret:          "prod_jwt_secret_with_at_least_32_random_bytes",
+		CoDiWebhookSecret:  "prod_codi_webhook_secret_with_32_random_bytes",
+		ReceiptTokenSecret: "prod_receipt_token_secret_32_random_bytes!",
 	}
 	if err := ValidateProductionConfig(good, "production"); err != nil {
 		t.Fatalf("baseline: %v", err)

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"softpos/pkg/acquirer"
@@ -594,6 +595,7 @@ func (s *Server) applyCardEvent(ctx context.Context, tx store.MoneyTx, cp *store
 			return false, nil
 		}
 		cp.Status, cp.DeclineCode = store.CardAuthorized, ""
+		setCardDetails(cp, e)
 		return true, tx.EnqueueEvent(ctx, "card_payment.authorized", cp.ID, cardPaymentResponse(*cp, nil))
 
 	case acquirer.EventDeclined:
@@ -643,11 +645,26 @@ func (s *Server) applyCardEvent(ctx context.Context, tx store.MoneyTx, cp *store
 			}
 		}
 		cp.Status, cp.DeclineCode = store.CardCaptured, ""
+		setCardDetails(cp, e)
 		cp.CapturedCents, cp.ProviderFeeCents, cp.ProviderSettlementDate = e.AmountCents, e.FeeCents, e.SettlementDate
 		fx.rbfSweepCents = rec.RBFSweepCents
 		return true, tx.EnqueueEvent(ctx, "card_payment.captured", cp.ID, cardPaymentResponse(*cp, &rec))
 	}
 	return s.applyCardMoneyEvent(ctx, tx, cp, e, fx)
+}
+
+// setCardDetails keeps the receipt data an event reports (validated by
+// acquirer.Event.Validate: last 4 digits only, never the full PAN).
+func setCardDetails(cp *store.CardPaymentRecord, e acquirer.Event) {
+	if e.CardBrand != "" {
+		cp.CardBrand = strings.ToLower(e.CardBrand)
+	}
+	if e.CardLast4 != "" {
+		cp.CardLast4 = e.CardLast4
+	}
+	if e.AuthCode != "" {
+		cp.AuthCode = e.AuthCode
+	}
 }
 
 // claimSub claims a secondary exactly-once key (a refund or chargeback may be

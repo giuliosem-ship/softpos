@@ -355,6 +355,8 @@ type FiscalSettingsBody struct {
 	Descripcion       string `json:"descripcion"`
 	LugarExpedicion   string `json:"lugar_expedicion"`
 	GlobalPeriodicity string `json:"global_periodicity"` // DAILY | MONTHLY
+	// Autofactura from the sale receipt: SAME_MONTH (default) | DISABLED.
+	Autofactura string `json:"autofactura,omitempty"`
 }
 
 func fiscalSettingsBody(fs store.FiscalSettings, lugar string) FiscalSettingsBody {
@@ -362,7 +364,7 @@ func fiscalSettingsBody(fs store.FiscalSettings, lugar string) FiscalSettingsBod
 		lugar = fs.LugarExpedicion
 	}
 	return FiscalSettingsBody{ClaveProdServ: fs.ClaveProdServ, ClaveUnidad: fs.ClaveUnidad, Descripcion: fs.Descripcion,
-		LugarExpedicion: lugar, GlobalPeriodicity: fs.GlobalPeriodicity}
+		LugarExpedicion: lugar, GlobalPeriodicity: fs.GlobalPeriodicity, Autofactura: fs.Autofactura}
 }
 
 // HandleGetFiscalSettings: GET (any member); lugar_expedicion falls back to the KYB postal code.
@@ -427,6 +429,12 @@ func (s *Server) HandlePutFiscalSettings(w http.ResponseWriter, r *http.Request)
 			bad["global_periodicity"] = fiscal.ReasonUnknownCode
 		}
 		fs.GlobalPeriodicity = v
+	}
+	if v := strings.ToUpper(strings.TrimSpace(body.Autofactura)); v != "" {
+		if v != store.AutofacturaSameMonth && v != store.AutofacturaDisabled {
+			bad["autofactura"] = fiscal.ReasonUnknownCode
+		}
+		fs.Autofactura = v
 	}
 	if len(bad) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "FISCAL_SETTINGS_INVALID", "fields": bad})

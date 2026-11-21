@@ -235,6 +235,7 @@ func (m *MockProvider) SimulateTap(providerPaymentID, kernoPaymentID string, amo
 		e.ID, e.Type, e.DeclineCode = "evt_decl_"+providerPaymentID, EventDeclined, "do_not_honor"
 		return []Event{e}
 	}
+	base.CardBrand, base.CardLast4, base.AuthCode = "visa", "4242", "A"+strings.ToUpper(mockID("", providerPaymentID))[:5]
 	auth := base
 	auth.ID, auth.Type = "evt_auth_"+providerPaymentID, EventAuthorized
 	capt := base

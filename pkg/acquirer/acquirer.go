@@ -231,16 +231,25 @@ type Event struct {
 	// KernoRefundID echoes RefundRequest.KernoRefundID (metadata); used to
 	// match a refund webhook that arrives before the provider refund id was
 	// stored (provider call timed out or still in flight).
-	KernoRefundID string    `json:"kerno_refund_id,omitempty"`
-	ChargebackID  string    `json:"chargeback_id,omitempty"`
-	DeclineCode   string    `json:"decline_code,omitempty"`
-	Payout        *Payout   `json:"payout,omitempty"`
-	OccurredAt    time.Time `json:"occurred_at,omitempty"`
+	KernoRefundID string `json:"kerno_refund_id,omitempty"`
+	ChargebackID  string `json:"chargeback_id,omitempty"`
+	DeclineCode   string `json:"decline_code,omitempty"`
+	// Card details of an authorized / captured payment, for the sale
+	// receipt: brand ("visa", "mastercard", "amex", …), the last 4 digits
+	// of the PAN (never the full PAN) and the issuer's authorization code.
+	CardBrand  string    `json:"card_brand,omitempty"`
+	CardLast4  string    `json:"card_last4,omitempty"`
+	AuthCode   string    `json:"auth_code,omitempty"`
+	Payout     *Payout   `json:"payout,omitempty"`
+	OccurredAt time.Time `json:"occurred_at,omitempty"`
 }
 
 var (
-	idRe   = regexp.MustCompile(`^[A-Za-z0-9_\-:.]{1,128}$`)
-	dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	idRe    = regexp.MustCompile(`^[A-Za-z0-9_\-:.]{1,128}$`)
+	dateRe  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	last4Re = regexp.MustCompile(`^[0-9]{4}$`)
+	brandRe = regexp.MustCompile(`^[A-Za-z][A-Za-z_ ]{0,19}$`)
+	authRe  = regexp.MustCompile(`^[A-Za-z0-9]{1,12}$`)
 )
 
 func validDate(s string) bool {
@@ -279,6 +288,10 @@ func (e Event) Validate() error {
 	}
 	if e.KernoPaymentID != "" && !idRe.MatchString(e.KernoPaymentID) {
 		return bad("kerno_payment_id")
+	}
+	if (e.CardLast4 != "" && !last4Re.MatchString(e.CardLast4)) || (e.CardBrand != "" && !brandRe.MatchString(e.CardBrand)) ||
+		(e.AuthCode != "" && !authRe.MatchString(e.AuthCode)) {
+		return bad("card details (last 4 digits only, brand, auth code)")
 	}
 	switch e.Type {
 	case EventAuthorized, EventDeclined, EventCanceled:

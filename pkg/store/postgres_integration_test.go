@@ -550,3 +550,58 @@ func TestPGIntegration_AssignMerchantCLABEOnlyOnce(t *testing.T) {
 		t.Fatalf("ghost: %v", err)
 	}
 }
+
+// TestPGIntegration_Migrations018And019DownUp: the batch K migrations roll
+// back and re-apply cleanly on real PostgreSQL.
+func TestPGIntegration_Migrations018And019DownUp(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	all, err := LoadMigrations(migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byVersion := map[string]Migration{}
+	for _, m := range all {
+		byVersion[m.Version] = m
+	}
+	for _, v := range []string{"018", "019"} {
+		if byVersion[v].UpSQL == "" || byVersion[v].DownSQL == "" {
+			t.Fatalf("migration %s needs up and down files", v)
+		}
+	}
+	exists := func(table string) bool {
+		var reg sql.NullString
+		if err := db.QueryRowContext(ctx, `SELECT to_regclass($1)::text`, table).Scan(&reg); err != nil {
+			t.Fatal(err)
+		}
+		return reg.Valid
+	}
+	if !exists("credit_note_jobs") || !exists("sale_receipts") {
+		t.Fatal("018/019 tables missing after migrating")
+	}
+	for _, v := range []string{"019", "018"} {
+		if _, err := db.ExecContext(ctx, byVersion[v].DownSQL); err != nil {
+			t.Fatalf("down %s: %v", v, err)
+		}
+	}
+	if exists("credit_note_jobs") || exists("sale_receipts") {
+		t.Fatal("down migrations left tables behind")
+	}
+	for _, v := range []string{"018", "019"} {
+		if _, err := db.ExecContext(ctx, byVersion[v].UpSQL); err != nil {
+			t.Fatalf("re-up %s: %v", v, err)
+		}
+	}
+	if !exists("credit_note_jobs") || !exists("sale_receipts") {
+		t.Fatal("re-applied migrations missing tables")
+	}
+	// The new constraints hold.
+	if _, err := db.ExecContext(ctx, `INSERT INTO invoices (id, merchant_id, kind, status, idempotency_key, request_hash, serie, folio,
+		subtotal_cents, iva_cents, total_cents, receptor_json) VALUES ('x', 'nobody', 'BOGUS', 'PENDING', 'k', 'h', 'E', 1, 1, 0, 1, '{}')`); err == nil {
+		t.Fatal("invoices.kind check must reject unknown kinds")
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO card_payments (id, merchant_id, provider, intent_idempotency_key, request_hash, amount_cents,
+		status, card_last4) VALUES ('cp_probe', 'm', 'mock', 'k', 'h', 100, 'CREATED', '4242424242424242')`); err == nil {
+		t.Fatal("card_last4 must only hold 4 digits (never a PAN)")
+	}
+}

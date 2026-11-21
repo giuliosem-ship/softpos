@@ -151,15 +151,24 @@ instead. The body is translated by `ParseWebhookEvent` into the normalized
 
 | Type | Required fields | Effect (one `MoneyStore` transaction) | Outbox |
 |---|---|---|---|
-| `payment.authorized` | — | `CREATED`/`DECLINED` → `AUTHORIZED` | `card_payment.authorized` |
+| `payment.authorized` | — (optional `card_brand`, `card_last4`, `auth_code`) | `CREATED`/`DECLINED` → `AUTHORIZED` | `card_payment.authorized` |
 | `payment.declined` | `decline_code` | `CREATED`/`AUTHORIZED` → `DECLINED` | `card_payment.declined` |
 | `payment.canceled` | — | → `CANCELED` (ignored + `ALERT` if captured) | `card_payment.canceled` |
-| `payment.captured` | `amount_cents`, `fee_cents`, `settlement_date` | settle split + processor fee (§2), → `CAPTURED` | `card_payment.captured` |
+| `payment.captured` | `amount_cents`, `fee_cents`, `settlement_date` (optional `card_brand`, `card_last4`, `auth_code`) | settle split + processor fee (§2), → `CAPTURED` | `card_payment.captured` |
 | `payment.refunded` | `refund_id`, `amount_cents` (`kerno_refund_id` optional) | bounded by captured − refunded − chargebacks (else `EVENT_CONFLICT`); proportional refund reversal (same as the EMV refund: available, tax escrow, fee, RESICO month), → `PARTIALLY_REFUNDED`/`REFUNDED`, refund request `SUCCEEDED` | `card_payment.refunded` |
 | `refund.failed` | `refund_id` (`kerno_refund_id` optional) | refund request `FAILED` (hold released) | `card_payment.refund_failed` |
 | `chargeback.opened` | `chargeback_id`, `amount_cents` | journal `chargeback_<cp>_<cb>`: Dr merchant `AVAILABLE` (may go negative → payouts blocked), Cr `ASSET:ACQUIRER_RECEIVABLE`; → `CHARGEBACK` | `card_payment.chargeback_opened` (notifies the merchant, includes `available_after_cents`) |
 | `chargeback.reversed` | `chargeback_id`, `amount_cents` | reverse journal `chargeback_rev_…`; → `CHARGEBACK_REVERSED` | `card_payment.chargeback_reversed` |
 | `payout.settled` | `payout` | processor payout reconciliation (§5) | `acquirer.payout_settled` |
+
+Card details (MVP-26, sale receipt): an adapter maps the processor's card
+brand, the **last 4 digits** of the PAN (`^[0-9]{4}$`; a full or partial PAN
+is rejected as `INVALID_EVENT`, and `card_payments.card_last4` has the same
+check) and the issuer authorization code (`^[A-Za-z0-9]{1,12}$`) into the
+authorized / captured events; they are stored on the card payment
+(migration 019) for the receipt and the sale detail. Refunds and chargebacks
+after the sale was invoiced also enqueue a credit-note job in the same
+transaction (`docs/CFDI.md`, notas de crédito).
 
 Exactly-once: `money_operations` key `acq:<provider>:evt:<event id>` claimed
 in the posting transaction (a concurrent duplicate waits for the first and

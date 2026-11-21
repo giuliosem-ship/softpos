@@ -30,6 +30,7 @@ var (
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrMockKYCInProduction       = errors.New("insecure configuration: KYC_PROVIDER=mock cannot be used in production (it passes every identity check)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
+	ErrWeakReceiptTokenSecret    = errors.New("insecure configuration: RECEIPT_TOKEN_SECRET must be set to at least 32 bytes in production (it signs public receipt links)")
 )
 
 // minSecretLen is the minimum length of shared secrets in production.
@@ -90,6 +91,9 @@ var ServerEnvVars = []EnvVar{
 	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
 	{Name: "CFDI_CREDIT_NOTE_INTERVAL"},
 	{Name: "CFDI_GLOBAL_MAX_AGE"},
+	{Name: "RECEIPT_TOKEN_SECRET", Secret: true},
+	{Name: "RECEIPT_BASE_URL"},
+	{Name: "RECEIPT_TTL"},
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.
@@ -120,7 +124,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 
 	// 0. No secret may still hold the .env.example placeholder.
 	for _, v := range []string{cfg.DatabaseURL, cfg.RedisPassword, cfg.JWTSecret, cfg.PlayIntegritySecret,
-		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret} {
+		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret, cfg.ReceiptTokenSecret} {
 		if isPlaceholder(v) {
 			return ErrPlaceholderSecret
 		}
@@ -192,6 +196,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	// 8. KYB identity verification: the mock passes every check.
 	if cfg.KYCProvider == "mock" {
 		return ErrMockKYCInProduction
+	}
+
+	// 9. Public sale receipts: the token secret is what makes links unguessable.
+	if len(cfg.ReceiptTokenSecret) < minSecretLen {
+		return ErrWeakReceiptTokenSecret
 	}
 
 	return nil

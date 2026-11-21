@@ -128,6 +128,16 @@ type Config struct {
 	// un-invoiced eligible sales up to this age get into a new global part;
 	// older ones are alerted (CFDI_GLOBAL_MAX_AGE, default 90 days).
 	CFDIGlobalMaxAge time.Duration
+
+	// Sale receipts + autofactura (MVP-26, docs/CFDI.md). ReceiptTokenSecret
+	// signs the public receipt tokens (RECEIPT_TOKEN_SECRET, >= 32 bytes in
+	// production; DEV_MODE uses an ephemeral random one when unset; otherwise
+	// receipts are disabled). ReceiptBaseURL prefixes the links
+	// (RECEIPT_BASE_URL, "" = relative /r/…); ReceiptTTL is their lifetime
+	// (RECEIPT_TTL, default 90 days).
+	ReceiptTokenSecret string
+	ReceiptBaseURL     string
+	ReceiptTTL         time.Duration
 }
 
 func LoadConfigFromEnv() Config {
@@ -251,6 +261,9 @@ func LoadConfigFromEnv() Config {
 		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		CFDICreditNoteInterval:    parseDurationEnv("CFDI_CREDIT_NOTE_INTERVAL"),
 		CFDIGlobalMaxAge:          parseDurationEnv("CFDI_GLOBAL_MAX_AGE"),
+		ReceiptTokenSecret:        os.Getenv("RECEIPT_TOKEN_SECRET"),
+		ReceiptBaseURL:            strings.TrimSpace(os.Getenv("RECEIPT_BASE_URL")),
+		ReceiptTTL:                parseDurationEnv("RECEIPT_TTL"),
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -428,6 +441,23 @@ func resolveAcquirerWebhookSecret(cfg Config) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// resolveReceiptTokenSecret returns RECEIPT_TOKEN_SECRET, or an ephemeral
+// random secret in DEV_MODE (receipt links then die with the process).
+func resolveReceiptTokenSecret(cfg Config) ([]byte, error) {
+	if cfg.ReceiptTokenSecret != "" || !cfg.DevMode {
+		if cfg.ReceiptTokenSecret == "" {
+			slog.Warn("RECEIPT_TOKEN_SECRET not set: sale receipts and autofactura disabled (503)")
+		}
+		return []byte(cfg.ReceiptTokenSecret), nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	slog.Warn("DEV_MODE: RECEIPT_TOKEN_SECRET not set, using an ephemeral random secret")
+	return b, nil
+}
+
 // ErrUnknownKYCProvider is returned for an unsupported KYC_PROVIDER.
 var ErrUnknownKYCProvider = errors.New("unknown KYC_PROVIDER (want mock or empty)")
 
@@ -537,6 +567,15 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	}
 	server.SetCashierRefundsAllowed(cfg.AllowCashierRefunds)
 	server.SetGlobalInvoiceMaxAge(cfg.CFDIGlobalMaxAge)
+	receiptSecret, err := resolveReceiptTokenSecret(cfg)
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, err
+	}
+	server.SetReceiptTokenSecret(receiptSecret)
+	server.SetReceiptOptions(cfg.ReceiptBaseURL, cfg.ReceiptTTL)
 	// Legacy client-trusted EMV approve/settle/reverse: demo only.
 	server.SetLegacyCardFlowEnabled(cfg.DevMode)
 	if prov, err := buildAcquirerProvider(cfg); err != nil {
@@ -583,6 +622,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		server.SetOperatorAuditRepository(store.NewSQLAuditRepository(db))
 		server.SetFiscalSettingsRepository(store.NewSQLFiscalSettingsRepository(db))
 		server.SetInvoiceRepository(store.NewSQLInvoiceRepository(db))
+		server.SetReceiptRepository(store.NewSQLReceiptRepository(db))
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)

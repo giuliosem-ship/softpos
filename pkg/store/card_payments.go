@@ -59,7 +59,12 @@ type CardPaymentRecord struct {
 	ProviderPayoutID       string
 	ProviderSettledAt      *time.Time
 	DeclineCode            string
-	CreatedAt              time.Time
+	// Card details reported by the processor (MVP-26 receipt): brand, last
+	// 4 digits (never the full PAN) and authorization code.
+	CardBrand string
+	CardLast4 string
+	AuthCode  string
+	CreatedAt time.Time
 	UpdatedAt              time.Time
 }
 
@@ -187,7 +192,7 @@ var _ AcquirerRepository = (*SQLMoneyStore)(nil)
 const cardPaymentColumns = `id, merchant_id, provider, COALESCE(provider_payment_id, ''), intent_idempotency_key,
 	request_hash, amount_cents, currency, reference, persona_moral, status, captured_cents, refunded_cents,
 	chargeback_cents, provider_fee_cents, provider_settlement_date, provider_payout_id, provider_settled_at,
-	decline_code, created_at, updated_at`
+	decline_code, card_brand, card_last4, auth_code, created_at, updated_at`
 
 func scanCardPayment(row rowScanner) (CardPaymentRecord, error) {
 	var r CardPaymentRecord
@@ -196,7 +201,7 @@ func scanCardPayment(row rowScanner) (CardPaymentRecord, error) {
 	err := row.Scan(&r.ID, &r.MerchantID, &r.Provider, &r.ProviderPaymentID, &r.IntentIdempotencyKey,
 		&r.RequestHash, &r.AmountCents, &r.Currency, &r.Reference, &r.PersonaMoral, &status, &r.CapturedCents,
 		&r.RefundedCents, &r.ChargebackCents, &r.ProviderFeeCents, &r.ProviderSettlementDate, &r.ProviderPayoutID,
-		&settledAt, &r.DeclineCode, &r.CreatedAt, &r.UpdatedAt)
+		&settledAt, &r.DeclineCode, &r.CardBrand, &r.CardLast4, &r.AuthCode, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return CardPaymentRecord{}, err
 	}
@@ -274,10 +279,11 @@ func (t *sqlMoneyTx) UpdateCardPayment(ctx context.Context, r CardPaymentRecord)
 	res, err := t.tx.ExecContext(ctx, `
 		UPDATE card_payments SET provider_payment_id = $1, status = $2, captured_cents = $3, refunded_cents = $4,
 			chargeback_cents = $5, provider_fee_cents = $6, provider_settlement_date = $7, provider_payout_id = $8,
-			provider_settled_at = $9, decline_code = $10, updated_at = $11
+			provider_settled_at = $9, decline_code = $10, updated_at = $11, card_brand = $13, card_last4 = $14, auth_code = $15
 		WHERE id = $12
 	`, nullIfEmpty(r.ProviderPaymentID), string(r.Status), r.CapturedCents, r.RefundedCents, r.ChargebackCents,
-		r.ProviderFeeCents, r.ProviderSettlementDate, r.ProviderPayoutID, settledAt, r.DeclineCode, time.Now().UTC(), r.ID)
+		r.ProviderFeeCents, r.ProviderSettlementDate, r.ProviderPayoutID, settledAt, r.DeclineCode, time.Now().UTC(), r.ID,
+		r.CardBrand, r.CardLast4, r.AuthCode)
 	if err != nil {
 		return fmt.Errorf("failed to update card payment: %w", err)
 	}

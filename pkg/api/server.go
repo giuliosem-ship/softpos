@@ -80,6 +80,12 @@ type Server struct {
 	globalMaxAge      time.Duration // factura global reconciliation window (0 = default)
 	globalMaxConcepts int           // conceptos per factura global part (0 = maxGlobalConcepts)
 	mailer            Mailer
+	sms               SMSSender
+	receipts          store.ReceiptRepository
+	receiptSecret     []byte
+	receiptBaseURL    string
+	receiptTTL        time.Duration
+	receiptLimiter    *RateLimiter
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -121,6 +127,9 @@ func NewServer(
 		fiscalSettings:    store.NewMemoryFiscalSettingsRepository(),
 		invoices:          store.NewMemoryInvoiceRepository(),
 		mailer:            LogMailer{},
+		sms:               LogSMSSender{},
+		receipts:          store.NewMemoryReceiptRepository(),
+		receiptLimiter:    NewRateLimiter(DefaultReceiptRateLimitPerIP, time.Minute),
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -694,6 +703,11 @@ func (s *Server) routes() {
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/balances", s.HandleGetMerchantBalances)
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/sales", s.HandleListSales)
 	s.router.HandleFunc("GET /api/v1/merchants/{id}/sales/{sale_id}", s.HandleGetSale)
+	s.router.HandleFunc("POST /api/v1/merchants/{id}/sales/{sale_id}/receipt", s.HandleSendReceipt)
+	// Public sale receipt + autofactura (signed expiring token, rate limited; docs/CFDI.md)
+	s.router.HandleFunc("GET /r/{token}", s.HandleGetReceipt)
+	s.router.HandleFunc("POST /r/{token}/invoice", s.HandleReceiptInvoice)
+	s.router.HandleFunc("GET /r/{token}/invoice/{doc}", s.HandleReceiptInvoiceDoc)
 
 	// Serve Static POS Web App dynamically
 	s.router.HandleFunc("GET /pos/", func(w http.ResponseWriter, r *http.Request) {

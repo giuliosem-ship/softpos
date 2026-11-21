@@ -27,13 +27,14 @@ func TestValidateProductionConfig_DevelopmentPassesWithDefaults(t *testing.T) {
 
 func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing.T) {
 	prodCfg := Config{
-		Port:              8443,
-		DatabaseURL:       "postgres://softpos_user:UltraSecurePass987@db.prod.internal:5432/softpos?sslmode=require",
-		VaultMasterKeyHex: "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
-		STPHMACSecret:     "prod_stp_hmac_secret_very_long_and_random_string_xyz",
-		SeedDemoMerchant:  false,
-		JWTSecret:         "prod_jwt_secret_with_at_least_32_random_bytes",
-		CoDiWebhookSecret: "prod_codi_webhook_secret_with_32_random_bytes",
+		Port:               8443,
+		DatabaseURL:        "postgres://softpos_user:UltraSecurePass987@db.prod.internal:5432/softpos?sslmode=require",
+		VaultMasterKeyHex:  "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
+		STPHMACSecret:      "prod_stp_hmac_secret_very_long_and_random_string_xyz",
+		SeedDemoMerchant:   false,
+		JWTSecret:          "prod_jwt_secret_with_at_least_32_random_bytes",
+		CoDiWebhookSecret:  "prod_codi_webhook_secret_with_32_random_bytes",
+		ReceiptTokenSecret: "prod_receipt_token_secret_32_random_bytes!",
 	}
 
 	// 1. Valid production config passes

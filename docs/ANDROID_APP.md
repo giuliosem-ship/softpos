@@ -49,7 +49,8 @@ also validates the wrapper jar against Gradle's published checksums.
 - Navigation (navigation-compose): no session → login; session without a
   merchant and several memberships → merchant picker; otherwise bottom bar
   *Inicio* (balances), *Cobrar*, *Ventas* (list + detail with refunds),
-  *Perfil* (profile, CLABE, switch merchant, logout). The merchant app is
+  *Perfil* (profile, CLABE, *Facturas*, *Sellos digitales (CSD)* for owners,
+  switch merchant, logout). The merchant app is
   keyed on user + merchant, so switching tenant rebuilds every ViewModel.
 - ViewModels are `androidx.lifecycle.ViewModel`s with injected APIs and an IO
   dispatcher, unit-tested with fakes (`src/test`). API clients are blocking
@@ -195,14 +196,82 @@ backend never answers `404` for a merchant's KYB (it creates a `DRAFT` on
 first read); the client still treats a bare `404` as "endpoint missing" and
 disables the routing.
 
+### CSD (`fiscal/CsdApi.kt`, `ui/fiscal/Csd*`)
+
+*Perfil → Sellos digitales (CSD)*, owner only (hidden for other roles; the
+backend enforces it too). `GET /api/v1/merchants/{id}/csd` →
+`{serial, rfc, valid_from, valid_to, status:"ACTIVE"}` or `404 CSD_NOT_FOUND`;
+the screen shows status, número de certificado, RFC, vigencia and warns when
+fewer than 30 days remain (or it already expired). Upload: `.cer` and `.key`
+picked with the SAF document picker (`OpenDocument`, no storage permission,
+≤ 64 KiB, never copied to disk) and a masked password field →
+`PUT .../csd` multipart `cer`, `key`, `password` → `200` same shape, or
+`422 CSD_INVALID {reason}` (reason shown as sent). Client-side pre-checks
+(`CsdInspector`, advisory): the certificate parses as X.509, is inside its
+validity window, its holder RFC (x500UniqueIdentifier 2.5.4.45, "RFC / CURP")
+equals the merchant's RFC, and the key looks like DER (PKCS#8, first byte
+`0x30`); key decryption, pair matching and CSD-vs-FIEL are the backend's job.
+The SAT serial is decoded from the ASCII-digit encoding. Sensitive data: the
+password field uses plain `remember` (never saved instance state) and is
+cleared on submit; the ViewModel receives a `CharArray`, the HTTP client
+encodes it to a UTF-8 `ByteArray` without a `String`, and both are zeroed in
+`finally`; the key bytes are zeroed after every attempt (a retry needs the key
+picked again), on replacement and in `onCleared`. Nothing is logged.
+(Compose `TextField` still holds the typed text as an immutable `String`
+until the field is cleared — a platform limitation.)
+
+### Invoicing (CFDI) (`fiscal/InvoiceApi.kt`, `ui/fiscal/Invoice*`)
+
+- Entry points: *Facturar* on the detail of an approved (or partially
+  refunded) sale, and *Seleccionar para facturar* in *Ventas* (checkboxes,
+  only invoiceable sales; *Facturar seleccionadas (n)*). *Facturas* is
+  reachable from *Ventas* and *Perfil*.
+- Gate: the form reads `GET .../csd` on every visit; `404 CSD_NOT_FOUND` or a
+  status other than `ACTIVE` blocks it and links to the CSD screen (coming
+  back re-checks). A create answering `CSD_NOT_FOUND`/`CSD_REQUIRED`/
+  `CSD_NOT_ACTIVE`/`CSD_EXPIRED` does the same (assumed codes).
+- Receptor form: RFC (upper-cased, SAT shape; 13 chars = persona física,
+  12 = moral), nombre (as in the customer's CSF), régimen fiscal and uso CFDI
+  from `GET /api/v1/catalogs/sat?names=regimen_fiscal,uso_cfdi`, filtered by
+  `persona_fisica`/`persona_moral` and by the use's `regimenes`; changing the
+  RFC or régimen drops choices that no longer fit. CP 5 digits, email
+  optional. Catalogs live in memory (`SatCatalogCache`, one per process): fresh
+  for 12 h, then revalidated with `If-None-Match` (`304` renews it); a failed
+  refresh serves the stale copy.
+- `POST .../invoices {sale_ids, receptor}` with an `Idempotency-Key` stable per
+  request body: kept on no response / unparsable / 5xx (`502` from the PAC),
+  so *Reintentar* replays the same invoice; dropped on any 4xx or a result,
+  and a new one when the receptor or sales change. `409 SALE_ALREADY_INVOICED`
+  and `422 RECEPTOR_INVALID {fields}` (names with or without `receptor.`) are
+  mapped and mark the fields. The result screen shows `STAMPED` (UUID,
+  total), `PENDING` ("se está timbrando") or `FAILED` (`error`).
+- *Facturas*: `GET .../invoices?limit=50&before=` with the same cursor rules
+  as *Ventas*. Detail: `GET .../invoices/{id}` (status, UUID, serie-folio,
+  subtotal/IVA/total in Long cents, receptor, dates). *Compartir PDF/XML*
+  downloads `GET .../{id}/pdf|xml` into `cache/invoices/` (emptied before each
+  write, the download buffer is zeroed) and opens the share sheet with a
+  content Uri of `InvoiceFileProvider` (authority `<appId>.invoicefiles`, not
+  exported, read grant per Uri, paths file maps only `cache/invoices/`).
+- Cancel (owner, stamped only): SAT motivo `01`–`04`; `01` requires
+  `folio_sustitucion` (UUID shape checked) → `POST .../{id}/cancel`; the
+  response's `CANCEL_REQUESTED` / `CANCELED` replaces the shown invoice.
+
 ### Contract tests
 
-`src/test/resources/contract/*.json` are response bodies captured from the
-Go handlers of batch G (KYB GET/PUT/upload/submit incl. 400/409/422, card
-intent/payment/cancel/refund, sales, the `403 MERCHANT_NOT_APPROVED` gate);
-`contract/KybContractTest` and `contract/PaymentsContractTest` decode them
-through the real HTTP clients and ViewModels. Regenerate them from the
-backend tests when a response struct changes.
+`src/test/resources/contract/*.json` are response bodies. Batch G
+(KYB GET/PUT/upload/submit incl. 400/409/422, card intent/payment/cancel/
+refund, sales, the `403 MERCHANT_NOT_APPROVED` gate) were captured from the Go
+handlers; `contract/KybContractTest` and `contract/PaymentsContractTest`
+decode them through the real HTTP clients and ViewModels. Batch J (`csd_*`,
+`invoice*`, `invoices_*`, `sat_catalogs_200.json`) are **handwritten from the
+agreed contract** and exercised by `contract/FiscalContractTest` (request
+method, path, query, `Idempotency-Key`, multipart part names, JSON body
+keys, `If-None-Match`); re-verify them against real handler responses.
+`ui/fiscal/FileProviderHygieneTest` asserts both FileProviders are not
+exported and that the invoice one maps only `cache/invoices/`. CSD tests use a
+synthetic certificate built in memory (`fiscal/TestCertificates`): no `.cer`
+or `.key` file is committed (both are git-ignored). Regenerate fixtures from
+the backend tests when a response struct changes.
 
 ## What is mocked or provisional
 
@@ -224,4 +293,4 @@ backend tests when a response struct changes.
 3. **Signing and distribution**: upload key in CI secrets, Play App Signing,
    internal/closed track, forced minimum version (targetSdk is already 36).
 4. **Crash reporting / telemetry** (Crashlytics or Sentry) with PII scrubbing.
-5. Remaining F9 screens: CFDI invoicing; F10 sale receipt.
+5. Re-verify the batch J fiscal fixtures against the real handlers; F10 sale receipt.

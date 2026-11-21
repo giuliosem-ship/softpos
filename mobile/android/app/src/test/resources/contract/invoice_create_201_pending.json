@@ -1,0 +1,1 @@
+{"invoice_id":"inv_02","status":"PENDING","total_cents":5800,"subtotal_cents":5000,"iva_cents":800,"receptor":{"rfc":"ABC010203AB1","nombre":"EMPRESA DE PRUEBA","regimen_fiscal":"601","codigo_postal":"64000","uso_cfdi":"G01"},"sale_ids":["sale_c"],"created_at":"2026-11-20T16:05:00Z"}

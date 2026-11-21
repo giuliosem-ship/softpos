@@ -282,9 +282,12 @@ at most `CFDI_GLOBAL_MAX_AGE` old (default 90 days). Each CFDI goes to
   set, so reruns and concurrent workers never duplicate it; a concurrent run
   that loses the race for a part number or a sale skips it until the next
   run. `FAILED` parts are retried from the backoffice; a `CANCELED` part's set
-  moves to the next key suffix.
+  moves to the next key suffix. Each part re-reads its sales' amounts right
+  before it is created (the window is read first and earlier parts are
+  stamped meanwhile), so a refund landing in between is netted out instead of
+  missing both the global and a credit note.
 - **Cost:** each run scans the window's sales of every merchant (paged by
-  1,000; one card settlement read per un-invoiced card sale). Fine for the
+  1,000; two card settlement reads per un-invoiced card sale). Fine for the
   MVP; a dedicated "un-invoiced" index is the next step at volume.
 
 **Sales already in a global (documented choice):** an individual invoice for

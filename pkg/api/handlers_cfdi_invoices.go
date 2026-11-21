@@ -135,6 +135,7 @@ type saleLine struct {
 	formaPago string
 	gross     int64
 	createdAt time.Time
+	sale      store.SaleRecord // the record the amounts were read from
 }
 
 // saleError is a per-sale rejection (code + HTTP status).
@@ -150,7 +151,7 @@ func (e *saleError) Error() string { return e.code + " " + e.saleID }
 // card captures use their settlement record (base/IVA minus refunds), SPEI
 // abonos and CoDi confirmations the 16 % IVA-inclusive split the ledger uses.
 func (s *Server) invoiceableLine(ctx context.Context, rec store.SaleRecord) (saleLine, error) {
-	l := saleLine{InvoiceLine: fiscal.InvoiceLine{SaleID: rec.ID}, createdAt: rec.CreatedAt}
+	l := saleLine{InvoiceLine: fiscal.InvoiceLine{SaleID: rec.ID}, createdAt: rec.CreatedAt, sale: rec}
 	notInvoiceable := &saleError{code: "SALE_NOT_INVOICEABLE", saleID: rec.ID, status: http.StatusUnprocessableEntity}
 	switch rec.Kind {
 	case store.SaleCard:
@@ -1209,6 +1210,25 @@ func (s *Server) eachUninvoicedSale(ctx context.Context, merchantID string, from
 // the part's sale set, so reruns never duplicate it: a FAILED part waits for
 // the backoffice retry, a CANCELED one (motivo 04) moves to the next suffix.
 func (s *Server) issueGlobalPart(ctx context.Context, merchantID string, emisor emisorProfile, p globalPeriod, lines []saleLine, now time.Time) (*store.InvoiceRecord, error) {
+	// Re-read the amounts right before issuing: the reconciliation read the
+	// whole window first and earlier parts were stamped meanwhile, so a
+	// refund may have landed since (its credit-note job resolves
+	// NOT_REQUIRED after creditNoteGrace when no invoice holds the sale).
+	fresh := make([]saleLine, 0, len(lines))
+	for _, l := range lines {
+		nl, err := s.invoiceableLine(ctx, l.sale)
+		if err != nil {
+			var se *saleError
+			if errors.As(err, &se) {
+				continue // fully refunded meanwhile
+			}
+			return nil, err
+		}
+		fresh = append(fresh, nl)
+	}
+	if lines = fresh; len(lines) == 0 {
+		return nil, nil
+	}
 	saleIDs := make([]string, len(lines))
 	for i, l := range lines {
 		saleIDs[i] = l.SaleID

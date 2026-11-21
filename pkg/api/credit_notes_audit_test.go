@@ -67,3 +67,33 @@ func TestCreditNotes_FailedRetryRefusedOnceCreditedCanceled(t *testing.T) {
 		t.Fatal("an egreso related to a canceled CFDI was stamped")
 	}
 }
+
+// TestGlobalInvoices_RefreshesLinesBeforeIssuing: the reconciliation reads
+// every un-invoiced sale of the window before issuing parts one by one
+// (each stamped through the PAC), so a refund can land long after a sale's
+// amounts were read. The part must use the sale's amounts as of its
+// creation; otherwise the refund (whose credit-note job resolved
+// NOT_REQUIRED after the grace period) would never be credited.
+func TestGlobalInvoices_RefreshesLinesBeforeIssuing(t *testing.T) {
+	f := setupInvoiceServer(t)
+	s := f.s
+	intent := capturedCardPayment(t, s, f.mock, "gl-stale", 11600)
+	ctx := context.Background()
+	next := time.Now().AddDate(0, 1, 2)
+	emisor, err := s.emisorProfile(ctx, cardMerchant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []saleLine
+	if err := s.eachUninvoicedSale(ctx, cardMerchant, time.Time{}, next, 0, func(l saleLine) { lines = append(lines, l) }); err != nil || len(lines) != 1 {
+		t.Fatalf("lines: %v %d", err, len(lines))
+	}
+	f.deliverOK(t, refundEvent(intent, "re_stale", 5800)) // lands while earlier parts are being issued
+	out, err := s.issueGlobalPart(ctx, cardMerchant, emisor, globalPeriodOf(emisor.Settings.GlobalPeriodicity, time.Now()), lines, next)
+	if err != nil || out == nil {
+		t.Fatalf("part: %v", err)
+	}
+	if out.TotalCents != 5800 {
+		t.Fatalf("the part must invoice the net amount at creation: total %d", out.TotalCents)
+	}
+}

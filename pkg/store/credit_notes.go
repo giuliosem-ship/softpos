@@ -66,9 +66,16 @@ type CreditNoteJobQuery struct {
 type CreditNoteJobRepository interface {
 	ListCreditNoteJobs(ctx context.Context, q CreditNoteJobQuery) ([]CreditNoteJob, error)
 	// UpdateCreditNoteJob writes status, invoice ids, credited amount,
-	// attempts, next attempt and last error (the flag is kept).
-	UpdateCreditNoteJob(ctx context.Context, job CreditNoteJob) error
+	// attempts, next attempt and last error (the flag is kept) of a job that
+	// is still PENDING, and returns the stored row. Writing ISSUED also
+	// applies to a job resolved meanwhile (the egreso exists; the returned
+	// Flag tells a reversal raced it). ErrCreditJobResolved otherwise: a
+	// chargeback reversal (or another worker) resolved the job first.
+	UpdateCreditNoteJob(ctx context.Context, job CreditNoteJob) (CreditNoteJob, error)
 }
+
+// ErrCreditJobResolved: the job is no longer PENDING (see UpdateCreditNoteJob).
+var ErrCreditJobResolved = errors.New("credit note job already resolved")
 
 var (
 	_ CreditNoteJobRepository = (*SQLMoneyStore)(nil)
@@ -165,17 +172,18 @@ func (s *SQLMoneyStore) ListCreditNoteJobs(ctx context.Context, q CreditNoteJobQ
 	return out, rows.Err()
 }
 
-func (s *SQLMoneyStore) UpdateCreditNoteJob(ctx context.Context, j CreditNoteJob) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE credit_note_jobs SET status = $2, credit_note_invoice_id = $3, related_invoice_id = $4,
-		credited_cents = $5, attempts = $6, next_attempt_at = $7, last_error = $8, updated_at = NOW() WHERE id = $1`,
-		j.ID, j.Status, j.CreditNoteInvoiceID, j.RelatedInvoiceID, j.CreditedCents, j.Attempts, j.NextAttemptAt.UTC(), j.LastError)
+func (s *SQLMoneyStore) UpdateCreditNoteJob(ctx context.Context, j CreditNoteJob) (CreditNoteJob, error) {
+	out, err := scanCreditJob(s.db.QueryRowContext(ctx, `UPDATE credit_note_jobs SET status = $2, credit_note_invoice_id = $3,
+		related_invoice_id = $4, credited_cents = $5, attempts = $6, next_attempt_at = $7, last_error = $8, updated_at = NOW()
+		WHERE id = $1 AND (status = 'PENDING' OR $2 = 'ISSUED') RETURNING `+creditJobColumns,
+		j.ID, j.Status, j.CreditNoteInvoiceID, j.RelatedInvoiceID, j.CreditedCents, j.Attempts, j.NextAttemptAt.UTC(), j.LastError))
+	if errors.Is(err, sql.ErrNoRows) {
+		return CreditNoteJob{}, fmt.Errorf("credit note job %d: %w", j.ID, ErrCreditJobResolved)
+	}
 	if err != nil {
-		return fmt.Errorf("update credit note job: %w", err)
+		return CreditNoteJob{}, fmt.Errorf("update credit note job: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("credit note job %d not found", j.ID)
-	}
-	return nil
+	return out, nil
 }
 
 // ----------------------------------------------------------------------------
@@ -249,18 +257,21 @@ func (s *MemoryMoneyStore) ListCreditNoteJobs(_ context.Context, q CreditNoteJob
 	return out, nil
 }
 
-func (s *MemoryMoneyStore) UpdateCreditNoteJob(_ context.Context, j CreditNoteJob) error {
+func (s *MemoryMoneyStore) UpdateCreditNoteJob(_ context.Context, j CreditNoteJob) (CreditNoteJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, cur := range s.creditJobs {
 		if cur.ID == j.ID {
+			if cur.Status != CreditJobPending && j.Status != CreditJobIssued {
+				return CreditNoteJob{}, fmt.Errorf("credit note job %d: %w", j.ID, ErrCreditJobResolved)
+			}
 			j.Flag, j.MerchantID, j.SaleID, j.SourceKind, j.SourceID = cur.Flag, cur.MerchantID, cur.SaleID, cur.SourceKind, cur.SourceID
 			j.AmountCents, j.NetAfterCents, j.CreatedAt, j.UpdatedAt = cur.AmountCents, cur.NetAfterCents, cur.CreatedAt, time.Now().UTC()
 			s.creditJobs[i] = j
-			return nil
+			return j, nil
 		}
 	}
-	return fmt.Errorf("credit note job %d not found", j.ID)
+	return CreditNoteJob{}, fmt.Errorf("credit note job %d not found", j.ID)
 }
 
 // SetCreditNoteJobCreatedAt backdates a job (tests of the worker's grace period).

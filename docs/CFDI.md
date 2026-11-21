@@ -354,8 +354,10 @@ produces a CFDI de egreso automatically:
   flagged `CHARGEBACK_REVERSED`, an `ALERT` is logged and operators see it in
   `GET /api/v1/backoffice/credit-notes?flagged=true` (also `status=`,
   `merchant_id=`, `limit=`) to issue a new CFDI de ingreso manually with the
-  accountant's guidance. If the reversal races a worker issuing the egreso,
-  the job ends `ISSUED` and still flagged.
+  accountant's guidance. Job updates only apply to `PENDING` jobs, so a
+  worker holding a stale snapshot never brings a reversed job back to
+  `PENDING`; if the reversal races a worker that already created the egreso,
+  the job ends `ISSUED`, still flagged, and an `ALERT` is logged.
 - **Limitations (accountant to confirm):** egreso vs. cancelación con
   sustitución; clave 84111506 / ACT and InformacionGlobal on the egreso of a
   global; G02. A credited invoice can only be canceled (e.g. motivo 01) after

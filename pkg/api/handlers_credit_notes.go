@@ -135,15 +135,25 @@ func (s *Server) ProcessCreditNotes(ctx context.Context, now time.Time) (int, er
 // processCreditNoteJob decides one job. resolved=false means it waits (no
 // stamped invoice yet, CSD missing, ...) and was rescheduled.
 func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNoteJobRepository, j store.CreditNoteJob, now time.Time) (issued, resolved bool, invoiceID string, err error) {
+	// save writes the job unless a chargeback reversal (or another worker)
+	// resolved it meanwhile: then it is resolved and left as is.
+	save := func(resolved bool) (bool, bool, string, error) {
+		if _, err := repo.UpdateCreditNoteJob(ctx, j); errors.Is(err, store.ErrCreditJobResolved) {
+			return false, true, "", nil
+		} else if err != nil {
+			return false, false, "", err
+		}
+		return false, resolved, "", nil
+	}
 	wait := func(reason string) (bool, bool, string, error) {
 		j.Attempts++
 		j.NextAttemptAt, j.LastError = now.Add(creditBackoff(j.Attempts)), reason
-		return false, false, "", repo.UpdateCreditNoteJob(ctx, j)
+		return save(false)
 	}
 	notRequired := func(reason string) (bool, bool, string, error) {
 		j.Status, j.LastError = store.CreditJobNotRequired, reason
 		slog.Info("credit note not required", "job_id", j.ID, "sale_id", j.SaleID, "source", j.SourceKind, "reason", reason)
-		return false, true, "", repo.UpdateCreditNoteJob(ctx, j)
+		return save(true)
 	}
 	invoices := s.invoiceRepo()
 	key := creditNoteKey(j)
@@ -152,7 +162,7 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 	} else if found { // created by an earlier attempt that did not record it
 		j.Status, j.CreditNoteInvoiceID, j.RelatedInvoiceID, j.CreditedCents, j.LastError =
 			store.CreditJobIssued, existing.ID, existing.RelatedInvoiceID, existing.SubtotalCents+existing.IVACents, ""
-		return false, true, "", repo.UpdateCreditNoteJob(ctx, j)
+		return save(true)
 	}
 	links, err := invoices.SaleInvoiceLinks(ctx, j.MerchantID, []string{j.SaleID})
 	if err != nil {
@@ -220,8 +230,13 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 		return wait("CREDIT_NOTE_NOT_CREATED: " + err.Error())
 	}
 	j.Status, j.CreditNoteInvoiceID, j.RelatedInvoiceID, j.CreditedCents, j.LastError = store.CreditJobIssued, created.ID, credited.ID, credit, ""
-	if err := repo.UpdateCreditNoteJob(ctx, j); err != nil {
+	saved, err := repo.UpdateCreditNoteJob(ctx, j)
+	if err != nil {
 		return false, false, "", err
+	}
+	if saved.Flag == store.CreditFlagChargebackReversed {
+		slog.Error("ALERT chargeback reversed while its credit note was being issued: review in the backoffice (no automatic re-invoicing)",
+			"job_id", j.ID, "invoice_id", created.ID, "sale_id", j.SaleID, "chargeback_id", j.SourceID)
 	}
 	slog.Info("credit note created", "job_id", j.ID, "invoice_id", created.ID, "credited_invoice_id", credited.ID,
 		"sale_id", j.SaleID, "source", j.SourceKind, "credited_cents", credit)

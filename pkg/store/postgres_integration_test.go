@@ -605,3 +605,7 @@ func TestPGIntegration_Migrations018And019DownUp(t *testing.T) {
 		t.Fatal("card_last4 must only hold 4 digits (never a PAN)")
 	}
 }
+
+func TestPGIntegration_CreditNoteJobResolvedConcurrently(t *testing.T) {
+	checkCreditJobResolvedConcurrently(t, NewSQLMoneyStore(openMigratedPG(t)), "m_cn_race")
+}

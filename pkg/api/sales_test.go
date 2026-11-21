@@ -75,7 +75,7 @@ func TestSales_UnifiedNewestFirstWithCursor(t *testing.T) {
 			t.Fatalf("duplicate %s across pages", it.ID)
 		}
 		seen[it.ID] = true
-		if i > 0 && all[i-1].CreatedAt < it.CreatedAt {
+		if i > 0 && mustRFC3339(t, all[i-1].CreatedAt).Before(mustRFC3339(t, it.CreatedAt)) { // RFC3339Nano trims zeros: compare times, not strings
 			t.Fatalf("not newest first: %s before %s", all[i-1].CreatedAt, it.CreatedAt)
 		}
 		switch it.Kind {
@@ -142,4 +142,13 @@ func TestRefresh_GraceWindowOverHTTP(t *testing.T) {
 	if third.Code != http.StatusUnauthorized || !contains(third.Body.String(), "REFRESH_TOKEN_REUSED") {
 		t.Fatalf("second replay: want 401 REFRESH_TOKEN_REUSED, got %d %s", third.Code, third.Body.String())
 	}
+}
+
+func mustRFC3339(t *testing.T, v string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		t.Fatalf("created_at %q: %v", v, err)
+	}
+	return at
 }

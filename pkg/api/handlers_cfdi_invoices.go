@@ -566,6 +566,11 @@ func (s *Server) stampInvoice(ctx context.Context, rec store.InvoiceRecord, sign
 		}
 		return out
 	}
+	if rec.Kind == store.InvoiceCreditNote {
+		if err := s.creditedStillStamped(ctx, rec); err != nil {
+			return fail("CREDITED_INVOICE_NOT_STAMPED", err.Error(), store.LinksRelease, store.InvoiceFailed)
+		}
+	}
 	doc, sealedAt, err := s.sealedXML(ctx, rec, signer, now)
 	if err != nil {
 		return fail("CFDI_BUILD_FAILED", err.Error(), store.LinksRelease, store.InvoiceFailed)

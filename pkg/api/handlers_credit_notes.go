@@ -231,6 +231,21 @@ func (s *Server) processCreditNoteJob(ctx context.Context, repo store.CreditNote
 	return true, true, created.ID, nil
 }
 
+// creditedStillStamped: a credit note is only stamped while the invoice it
+// credits is STAMPED. A FAILED credit note retried after its invoice was
+// canceled must not relate an egreso to a canceled CFDI (the sale's net
+// amount is what a replacement or the next factura global invoices).
+func (s *Server) creditedStillStamped(ctx context.Context, rec store.InvoiceRecord) error {
+	credited, found, err := s.invoiceRepo().GetInvoice(ctx, rec.MerchantID, rec.RelatedInvoiceID)
+	if err != nil {
+		return err
+	}
+	if !found || credited.Status != store.InvoiceStamped {
+		return fmt.Errorf("credited invoice %s is not STAMPED (%s)", rec.RelatedInvoiceID, credited.Status)
+	}
+	return nil
+}
+
 // creditNoteSpec is the CFDI de egreso spec of a credit note crediting
 // `credited`: same receptor (UsoCFDI G02 "Devoluciones, descuentos o
 // bonificaciones" when the catalog allows it for the receptor's régimen),

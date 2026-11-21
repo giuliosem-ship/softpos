@@ -343,7 +343,11 @@ produces a CFDI de egreso automatically:
   official XSLT.
 - **Failures:** PAC unavailable → the credit note stays `PENDING` and the
   worker retries it; SAT rejection → `FAILED`, retried from the backoffice
-  (`POST /api/v1/backoffice/invoices/{id}/retry`, same as failed stamps).
+  (`POST /api/v1/backoffice/invoices/{id}/retry`, same as failed stamps). A
+  credit note is only stamped while the invoice it credits is `STAMPED`; a
+  retry after that invoice was canceled ends `FAILED`
+  (`CREDITED_INVOICE_NOT_STAMPED`): its replacement / the next global is
+  already built from the net amount.
 - **Chargeback reversed (`chargeback.reversed`) — decision:** Kerno does
   **not** re-invoice automatically. A job still PENDING becomes
   `NOT_REQUIRED` (funds came back before any egreso); an `ISSUED` one is

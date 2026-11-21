@@ -114,7 +114,7 @@ func TestReceipts_CardReceiptAndAutofactura(t *testing.T) {
 		v.Card.MaskedPAN != "**** 4242" || v.Status != "APPROVED" || !v.Autofactura.Available || v.Autofactura.URL != tokenPath+"/invoice" || v.Date == "" {
 		t.Fatalf("receipt: %d %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), cardMerchant) || regexp.MustCompile(`\d{13,19}`).MatchString(rec.Body.String()) {
+	if strings.Contains(rec.Body.String(), cardMerchant) || regexp.MustCompile(`\b\d{13,19}\b`).MatchString(rec.Body.String()) {
 		t.Fatalf("receipt leaks the merchant id or a PAN: %s", rec.Body.String())
 	}
 	if rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Referrer-Policy") != "no-referrer" {

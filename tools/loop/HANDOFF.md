@@ -38,8 +38,17 @@
 - Auditoría (`[MVP-17-audit]`/`[MVP-18-audit]`): RBF tras la aprobación y solo `operator`; CLABE virtual asignada una sola vez; no se aprueba un RFC 69-B `LISTED`; un operador no aprueba/desbloquea su propio comercio; 69-B `UNKNOWN` sin lista cargada. Pendientes nuevos en el gap analysis (ingesta 69-B, documento subido durante el envío, bitácora mutable a nivel BD).
 - Validación: `go vet` limpio, `go test -race` 20/20 paquetes, PGIntegration 36/36, `node --test` 8/8.
 
+## Fase 2 — Lote H (app Android, AND-33..35)
+- Contrato real de cobro con tarjeta (`/api/v1/card-payments/*`), devoluciones, selector de comercio y onboarding KYB en la app; auditoría `[AND-33-audit]`/`[AND-35-audit]` (llave de idempotencia en 5xx de resultado desconocido, polling acotado por tiempo, CI falla si el APK release conserva el simulador). Detalle en `docs/ANDROID_APP.md`.
+
+## Fase 2/3 — Lote I (69-B y CFDI 4.0, MVP-20..22)
+- MVP-20: ingesta real de la lista 69-B del SAT (parser Latin-1, staging + swap atómico, migración 015, protección de encogimiento 10 % con override auditado, lista sin verificar > `SAT_69B_MAX_AGE` → `UNKNOWN`, worker `SAT_69B_URL`, backoffice y `operatorctl load-69b`, re-revisión y bloqueo de comercios aprobados listados; `docs/KYB.md`).
+- MVP-21: cadena original validada contra el XSLT oficial (golden tests con `xsltproc`), sello sobre la cadena, carga de CSD (`.key` PKCS#8 cifrado), catálogos SAT embebidos, ajustes fiscales del comercio (migración 016).
+- MVP-22: facturas desde ventas (montos del split posteado), timbrado por el puerto PAC, cancelación 01–04 con *polling* de aceptación, PDF con QR en Go puro, `Mailer`, factura global automática, reintentos en backoffice (migración 017; `docs/CFDI.md`).
+- Auditoría (`[MVP-22-audit]`): la consulta de estado de cancelaciones no mandaba el RFC del emisor (con un PAC real ninguna cancelación pendiente se resolvía; el mock SAT ahora exige la expresión re/rr/tt/id); una venta con devolución parcial podía quedar con IVA un centavo fuera de los límites del SAT (rechazo del PAC). Pendientes nuevos en el gap analysis: notas de crédito, zona horaria de `Fecha` por CP, robustez de la global (> 5,000 ventas, ventanas), formato `tt` del QR, bloqueo 69-B sin notificación/desbloqueo, sobre del CSD sin AAD; decisiones fiscales a confirmar por el contador listadas en F7.
+
 ## Qué sigue — Fase 2 (gap analysis §7)
 - Rieles reales: adaptador del procesador elegido (el flujo backend ya existe sobre el puerto) + su SDK en la app, STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).
 - Payout automático diario y conciliación STP/banco vs. ledger (la del procesador ya existe).
 - Publicador real del outbox; proveedor OTP real; KMS real para la bóveda; verificación real de titularidad de la CLABE de liquidación.
-- En paralelo (Fase 3): app Android real (AGP + Compose + SDK del procesador) y PAC real con CFDI validado.
+- En paralelo (Fase 3): SDK del procesador en la app y adaptador del PAC real (el ciclo CFDI ya existe sobre `pac.PACClient`) + validación fiscal por contador.

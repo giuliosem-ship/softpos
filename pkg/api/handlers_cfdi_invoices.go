@@ -163,9 +163,7 @@ func (s *Server) invoiceableLine(ctx context.Context, rec store.SaleRecord) (sal
 		if !found {
 			return l, notInvoiceable
 		}
-		l.gross = st.GrossCents - st.RefundedGrossCents
-		l.BaseCents = st.BaseCents - st.RefundedBaseCents
-		l.IVACents = l.gross - l.BaseCents
+		l.gross, l.BaseCents, l.IVACents = settlementInvoiceSplit(st)
 		l.formaPago = "04" // tarjeta (crédito/débito not distinguished by the processor port yet)
 	case store.SaleSPEI, store.SaleCoDi:
 		if (rec.Kind == store.SaleSPEI && rec.Status != "RECEIVED") || (rec.Kind == store.SaleCoDi && rec.Status != "CONFIRMED") {
@@ -181,6 +179,22 @@ func (s *Server) invoiceableLine(ctx context.Context, rec store.SaleRecord) (sal
 		return l, notInvoiceable
 	}
 	return l, nil
+}
+
+// settlementInvoiceSplit is the net (gross, base, IVA) of a card sale: the
+// posted split minus the proportional refunds. Subtracting two rounded
+// splits can leave the IVA one cent outside the SAT limits for its base
+// (the PAC rejects the CFDI); then the net gross is re-split with the RESICO
+// formula (fiscal.IVAFromGross), so the total still equals what was paid and
+// the base differs from the ledger by at most one cent.
+func settlementInvoiceSplit(st store.SettlementRecord) (gross, base, iva int64) {
+	gross = st.GrossCents - st.RefundedGrossCents
+	base = st.BaseCents - st.RefundedBaseCents
+	iva = gross - base
+	if !fiscal.IVAWithinSATLimits(base, iva) {
+		base, iva = fiscal.IVAFromGross(gross)
+	}
+	return gross, base, iva
 }
 
 // formaPagoFor is the c_FormaPago of the largest amount (SAT rule for

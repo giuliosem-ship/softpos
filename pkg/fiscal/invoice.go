@@ -129,6 +129,15 @@ func IVAFromGross(grossCents int64) (baseCents, ivaCents int64) {
 	return baseCents, grossCents - baseCents
 }
 
+// IVAWithinSATLimits reports whether a 16 % traslado of ivaCents is within
+// the CFDI 4.0 limits for baseCents: from (base - 0.005) * 0.16 truncated to
+// (base + 0.005) * 0.16 rounded up, at 2 decimals.
+func IVAWithinSATLimits(baseCents, ivaCents int64) bool {
+	lo := (2*baseCents - 1) * 8 / 100
+	hi := ((2*baseCents+1)*8 + 99) / 100
+	return ivaCents >= lo && ivaCents <= hi
+}
+
 // SATVerificationURL is the QR content of the representación impresa
 // (Anexo 20): id = UUID, re/rr = emisor/receptor RFC, tt = total with 10
 // integer and 6 decimal digits, fe = last 8 characters of the sello.

@@ -132,7 +132,10 @@ blocked merchant; header `Idempotency-Key` ≤ 200 chars)
 
 - **Amounts come from what was posted, never from the client:** a card sale
   (`CAPTURED` / `PARTIALLY_REFUNDED`) uses its settlement record
-  (`payment_settlements` base and IVA minus refunds); SPEI abonos
+  (`payment_settlements` base and IVA minus refunds; when that net IVA falls
+  outside the SAT limits for its base, possible after a partial refund, the
+  net gross is re-split with `fiscal.IVAFromGross`: same total, base at most
+  one cent from the ledger); SPEI abonos
   (`RECEIVED`) and CoDi confirmations (`CONFIRMED`) use the 16 %
   IVA-inclusive split of the RESICO posting (`fiscal.IVAFromGross`, same
   formula as `CalculateResicoTaxSplit`). One concepto per sale

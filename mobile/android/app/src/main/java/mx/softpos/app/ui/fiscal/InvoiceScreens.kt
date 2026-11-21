@@ -410,6 +410,9 @@ private fun InvoiceError.messageRes(): Int = when (this) {
     InvoiceError.NETWORK -> R.string.error_network
     InvoiceError.UNKNOWN -> R.string.error_unknown
     InvoiceError.REPLACEMENT_INVALID -> R.string.invoice_error_replacement
+    InvoiceError.IN_GLOBAL_INVOICE -> R.string.invoice_error_in_global
+    InvoiceError.FISCAL_PROFILE_INCOMPLETE -> R.string.invoice_error_fiscal_profile
+    InvoiceError.SALE_NOT_INVOICEABLE -> R.string.invoice_error_sale_not_invoiceable
 }
 
 private fun CancelError.messageRes(): Int = when (this) {

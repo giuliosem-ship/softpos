@@ -307,6 +307,9 @@
     <string name="invoice_error_replacement">Solo se puede sustituir una factura individual timbrada, con las mismas ventas.</string>
     <string name="invoice_error_replacement_not_stamped">Ese UUID no es una factura sustituta timbrada de esta factura. Emite la sustituta primero.</string>
     <string name="invoice_error_not_cancelable">Esta factura ya no se puede cancelar (ya está cancelada o en proceso).</string>
+    <string name="invoice_error_in_global">Esta venta ya se incluyó en la factura global del periodo: ya no se puede facturar por separado.</string>
+    <string name="invoice_error_fiscal_profile">Faltan datos fiscales del comercio (RFC, régimen o código postal de expedición). Complétalos antes de facturar.</string>
+    <string name="invoice_error_sale_not_invoiceable">Alguna venta no se puede facturar (no se cobró, se devolvió o no existe).</string>
     <string name="invoice_error_cancel_rejected">El SAT rechazó la cancelación. La factura sigue vigente.</string>
     <string name="invoice_error_idempotency">La solicitud cambió mientras se procesaba. Revisa la lista de facturas antes de reintentar.</string>
 </resources>

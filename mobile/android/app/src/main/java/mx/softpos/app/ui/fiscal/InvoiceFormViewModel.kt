@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import mx.softpos.app.core.network.ApiResult
 import mx.softpos.app.core.network.KernoJson
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
@@ -40,7 +42,13 @@ enum class CsdGate { CHECKING, ACTIVE, MISSING, UNKNOWN }
 enum class InvoiceError {
     ALREADY_INVOICED, RECEPTOR_INVALID, CSD_REQUIRED, NOT_ALLOWED, IDEMPOTENCY_CONFLICT, PROVIDER_UNAVAILABLE, NETWORK, UNKNOWN,
     /** `replaces_invoice_id` is not a STAMPED individual invoice covering these sales. */
-    REPLACEMENT_INVALID
+    REPLACEMENT_INVALID,
+    /** `409 SALE_ALREADY_INVOICED` whose holder is the factura global: not individually invoiceable any more. */
+    IN_GLOBAL_INVOICE,
+    /** `422 FISCAL_PROFILE_INCOMPLETE {missing:[...]}`: issuer RFC / name / regime / lugar de expedición. */
+    FISCAL_PROFILE_INCOMPLETE,
+    /** `422 SALE_NOT_FOUND` / `SALE_NOT_INVOICEABLE` (refunded, declined, not yet settled). */
+    SALE_NOT_INVOICEABLE
 }
 
 data class ReceptorForm(
@@ -202,10 +210,13 @@ class InvoiceFormViewModel(
                 }
                 is ApiResult.Error -> {
                     if (!r.isUnknownOutcome()) attemptKey = null
+                    val error = r.toInvoiceError().let { e ->
+                        if (e == InvoiceError.ALREADY_INVOICED && holderIsGlobal(id, r)) InvoiceError.IN_GLOBAL_INVOICE else e
+                    }
                     _state.update {
                         it.copy(
                             isSubmitting = false,
-                            error = r.toInvoiceError(),
+                            error = error,
                             invalidFields = r.invalidReceptorFields().mapNotNull(::fieldOf).toSet(),
                             csd = if (r.errorCode in CSD_ERRORS) CsdGate.MISSING else it.csd
                         )
@@ -213,6 +224,15 @@ class InvoiceFormViewModel(
                 }
             }
         }
+    }
+
+    /** The 409 names the invoice holding the sale; a factura global means the sale can no longer be invoiced alone. */
+    private suspend fun holderIsGlobal(merchant: String, e: ApiResult.Error): Boolean {
+        val holder = runCatching {
+            KernoJson.parseToJsonElement(e.message).jsonObject["invoice_id"]?.jsonPrimitive?.content
+        }.getOrNull() ?: return false
+        val r = withContext(io) { invoiceApi.get(merchant, holder) }
+        return r is ApiResult.Success && r.data.isGlobal
     }
 
     /** True when the attempt key survives (the next submit replays it). Visible for tests. */
@@ -235,14 +255,16 @@ class InvoiceFormViewModel(
         errorCode in CSD_ERRORS -> InvoiceError.CSD_REQUIRED
         errorCode == "IDEMPOTENCY_KEY_REUSED" -> InvoiceError.IDEMPOTENCY_CONFLICT
         errorCode == "REPLACEMENT_INVALID" -> InvoiceError.REPLACEMENT_INVALID
+        errorCode == "FISCAL_PROFILE_INCOMPLETE" -> InvoiceError.FISCAL_PROFILE_INCOMPLETE
+        errorCode == "SALE_NOT_FOUND" || errorCode == "SALE_NOT_INVOICEABLE" -> InvoiceError.SALE_NOT_INVOICEABLE
         statusCode == 403 -> InvoiceError.NOT_ALLOWED
         statusCode >= 500 -> InvoiceError.PROVIDER_UNAVAILABLE
         else -> InvoiceError.UNKNOWN
     }
 
     companion object {
-        /** Codes the create may answer when the merchant has no usable CSD (assumed, not in the contract yet). */
-        val CSD_ERRORS = setOf("CSD_NOT_FOUND", "CSD_REQUIRED", "CSD_NOT_ACTIVE", "CSD_EXPIRED")
+        /** `422` codes of the create when the merchant has no usable CSD (verified against the Go handler). */
+        val CSD_ERRORS = setOf("CSD_NOT_FOUND", "CSD_EXPIRED")
 
         /** Backend field names, with or without the `receptor.` prefix. */
         fun fieldOf(name: String): ReceptorField? = when (name.removePrefix("receptor.")) {

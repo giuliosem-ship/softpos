@@ -316,6 +316,47 @@ class FiscalContractTest {
         assertEquals(InvoiceStatus.CANCELED, again.state.value.invoice?.status)
     }
 
+    @Test
+    fun formMapsRealCreateErrorsIncludingFacturaGlobal() {
+        respond(200, "csd_get_200.json")
+        respond(200, "sat_catalogs_200.json")
+        val vm = InvoiceFormViewModel(listOf("spei_40012:SPEIAND0006"), invoices(), csd(), SatCatalogCache(invoices()), { "mer_1" }, dispatcher)
+        vm.load()
+        server.takeRequest(); server.takeRequest()
+        vm.onRfc("EKU9003173C9"); vm.onNombre("ESCUELA KEMPER URGATE"); vm.onRegimen("601"); vm.onUsoCfdi("G03"); vm.onCodigoPostal("26015")
+
+        // The sale is already in the factura global: the holder is looked up and named as such.
+        respond(409, "invoice_sale_in_global_409.json")
+        respond(200, "invoice_get_global_200.json")
+        vm.submit()
+        server.takeRequest()
+        assertEquals("/api/v1/merchants/mer_1/invoices/inv_8e55b8c7cdbf8997a6230aa5", server.takeRequest().path)
+        assertEquals(InvoiceError.IN_GLOBAL_INVOICE, vm.state.value.error)
+        assertFalse(vm.hasPendingKey, "4xx drops the key")
+
+        // Held by an individual invoice: plain ALREADY_INVOICED.
+        respond(409, "invoice_sale_already_invoiced_409.json")
+        respond(200, "invoice_get_200.json")
+        vm.submit()
+        server.takeRequest(); server.takeRequest()
+        assertEquals(InvoiceError.ALREADY_INVOICED, vm.state.value.error)
+
+        for ((fixture, expected) in listOf(
+            "invoice_fiscal_profile_incomplete_422.json" to InvoiceError.FISCAL_PROFILE_INCOMPLETE,
+            "invoice_sale_not_found_422.json" to InvoiceError.SALE_NOT_INVOICEABLE,
+            "invoice_idempotency_key_reused_409.json" to InvoiceError.IDEMPOTENCY_CONFLICT,
+            // Last: a CSD error blocks the form (no further submit is sent).
+            "invoice_csd_expired_422.json" to InvoiceError.CSD_REQUIRED
+        )) {
+            respond(if (fixture.contains("409")) 409 else 422, fixture)
+            vm.submit()
+            server.takeRequest()
+            assertEquals(expected, vm.state.value.error, fixture)
+            assertFalse(vm.hasPendingKey, fixture)
+        }
+        assertEquals(CsdGate.MISSING, vm.state.value.csd)
+    }
+
     /** The backend sends no ETag (only Cache-Control and X-SAT-Catalog-Version): after the TTL the cache refetches in full. */
     @Test
     fun catalogsDecodeAndRefetchWithoutEtag() {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"net"
 	"strings"
 
 	"softpos/pkg/identity"
@@ -29,6 +30,7 @@ var (
 	ErrInsecureAcquirerSecret    = errors.New("insecure configuration: ACQUIRER_WEBHOOK_SECRET must be set to at least 32 bytes in production when ACQUIRER_PROVIDER is set")
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrMockKYCInProduction       = errors.New("insecure configuration: KYC_PROVIDER=mock cannot be used in production (it passes every identity check)")
+	ErrInsecureMetricsToken      = errors.New("insecure configuration: METRICS_TOKEN must be at least 32 bytes in production, and is required when METRICS_ADDR is not a loopback address")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
 
@@ -82,6 +84,9 @@ var ServerEnvVars = []EnvVar{
 	{Name: "OUTBOX_PUBLISH_TIMEOUT"},
 	{Name: "PAYOUT_RECONCILE_INTERVAL"},
 	{Name: "PAYOUT_RECONCILE_AFTER"},
+	{Name: "METRICS_ADDR"},
+	{Name: "METRICS_TOKEN", Secret: true},
+	{Name: "METRICS_SAMPLE_INTERVAL"},
 	{Name: "REFUND_SWEEP_INTERVAL"},
 	{Name: "REFUND_SWEEP_AFTER"},
 	{Name: "REFUND_SWEEP_ALERT_ATTEMPTS"},
@@ -92,6 +97,19 @@ var ServerEnvVars = []EnvVar{
 	{Name: "SAT_69B_MAX_CHANGE_PCT"},
 	{Name: "CFDI_GLOBAL_INVOICE_INTERVAL"},
 	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
+}
+
+// loopbackAddr reports whether a host:port listen address binds loopback only.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.
@@ -122,7 +140,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 
 	// 0. No secret may still hold the .env.example placeholder.
 	for _, v := range []string{cfg.DatabaseURL, cfg.RedisPassword, cfg.JWTSecret, cfg.PlayIntegritySecret,
-		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret} {
+		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret, cfg.MetricsToken} {
 		if isPlaceholder(v) {
 			return ErrPlaceholderSecret
 		}
@@ -194,6 +212,11 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	// 8. KYB identity verification: the mock passes every check.
 	if cfg.KYCProvider == "mock" {
 		return ErrMockKYCInProduction
+	}
+
+	// 9. Metrics listener: a token when it is reachable beyond loopback.
+	if (cfg.MetricsToken != "" || (cfg.MetricsAddr != "" && !loopbackAddr(cfg.MetricsAddr))) && len(cfg.MetricsToken) < minSecretLen {
+		return ErrInsecureMetricsToken
 	}
 
 	return nil

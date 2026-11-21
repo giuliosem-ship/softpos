@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"softpos/pkg/identity"
 	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
+	"softpos/pkg/metrics"
 	"softpos/pkg/outbox"
 	"softpos/pkg/payouts"
 	"softpos/pkg/store"
@@ -108,6 +110,12 @@ type Config struct {
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
 	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
+
+	// Metrics (MVP-30, docs/OBSERVABILITY.md): Prometheus text format on a
+	// separate listener, never on the public API port.
+	MetricsAddr           string        // METRICS_ADDR, e.g. 127.0.0.1:9090; empty = no metrics listener
+	MetricsToken          string        // METRICS_TOKEN: bearer token required on /metrics when set (>= 32 bytes; required in production off loopback)
+	MetricsSampleInterval time.Duration // METRICS_SAMPLE_INTERVAL, default 30s (database gauges)
 
 	// Refund request sweep (MVP-29, docs/ACQUIRER_INTEGRATION.md): refunds
 	// stuck in REQUESTED are re-queried at the processor.
@@ -264,6 +272,9 @@ func LoadConfigFromEnv() Config {
 		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
 		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
 		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		MetricsAddr:               strings.TrimSpace(os.Getenv("METRICS_ADDR")),
+		MetricsToken:              os.Getenv("METRICS_TOKEN"),
+		MetricsSampleInterval:     parseDurationEnv("METRICS_SAMPLE_INTERVAL"),
 		RefundSweepInterval:       parseDurationEnv("REFUND_SWEEP_INTERVAL"),
 		RefundSweepAfter:          parseDurationEnv("REFUND_SWEEP_AFTER"),
 		RefundSweepAlertAttempts:  alertAttempts,
@@ -779,6 +790,62 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
+// defaultMetricsSampleInterval is how often the database gauges are sampled.
+const defaultMetricsSampleInterval = 30 * time.Second
+
+// StartMetrics serves /metrics (Prometheus text format, metrics.Default) on
+// METRICS_ADDR, a listener separate from the public API (bind it to
+// loopback / the cluster network; METRICS_TOKEN adds a bearer token), and
+// samples the database gauges every METRICS_SAMPLE_INTERVAL when a database
+// is configured. Without METRICS_ADDR nothing is started. The returned wait
+// function shuts the listener down after ctx is cancelled.
+func StartMetrics(ctx context.Context, cfg Config, db *sql.DB) (wait func(), err error) {
+	if cfg.MetricsAddr == "" {
+		return func() {}, nil
+	}
+	ln, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		return nil, fmt.Errorf("METRICS_ADDR: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(metrics.Default, cfg.MetricsToken))
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		slog.Info("metrics listener", "addr", ln.Addr().String(), "token", cfg.MetricsToken != "")
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics listener failed", "error", err)
+		}
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		if db != nil {
+			every := cfg.MetricsSampleInterval
+			if every <= 0 {
+				every = defaultMetricsSampleInterval
+			}
+			runEvery(ctx, every, func(ctx context.Context) {
+				sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				snap, err := store.SampleOps(sctx, db, time.Now())
+				if err != nil {
+					api.RecordOpsSampleError()
+					slog.Warn("metrics sample failed", "error", err)
+					return
+				}
+				api.RecordOpsSnapshot(snap)
+			})
+		} else {
+			<-ctx.Done()
+		}
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	return func() { <-done; <-done }, nil
+}
+
 // defaultRefundSweepInterval is how often the refund sweep runs.
 const defaultRefundSweepInterval = 5 * time.Minute
 
@@ -990,6 +1057,11 @@ func main() {
 	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
 	waitCFDI := StartCFDIWorkers(dispatcherCtx, cfg, server)
 	waitRefunds := StartRefundSweeper(dispatcherCtx, cfg, server)
+	waitMetrics, err := StartMetrics(dispatcherCtx, cfg, db)
+	if err != nil {
+		slog.Error("fatal initialization error", "error", err)
+		os.Exit(1)
+	}
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -1035,6 +1107,7 @@ func main() {
 			wait69B()
 			waitCFDI()
 			waitRefunds()
+			waitMetrics()
 			close(dispatcherDone)
 		}()
 		select {

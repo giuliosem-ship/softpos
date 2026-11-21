@@ -87,6 +87,7 @@ func (s *Server) SweepStaleRefunds(ctx context.Context, now time.Time, cfg Refun
 			slog.Error("refund sweep: resolution failed", "refund_id", rf.ID, "error", err)
 			outcome = RefundSweepUnknown
 		}
+		refundSweepOutcomes.Inc(outcome)
 		switch outcome {
 		case RefundSweepSucceeded:
 			res.Succeeded++
@@ -102,6 +103,7 @@ func (s *Server) SweepStaleRefunds(ctx context.Context, now time.Time, cfg Refun
 			res.Unknown++
 			if rf.SweepAttempts >= cfg.AlertAttempts {
 				res.Alerted++
+				refundSweepAlerts.Inc()
 				slog.Error("ALERT refund request unresolved", "refund_id", rf.ID, "card_payment_id", rf.CardPaymentID,
 					"attempts", rf.SweepAttempts, "amount_cents", rf.AmountCents)
 			}

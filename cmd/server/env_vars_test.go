@@ -189,6 +189,11 @@ func TestValidateProductionConfig_CoversEverySecret(t *testing.T) {
 			{func(c *Config) { c.AcquirerProvider, c.AcquirerWebhookSecret = "acme", "short" }, ErrInsecureAcquirerSecret},
 			{func(c *Config) { c.AcquirerWebhookSecret = "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME" }, ErrPlaceholderSecret},
 		},
+		"METRICS_TOKEN": {
+			{func(c *Config) { c.MetricsAddr, c.MetricsToken = ":9090", "" }, ErrInsecureMetricsToken},
+			{func(c *Config) { c.MetricsToken = "short" }, ErrInsecureMetricsToken},
+			{func(c *Config) { c.MetricsToken = "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME" }, ErrPlaceholderSecret},
+		},
 		"VAULT_PREVIOUS_KEYS": {
 			{func(c *Config) { c.VaultPreviousKeys = "v0:nothex" }, ErrInvalidVaultKey},
 		},

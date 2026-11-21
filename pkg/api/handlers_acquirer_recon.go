@@ -58,6 +58,7 @@ func (s *Server) applyAcquirerPayout(ctx context.Context, provider string, e acq
 		return nil, err
 	}
 	for _, it := range found {
+		acquirerDiscrepancies.Inc(it.Kind)
 		slog.Error("ALERT acquirer reconciliation discrepancy", "provider", provider, "payout_id", it.PayoutID, "kind", it.Kind,
 			"card_payment_id", it.CardPaymentID, "provider_payment_id", it.ProviderPaymentID,
 			"expected_cents", it.ExpectedCents, "actual_cents", it.ActualCents, "detail", it.Detail)

@@ -83,6 +83,9 @@ func (s *Server) LoadSAT69BWithOptions(ctx context.Context, raw []byte, source, 
 	defer s.sat69bMu.Unlock()
 	syncer := &identity.List69BSyncer{Store: st, MaxShrinkPct: pct, MaxChangePct: changePct}
 	res, err := syncer.LoadWithOptions(ctx, raw, source, actor, opts)
+	if res.Load.Status != "" {
+		sat69bLoads.Inc(res.Load.Status)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrList69BShrank):
@@ -99,6 +102,9 @@ func (s *Server) LoadSAT69BWithOptions(ctx context.Context, raw []byte, source, 
 	if rerr != nil {
 		slog.Error("SAT 69-B retroscreen failed", "error", rerr)
 	}
+	sat69bRetroscreen.Add(float64(len(retro.Blocked)), "blocked")
+	sat69bRetroscreen.Add(float64(len(retro.Unblocked)), "unblocked")
+	sat69bRetroscreen.Add(float64(len(retro.Excepted)), "excepted")
 	return res, retro, nil
 }
 
@@ -116,6 +122,7 @@ func (s *Server) SyncSAT69B(ctx context.Context, actor string, opts identity.Loa
 				PreviousCount: meta.RowCount, Detail: err.Error(), Actor: actor, Override: opts.OverrideShrink,
 				OverrideChanges: opts.OverrideChanges, CreatedAt: nowUTC()})
 		}
+		sat69bLoads.Inc(identity.Load69BFailed)
 		return identity.List69BResult{}, store.Retroscreen69BResult{}, errSAT69BFetch{err}
 	}
 	return s.LoadSAT69BWithOptions(ctx, raw, source, actor, opts)

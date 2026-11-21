@@ -1,0 +1,86 @@
+# Prometheus alerting rules for the Kerno SoftPOS server (docs/OBSERVABILITY.md).
+# Load with `rule_files: [kerno-alerts.yml]`; route the `severity` label in
+# Alertmanager (page = on-call pager, ticket = next business day).
+# Thresholds are starting points: tune them with real traffic.
+groups:
+  - name: kerno-money
+    rules:
+      - alert: KernoWebhookFailures
+        expr: sum by (source) (increase(kerno_webhook_failures_total{status=~"5..|401"}[10m])) > 5
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Webhooks from {{ $labels.source }} are failing (5xx / bad signature)"
+          description: "Rejected or failed deliveries mean card captures, CoDi or STP abonos are not being applied. Check the secret rotation and the server logs."
+      - alert: KernoAcquirerEventConflicts
+        expr: sum(increase(kerno_webhook_failures_total{source="acquirer",status="422"}[1h])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Processor events conflict with recorded state (EVENT_CONFLICT)"
+          description: "A refund / chargeback exceeds the remaining amount; operator review in the backoffice."
+      - alert: KernoReconciliationMismatch
+        expr: sum by (kind) (kerno_acquirer_reconciliation_open_items) > 0
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Open processor reconciliation items ({{ $labels.kind }})"
+          description: "Resolve them in the backoffice (Conciliación del procesador)."
+      - alert: KernoPayoutsStuck
+        expr: kerno_payouts_oldest_unresolved_age_seconds > 3600
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "A SPEI payout has been unresolved for more than 1 h"
+          description: "RESERVED / PENDING_RECONCILIATION payouts hold merchant funds; check STP and the payout reconciler (ALERT payout unresolved in logs)."
+      - alert: KernoRefundsStuck
+        expr: kerno_card_refunds_oldest_requested_age_seconds > 7200 or increase(kerno_refund_sweep_alerts_total[1h]) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Card refund requests stay REQUESTED (processor outcome unknown)"
+          description: "The refund sweep could not resolve them; check the processor status page and the refund in the backoffice."
+  - name: kerno-platform
+    rules:
+      - alert: KernoOutboxDeadLetters
+        expr: kerno_outbox_events{status="FAILED"} > 0
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Outbox events exhausted their retries (FAILED)"
+          description: "Notifications / integrations were not delivered; inspect outbox_events.last_error."
+      - alert: KernoOutboxBacklog
+        expr: kerno_outbox_oldest_pending_age_seconds > 900
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "The outbox has events pending for more than 15 min"
+          description: "The dispatcher is down or the publisher is failing."
+      - alert: KernoSAT69BListStale
+        expr: kerno_sat69b_list_loaded == 0 or kerno_sat69b_list_verified_age_seconds > 5 * 86400
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: "The SAT 69-B list is missing or close to stale"
+          description: "Lookups answer UNKNOWN after SAT_69B_MAX_AGE (7 days): KYB submissions stall. Check the 69-B worker / load it with operatorctl."
+      - alert: KernoSAT69BLoadRejected
+        expr: sum(increase(kerno_sat69b_loads_total{status=~"REJECTED_SHRINK|REJECTED_CHANGES|FAILED"}[1d])) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "A SAT 69-B load was refused or failed"
+          description: "The previous list stays. Review the file and override from the backoffice with a reason if it is legitimate."
+      - alert: KernoHTTP5xx
+        expr: sum(rate(kerno_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(kerno_http_requests_total[5m])), 1) > 0.02
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 2 % of API requests fail with 5xx"
+      - alert: KernoHTTPLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(kerno_http_request_duration_seconds_bucket{route!="unmatched"}[5m]))) > 2
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "p95 API latency above 2 s"
+      - alert: KernoMetricsSampleFailing
+        expr: increase(kerno_ops_sample_errors_total[15m]) > 3
+        labels: {severity: ticket}
+        annotations:
+          summary: "The database gauges cannot be sampled (database unreachable?)"

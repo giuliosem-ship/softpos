@@ -32,7 +32,7 @@ open http://localhost:8080/pos/
 
 Fuera de `DEV_MODE` el servidor exige `JWT_SECRET` (≥ 32 bytes) y `VAULT_MASTER_KEY_HEX` (llave de 32 bytes de la bóveda CSD; ver [`docs/AUTH.md`](docs/AUTH.md)). Todas las rutas `/api/v1/*` requieren `Authorization: Bearer <token>` salvo la lista pública (salud, Web POS, login OTP, webhooks firmados). Con `APP_ENV=production` el guard rechaza secretos ausentes, débiles, de ejemplo o de dev.
 
-Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md). Flujos de dinero (settle, devoluciones, abonos, payouts y su recuperación): [`docs/MONEY_FLOWS.md`](docs/MONEY_FLOWS.md).
+Sin `DATABASE_URL` el servidor corre en memoria (el estado se pierde al reiniciar). Con `DATABASE_URL` usa PostgreSQL (driver `pgx`) y aplica las migraciones embebidas al arrancar; ver [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md). Flujos de dinero (settle, devoluciones, abonos, payouts y su recuperación): [`docs/MONEY_FLOWS.md`](docs/MONEY_FLOWS.md). Métricas Prometheus (`METRICS_ADDR`) y reglas de alerta: [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md).
 
 ### Docker Compose (PostgreSQL + Redis + servidor)
 ```bash

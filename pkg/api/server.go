@@ -716,8 +716,8 @@ func (s *Server) routes() {
 	})
 }
 
-// Router returns the HTTP handler: recovery -> logging -> auth gate (JWT on
+// Router returns the HTTP handler: recovery -> logging -> metrics -> auth gate (JWT on
 // every route outside the public allowlist, per-IP limit on /api/v1/auth/*).
 func (s *Server) Router() http.Handler {
-	return RecoveryMiddleware(LoggingMiddleware(s.authGate(s.router)))
+	return RecoveryMiddleware(LoggingMiddleware(s.metricsMiddleware(s.authGate(s.router))))
 }

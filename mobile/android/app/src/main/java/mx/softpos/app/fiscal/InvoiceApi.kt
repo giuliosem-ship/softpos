@@ -3,7 +3,8 @@ package mx.softpos.app.fiscal
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import mx.softpos.app.core.network.ApiResult
@@ -131,11 +132,19 @@ interface InvoiceApi {
     }
 }
 
-/** `422 RECEPTOR_INVALID {"fields":[...]}`: backend field names (`rfc`, `receptor.codigo_postal`...). */
+/**
+ * `422 RECEPTOR_INVALID {"fields":{"rfc":"INVALID_FORMAT",...}}`: the backend
+ * sends an object of field name -> reason (`REQUIRED`, `INVALID_FORMAT`,
+ * `NOT_ALLOWED_FOR_PERSONA_TYPE`...). A plain list is accepted too.
+ */
 fun ApiResult.Error.invalidReceptorFields(): List<String> =
     if (statusCode != 422 || errorCode != "RECEPTOR_INVALID") emptyList()
     else runCatching {
-        KernoJson.parseToJsonElement(message).jsonObject["fields"]?.jsonArray?.map { it.jsonPrimitive.content }
+        when (val fields = KernoJson.parseToJsonElement(message).jsonObject["fields"]) {
+            is JsonObject -> fields.keys.toList()
+            is JsonArray -> fields.map { it.jsonPrimitive.content }
+            else -> emptyList()
+        }
     }.getOrNull().orEmpty()
 
 class HttpInvoiceApi(baseUrl: String, private val client: OkHttpClient) : InvoiceApi {

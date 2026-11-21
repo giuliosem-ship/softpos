@@ -126,7 +126,7 @@ class InvoiceViewModelsTest {
         val vm = form()
         vm.fillValid()
         api.createResults += ApiResult.Error(
-            422, "RECEPTOR_INVALID", """{"error":"RECEPTOR_INVALID","fields":["receptor.nombre","codigo_postal","other"]}"""
+            422, "RECEPTOR_INVALID", """{"error":"RECEPTOR_INVALID","fields":{"receptor.nombre":"REQUIRED","codigo_postal":"INVALID_FORMAT","other":"X"}}"""
         )
         vm.submit()
         assertEquals(InvoiceError.RECEPTOR_INVALID, vm.state.value.error)

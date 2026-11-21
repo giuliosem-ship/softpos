@@ -46,6 +46,8 @@ import mx.softpos.app.ui.merchant.SalesScreen
 import mx.softpos.app.ui.merchant.SalesViewModel
 import mx.softpos.app.ui.merchant.SettingsScreen
 import mx.softpos.app.ui.merchant.SettingsViewModel
+import mx.softpos.app.ui.fiscal.CsdScreen
+import mx.softpos.app.ui.fiscal.CsdViewModel
 import mx.softpos.app.ui.onboarding.KybScreen
 import mx.softpos.app.ui.onboarding.KybViewModel
 
@@ -57,6 +59,7 @@ private object Routes {
     const val SETTINGS = "settings"
     const val PICKER = "merchant-picker"
     const val ONBOARDING = "onboarding"
+    const val CSD = "csd"
     fun saleDetail(id: String) = "sales/$id"
 }
 
@@ -140,7 +143,13 @@ private fun MerchantApp(container: AppContainer) {
                         membershipCount = { container.memberships().size }
                     )
                 }
-                SettingsScreen(vm, onSwitchMerchant = { nav.navigate(Routes.PICKER) })
+                SettingsScreen(vm, onSwitchMerchant = { nav.navigate(Routes.PICKER) }, onCsd = { nav.navigate(Routes.CSD) })
+            }
+            composable(Routes.CSD) {
+                val vm = viewModel {
+                    CsdViewModel(container.csdApi, container.merchantApi, container::currentMerchantId, container::currentRole)
+                }
+                CsdScreen(vm, container.csdFileReader, onBack = { nav.popBackStack() })
             }
             composable(Routes.PICKER) {
                 val vm = viewModel {

@@ -212,4 +212,32 @@
     <string name="kyb_fix_and_resubmit">Completar o corregir datos</string>
     <string name="home_kyb_cta">Completar alta</string>
     <string name="home_kyb_view">Ver estado del alta</string>
+    <!-- CSD (sellos digitales) -->
+    <string name="settings_csd">Sellos digitales (CSD)</string>
+    <string name="csd_title">Sellos digitales (CSD)</string>
+    <string name="csd_intro">Tu Certificado de Sello Digital del SAT (archivos .cer y .key) permite emitir facturas a tus clientes.</string>
+    <string name="csd_current">Certificado registrado</string>
+    <string name="csd_status_active">Activo</string>
+    <string name="csd_status_inactive">Inactivo</string>
+    <string name="csd_serial_rfc">No. %1$s · RFC %2$s</string>
+    <string name="csd_validity">Vigencia: %1$s a %2$s</string>
+    <string name="csd_expired">Tu certificado venció. Sube uno nuevo para seguir facturando.</string>
+    <string name="csd_expiring_soon">Tu certificado vence en %1$d días. Renuévalo en el SAT y súbelo aquí.</string>
+    <string name="csd_not_configured">Aún no has subido tus sellos digitales.</string>
+    <string name="csd_uploaded">Sellos digitales guardados.</string>
+    <string name="csd_owner_only">Solo el dueño del comercio puede subir los sellos digitales.</string>
+    <string name="csd_upload_title">Subir sellos</string>
+    <string name="csd_pick_cer">Elegir certificado (.cer)</string>
+    <string name="csd_pick_key">Elegir llave privada (.key)</string>
+    <string name="csd_cer_summary">Certificado %1$s · RFC %2$s · vence %3$s</string>
+    <string name="csd_password">Contraseña de la llave privada</string>
+    <string name="csd_upload">Guardar sellos</string>
+    <string name="csd_reason">Motivo: %1$s</string>
+    <string name="csd_error_invalid">El SAT o Kerno rechazó los archivos: revisa que sean de tu CSD (no de la e.firma) y la contraseña.</string>
+    <string name="csd_issue_cer_unreadable">No pudimos leer el certificado. Elige el archivo .cer de tu CSD.</string>
+    <string name="csd_issue_cer_expired">Este certificado ya venció.</string>
+    <string name="csd_issue_cer_not_yet_valid">Este certificado todavía no es vigente.</string>
+    <string name="csd_issue_rfc_mismatch">El certificado es de otro RFC distinto al de tu comercio.</string>
+    <string name="csd_issue_key_invalid">El archivo no parece una llave privada .key del SAT.</string>
+    <string name="csd_issue_password">Escribe la contraseña de la llave privada.</string>
 </resources>

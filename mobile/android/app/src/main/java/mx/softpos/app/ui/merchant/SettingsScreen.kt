@@ -19,7 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import mx.softpos.app.R
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel, onSwitchMerchant: () -> Unit) {
+fun SettingsScreen(viewModel: SettingsViewModel, onSwitchMerchant: () -> Unit, onCsd: () -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
 
@@ -35,6 +35,11 @@ fun SettingsScreen(viewModel: SettingsViewModel, onSwitchMerchant: () -> Unit) {
             if (p.isResico) Text(stringResource(R.string.settings_resico))
         }
         if (state.role.isNotBlank()) Text(stringResource(R.string.settings_role, stringResource(roleRes(state.role))))
+        if (state.role == SaleDetailViewModel.ROLE_OWNER) {
+            OutlinedButton(onClick = onCsd, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.settings_csd))
+            }
+        }
         if (state.canSwitchMerchant) {
             OutlinedButton(onClick = onSwitchMerchant, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.settings_switch_merchant))

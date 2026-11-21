@@ -238,6 +238,16 @@ class InvoiceViewModelsTest {
     }
 
     @Test
+    fun substituteOfAGlobalOrUnstampedInvoiceIsRefusedLocally() {
+        api.invoice = ApiResult.Success(stamped().copy(kind = InvoiceKind.GLOBAL), 200)
+        val vm = InvoiceFormViewModel(emptyList(), api, csd, SatCatalogCache(api), { "mer_1" }, dispatcher, replacesInvoiceId = "inv_1").also { it.load() }
+        assertEquals(InvoiceError.REPLACEMENT_INVALID, vm.state.value.error)
+        assertFalse(vm.state.value.canSubmit)
+        vm.submit()
+        assertTrue(api.creates.isEmpty())
+    }
+
+    @Test
     fun salesMultiSelectOnlyInvoiceable() {
         val sales = object : SalesApi {
             override fun listSales(merchantId: String, limit: Int, before: String?) = ApiResult.Success(

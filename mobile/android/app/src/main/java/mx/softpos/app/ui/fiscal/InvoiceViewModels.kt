@@ -93,7 +93,15 @@ fun interface InvoiceFileStore {
     fun save(invoiceId: String, kind: InvoiceFileKind, bytes: ByteArray): SharedFile?
 }
 
-enum class CancelError { FOLIO_REQUIRED, NOT_ALLOWED, INVALID, PROVIDER_UNAVAILABLE, NETWORK, UNKNOWN }
+enum class CancelError {
+    FOLIO_REQUIRED, NOT_ALLOWED, INVALID, PROVIDER_UNAVAILABLE, NETWORK, UNKNOWN,
+    /** Motivo 01: the UUID is not a STAMPED substitute of this invoice (issue it first). */
+    REPLACEMENT_NOT_STAMPED,
+    /** `409 INVOICE_NOT_CANCELABLE`: already canceled / being canceled (the invoice is reloaded). */
+    NOT_CANCELABLE,
+    /** `422 CANCEL_REJECTED`: the SAT / PAC refused it; the CFDI stays valid. */
+    REJECTED
+}
 
 data class InvoiceDetailUiState(
     val invoice: Invoice? = null,
@@ -121,9 +129,15 @@ class InvoiceDetailViewModel(
     private val merchantId: MerchantIdProvider,
     role: () -> String,
     private val files: InvoiceFileStore,
-    private val io: CoroutineDispatcher = Dispatchers.IO
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** UUID of a just-stamped substitute: preselects motivo 01 with it as `folio_sustitucion`. */
+    substituteUuid: String? = null
 ) : ViewModel() {
-    private val _state = MutableStateFlow(InvoiceDetailUiState(isOwner = role() == SaleDetailViewModel.ROLE_OWNER))
+    private val _state = MutableStateFlow(
+        InvoiceDetailUiState(isOwner = role() == SaleDetailViewModel.ROLE_OWNER).let {
+            if (substituteUuid.isNullOrBlank()) it else it.copy(motivo = CancelMotivo.WITH_RELATION, folioSustitucion = substituteUuid.trim().uppercase())
+        }
+    )
     val state: StateFlow<InvoiceDetailUiState> = _state.asStateFlow()
 
     fun load() {
@@ -194,12 +208,16 @@ class InvoiceDetailViewModel(
                     is ApiResult.Error -> it.copy(isCanceling = false, cancelError = r.toCancelError())
                 }
             }
+            if (r is ApiResult.Error && r.errorCode == "INVOICE_NOT_CANCELABLE") load()
         }
     }
 
     private fun ApiResult.Error.toCancelError(): CancelError = when {
         statusCode == NETWORK_ERROR_STATUS -> CancelError.NETWORK
         statusCode == 403 -> CancelError.NOT_ALLOWED
+        errorCode == "INVOICE_NOT_CANCELABLE" -> CancelError.NOT_CANCELABLE
+        errorCode == "CANCEL_REJECTED" -> CancelError.REJECTED
+        errorCode == "CANCEL_INVALID" && message.contains("REPLACEMENT_NOT_STAMPED") -> CancelError.REPLACEMENT_NOT_STAMPED
         statusCode in 400..499 -> CancelError.INVALID
         statusCode >= 500 -> CancelError.PROVIDER_UNAVAILABLE
         else -> CancelError.UNKNOWN

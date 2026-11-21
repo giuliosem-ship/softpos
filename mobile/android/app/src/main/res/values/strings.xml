@@ -299,5 +299,14 @@
     <string name="invoice_error_cancel_not_allowed">Solo el dueño del comercio puede cancelar facturas.</string>
     <string name="invoice_error_cancel_invalid">El SAT no permite cancelar esta factura con ese motivo.</string>
     <string name="settings_invoices">Facturas</string>
+    <string name="invoice_replacement_title">Factura sustituta</string>
+    <string name="invoice_replacement_text">Corrige los datos: esta factura sustituirá a la original y tomará sus ventas. Después cancela la original con el motivo 01.</string>
+    <string name="invoice_replacement_hint">Primero emite la factura sustituta; su UUID se usa para cancelar esta.</string>
+    <string name="invoice_replacement_issue">Emitir factura sustituta</string>
+    <string name="invoice_cancel_original">Cancelar la factura original</string>
+    <string name="invoice_error_replacement">Solo se puede sustituir una factura individual timbrada, con las mismas ventas.</string>
+    <string name="invoice_error_replacement_not_stamped">Ese UUID no es una factura sustituta timbrada de esta factura. Emite la sustituta primero.</string>
+    <string name="invoice_error_not_cancelable">Esta factura ya no se puede cancelar (ya está cancelada o en proceso).</string>
+    <string name="invoice_error_cancel_rejected">El SAT rechazó la cancelación. La factura sigue vigente.</string>
     <string name="invoice_error_idempotency">La solicitud cambió mientras se procesaba. Revisa la lista de facturas antes de reintentar.</string>
 </resources>

@@ -44,7 +44,13 @@ data class Receptor(
 @Serializable
 data class CreateInvoiceRequest(
     @SerialName("sale_ids") val saleIds: List<String>,
-    @SerialName("receptor") val receptor: Receptor
+    @SerialName("receptor") val receptor: Receptor,
+    /**
+     * Motivo 01 flow: issue this CFDI as the substitute of a STAMPED individual
+     * invoice (it takes over its sales); then cancel the original with motivo
+     * 01 and `folio_sustitucion` = this invoice's UUID. Omitted when null.
+     */
+    @SerialName("replaces_invoice_id") val replacesInvoiceId: String? = null
 )
 
 object InvoiceKind {

@@ -59,7 +59,9 @@ fun InvoiceFormScreen(
     viewModel: InvoiceFormViewModel,
     onCsd: () -> Unit,
     onOpenInvoice: (String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** Motivo 01: (original invoice id, substitute UUID) once the substitute is stamped. */
+    onCancelOriginal: (String, String) -> Unit = { _, _ -> }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // Runs on every visit, so coming back from the CSD screen re-checks the gate.
@@ -69,12 +71,23 @@ fun InvoiceFormScreen(
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(stringResource(R.string.invoice_new_title), style = MaterialTheme.typography.headlineSmall)
+        Text(
+            stringResource(if (state.isReplacement) R.string.invoice_replacement_title else R.string.invoice_new_title),
+            style = MaterialTheme.typography.headlineSmall
+        )
+        if (state.isReplacement) Text(stringResource(R.string.invoice_replacement_text))
         Text(stringResource(R.string.invoice_sales_count, state.saleIds.size))
 
         val result = state.result
         if (result != null) {
             InvoiceResult(result, onOpenInvoice)
+            val original = state.replacesInvoiceId
+            val uuid = result.uuid
+            if (original != null && result.isStamped && uuid != null) {
+                Button(onClick = { onCancelOriginal(original, uuid) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.invoice_cancel_original))
+                }
+            }
             TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
             return@Column
         }
@@ -247,7 +260,7 @@ fun InvoicesScreen(viewModel: InvoicesViewModel, onOpen: (String) -> Unit, onBac
 }
 
 @Composable
-fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit) {
+fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit, onReplace: (String) -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(Unit) { viewModel.load() }
@@ -314,7 +327,9 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit) {
             }
             if (state.downloading != null) CircularProgressIndicator()
             if (state.downloadFailed) Text(stringResource(R.string.invoice_download_failed), color = MaterialTheme.colorScheme.error)
-            if (state.canCancel || state.isCanceling) CancelSection(state, viewModel, onConfirm = { confirmCancel = true })
+            if (state.canCancel || state.isCanceling) {
+                CancelSection(state, viewModel, onConfirm = { confirmCancel = true }, onReplace = { onReplace(inv.invoiceId) })
+            }
         }
         TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
     }
@@ -336,7 +351,7 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewModel, onConfirm: () -> Unit) {
+private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewModel, onConfirm: () -> Unit, onReplace: () -> Unit) {
     Text(stringResource(R.string.invoice_cancel_title), style = MaterialTheme.typography.titleMedium)
     state.motivoOptions.forEach { code ->
         Row(
@@ -348,6 +363,11 @@ private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewMode
         }
     }
     if (state.needsFolio) {
+        // Motivo 01: the substitute CFDI is issued first (it takes over the sales), then its UUID goes here.
+        Text(stringResource(R.string.invoice_replacement_hint))
+        OutlinedButton(onClick = onReplace, enabled = !state.isCanceling, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.invoice_replacement_issue))
+        }
         OutlinedTextField(
             value = state.folioSustitucion,
             onValueChange = vm::onFolio,
@@ -389,6 +409,7 @@ private fun InvoiceError.messageRes(): Int = when (this) {
     InvoiceError.PROVIDER_UNAVAILABLE -> R.string.invoice_error_provider
     InvoiceError.NETWORK -> R.string.error_network
     InvoiceError.UNKNOWN -> R.string.error_unknown
+    InvoiceError.REPLACEMENT_INVALID -> R.string.invoice_error_replacement
 }
 
 private fun CancelError.messageRes(): Int = when (this) {
@@ -398,4 +419,7 @@ private fun CancelError.messageRes(): Int = when (this) {
     CancelError.PROVIDER_UNAVAILABLE -> R.string.invoice_error_provider
     CancelError.NETWORK -> R.string.error_network
     CancelError.UNKNOWN -> R.string.error_unknown
+    CancelError.REPLACEMENT_NOT_STAMPED -> R.string.invoice_error_replacement_not_stamped
+    CancelError.NOT_CANCELABLE -> R.string.invoice_error_not_cancelable
+    CancelError.REJECTED -> R.string.invoice_error_cancel_rejected
 }

@@ -38,7 +38,9 @@ enum class ReceptorField { RFC, NOMBRE, REGIMEN, USO_CFDI, CODIGO_POSTAL, EMAIL 
 enum class CsdGate { CHECKING, ACTIVE, MISSING, UNKNOWN }
 
 enum class InvoiceError {
-    ALREADY_INVOICED, RECEPTOR_INVALID, CSD_REQUIRED, NOT_ALLOWED, IDEMPOTENCY_CONFLICT, PROVIDER_UNAVAILABLE, NETWORK, UNKNOWN
+    ALREADY_INVOICED, RECEPTOR_INVALID, CSD_REQUIRED, NOT_ALLOWED, IDEMPOTENCY_CONFLICT, PROVIDER_UNAVAILABLE, NETWORK, UNKNOWN,
+    /** `replaces_invoice_id` is not a STAMPED individual invoice covering these sales. */
+    REPLACEMENT_INVALID
 }
 
 data class ReceptorForm(
@@ -61,8 +63,12 @@ data class InvoiceFormUiState(
     val invalidFields: Set<ReceptorField> = emptySet(),
     val isSubmitting: Boolean = false,
     val error: InvoiceError? = null,
-    val result: Invoice? = null
+    val result: Invoice? = null,
+    /** Motivo 01 flow: the STAMPED invoice this one substitutes (null for a normal invoice). */
+    val replacesInvoiceId: String? = null
 ) {
+    val isReplacement: Boolean get() = replacesInvoiceId != null
+
     val persona: Persona? get() = ReceptorValidator.persona(form.rfc)
     val regimenOptions: List<RegimenFiscal> get() = catalogs?.let { ReceptorValidator.regimenesFor(it, persona) }.orEmpty()
     val usoOptions: List<UsoCfdi> get() = catalogs?.let { ReceptorValidator.usosFor(it, form.regimen) }.orEmpty()
@@ -83,9 +89,13 @@ class InvoiceFormViewModel(
     private val catalogs: SatCatalogCache,
     private val merchantId: MerchantIdProvider,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Motivo 01: the sales and receptor are taken from this STAMPED invoice (receptor editable). */
+    replacesInvoiceId: String? = null,
     private val newIdempotencyKey: () -> String = { UUID.randomUUID().toString() }
 ) : ViewModel() {
-    private val _state = MutableStateFlow(InvoiceFormUiState(saleIds = saleIds.distinct()))
+    private val _state = MutableStateFlow(
+        InvoiceFormUiState(saleIds = if (replacesInvoiceId == null) saleIds.distinct() else emptyList(), replacesInvoiceId = replacesInvoiceId)
+    )
     val state: StateFlow<InvoiceFormUiState> = _state.asStateFlow()
 
     /** (request fingerprint, key) of the last attempt whose outcome is unknown. */
@@ -102,6 +112,8 @@ class InvoiceFormViewModel(
                 else -> CsdGate.UNKNOWN // the backend still rejects the create if there is none
             }
             _state.update { it.copy(csd = gate) }
+            val replaces = _state.value.replacesInvoiceId
+            if (replaces != null && _state.value.saleIds.isEmpty()) loadOriginal(id, replaces)
             if (_state.value.catalogs == null) {
                 val r = withContext(io) { catalogs.get() }
                 _state.update {
@@ -111,6 +123,27 @@ class InvoiceFormViewModel(
                     }
                 }
             }
+        }
+    }
+
+    /** Substitute CFDI: same sales as the original, receptor prefilled for correction. */
+    private suspend fun loadOriginal(merchant: String, invoiceId: String) {
+        when (val r = withContext(io) { invoiceApi.get(merchant, invoiceId) }) {
+            is ApiResult.Success -> {
+                val o = r.data
+                if (!o.isStamped || o.isGlobal || o.saleIds.isEmpty()) {
+                    _state.update { it.copy(error = InvoiceError.REPLACEMENT_INVALID) }
+                    return
+                }
+                val rc = o.receptor
+                _state.update {
+                    it.copy(
+                        saleIds = o.saleIds,
+                        form = if (rc == null) it.form else ReceptorForm(rc.rfc, rc.nombre, rc.regimenFiscal, rc.usoCfdi, rc.codigoPostal, rc.email.orEmpty())
+                    ).sanitized()
+                }
+            }
+            is ApiResult.Error -> _state.update { it.copy(error = r.toInvoiceError()) }
         }
     }
 
@@ -153,7 +186,8 @@ class InvoiceFormViewModel(
                 codigoPostal = f.codigoPostal,
                 usoCfdi = f.usoCfdi,
                 email = f.email.ifBlank { null }
-            )
+            ),
+            replacesInvoiceId = s.replacesInvoiceId
         )
         val fingerprint = KernoJson.encodeToString(CreateInvoiceRequest.serializer(), request)
         val key = attemptKey?.takeIf { it.first == fingerprint }?.second
@@ -200,6 +234,7 @@ class InvoiceFormViewModel(
         errorCode == "RECEPTOR_INVALID" -> InvoiceError.RECEPTOR_INVALID
         errorCode in CSD_ERRORS -> InvoiceError.CSD_REQUIRED
         errorCode == "IDEMPOTENCY_KEY_REUSED" -> InvoiceError.IDEMPOTENCY_CONFLICT
+        errorCode == "REPLACEMENT_INVALID" -> InvoiceError.REPLACEMENT_INVALID
         statusCode == 403 -> InvoiceError.NOT_ALLOWED
         statusCode >= 500 -> InvoiceError.PROVIDER_UNAVAILABLE
         else -> InvoiceError.UNKNOWN

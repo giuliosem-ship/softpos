@@ -28,7 +28,9 @@ import mx.softpos.app.fiscal.SatCatalogCache
 import mx.softpos.app.fiscal.csdInvalidReason
 import mx.softpos.app.fiscal.invalidReceptorFields
 import mx.softpos.app.fiscal.isCsdNotFound
+import mx.softpos.app.ui.fiscal.CancelError
 import mx.softpos.app.ui.fiscal.CsdGate
+import mx.softpos.app.ui.fiscal.InvoiceDetailViewModel
 import mx.softpos.app.ui.fiscal.InvoiceError
 import mx.softpos.app.ui.fiscal.InvoiceFormViewModel
 import mx.softpos.app.ui.fiscal.ReceptorField
@@ -255,6 +257,63 @@ class FiscalContractTest {
         assertEquals("01", canceled.cancellation?.motivo)
         assertEquals("1C8799D7-BE03-431A-9B02-C138420A9C6C", canceled.cancellation?.folioSustitucion)
         assertEquals(canceled.invoiceId, decode("invoice_create_201_replacement.json").replacesInvoiceId)
+    }
+
+    /** Motivo 01 end to end: substitute first (replaces_invoice_id), then cancel the original with its UUID. */
+    @Test
+    fun motivo01SubstituteThenCancelOverHttp() {
+        val original = KernoJson.decodeFromString(Invoice.serializer(), Fixtures.read("invoice_get_200.json"))
+        respond(200, "csd_get_200.json")
+        respond(200, "invoice_get_200.json")
+        respond(200, "sat_catalogs_200.json")
+        val form = InvoiceFormViewModel(emptyList(), invoices(), csd(), SatCatalogCache(invoices()), { "mer_1" }, dispatcher,
+            replacesInvoiceId = original.invoiceId)
+        form.load()
+        server.takeRequest()
+        assertEquals("/api/v1/merchants/mer_1/invoices/${original.invoiceId}", server.takeRequest().path)
+        server.takeRequest()
+        assertEquals(original.saleIds, form.state.value.saleIds)
+        assertEquals("EKU9003173C9", form.state.value.form.rfc)
+        form.onUsoCfdi("G01")
+
+        respond(201, "invoice_create_201_replacement.json")
+        form.submit()
+        val body = KernoJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals(original.invoiceId, body["replaces_invoice_id"]!!.jsonPrimitive.content)
+        assertEquals("G01", body["receptor"]!!.jsonObject["uso_cfdi"]!!.jsonPrimitive.content)
+        val substitute = form.state.value.result!!
+        assertTrue(substitute.isStamped)
+
+        // Normal invoices never send the field.
+        respond(201, "invoice_create_201_stamped.json")
+        invoices().create("mer_1", "k", CreateInvoiceRequest(listOf("s"), receptor))
+        assertFalse(KernoJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.containsKey("replaces_invoice_id"))
+
+        respond(200, "invoice_get_200.json")
+        val detail = InvoiceDetailViewModel(original.invoiceId, invoices(), { "mer_1" }, { "owner" }, { _, _, _ -> null }, dispatcher,
+            substituteUuid = substitute.uuid)
+        detail.load()
+        server.takeRequest()
+        assertEquals(CancelMotivo.WITH_RELATION, detail.state.value.motivo)
+        respond(422, "invoice_cancel_replacement_not_stamped_422.json")
+        detail.cancel()
+        server.takeRequest()
+        assertEquals(CancelError.REPLACEMENT_NOT_STAMPED, detail.state.value.cancelError)
+        respond(200, "invoice_cancel_canceled_200.json")
+        detail.cancel()
+        assertEquals("""{"motivo":"01","folio_sustitucion":"${substitute.uuid}"}""", server.takeRequest().body.readUtf8())
+        assertEquals(InvoiceStatus.CANCELED, detail.state.value.invoice?.status)
+
+        // 409 INVOICE_NOT_CANCELABLE reloads the invoice.
+        respond(200, "invoice_get_200.json")
+        val again = InvoiceDetailViewModel(original.invoiceId, invoices(), { "mer_1" }, { "owner" }, { _, _, _ -> null }, dispatcher)
+        again.load(); server.takeRequest()
+        respond(409, "invoice_cancel_not_cancelable_409.json")
+        respond(200, "invoice_cancel_canceled_200.json")
+        again.cancel()
+        server.takeRequest(); server.takeRequest()
+        assertEquals(CancelError.NOT_CANCELABLE, again.state.value.cancelError)
+        assertEquals(InvoiceStatus.CANCELED, again.state.value.invoice?.status)
     }
 
     /** The backend sends no ETag (only Cache-Control and X-SAT-Catalog-Version): after the TTL the cache refetches in full. */

@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-20 — Lote I (MVP-20..22) aplicado y auditado
+**Última actualización:** 2026-11-20 — Lotes I (MVP-20..22) y J (AND-36..38) aplicados y auditados
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---
@@ -195,7 +195,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Sin UI real (pantallas restantes) | P1 | S | Desde los Lotes F y H existen login/OTP, selector de comercio, onboarding KYB con documentos, saldo/apartado, cobrar (contrato real `/api/v1/card-payments/*`), ventas con paginación, devoluciones (solo `owner`) y perfil. Falta: facturar (CFDI, depende de F8). El selector muestra solo id y rol porque el backend no expone nombres de comercio en las membresías. |
+| Ventas incluidas en factura global sin marca en la app | P2 | S | Desde el Lote J la app factura (CSD, receptor, lista, PDF/XML, cancelación 01–04 con sustituta). Falta que `GET /api/v1/merchants/{id}/sales` exponga el `invoice_id`/tipo de factura de cada venta para deshabilitar de antemano las que ya están en una global (hoy se detecta al recibir `409 SALE_ALREADY_INVOICED`). El selector de comercio muestra solo id y rol porque el backend no expone nombres en las membresías. |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
 | Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
 | Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. (`targetSdk` 36 y wrapper 8.14.3 con `distributionSha256Sum` resueltos en el Lote H.) |

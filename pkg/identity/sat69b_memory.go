@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -66,10 +67,18 @@ func (m *MemoryList69BStore) ReplaceList(_ context.Context, rows []List69BRow, m
 		prev = m.meta.RowCount
 	}
 	load := List69BLoad{Version: meta.Version, Source: meta.Source, RowCount: len(rows), PreviousCount: prev,
-		MalformedCount: meta.MalformedCount, Actor: actor, Override: guard.Override, CreatedAt: meta.FetchedAt}
+		MalformedCount: meta.MalformedCount, Actor: actor, Override: guard.Override, OverrideChanges: guard.OverrideChanges, CreatedAt: meta.FetchedAt}
 	if !guard.Allows(prev, len(rows)) {
 		load.Status, load.Detail = Load69BRejectedShrink, ErrList69BShrank.Error()
 		return m.addLoad(load), ErrList69BShrank
+	}
+	old := make(map[string]BlacklistStatus, len(m.entries))
+	for rfc, e := range m.entries {
+		old[rfc] = e.Status
+	}
+	if common, changed := ChangedSituations(old, rows); !guard.AllowsChanges(common, changed) {
+		load.Status, load.Detail = Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d common RFCs changed (max %d%%)", ErrList69BChanged, changed, common, guard.MaxChangePct)
+		return m.addLoad(load), ErrList69BChanged
 	}
 	next := make(map[string]BlacklistEntry, len(rows))
 	for _, r := range rows {

@@ -74,6 +74,7 @@ type Server struct {
 	sat69bSource      string
 	sat69bFetch       SAT69BFetcher
 	sat69bShrinkPct   int
+	sat69bChangePct   int
 	sat69bMu          sync.Mutex
 	fiscalSettings    store.FiscalSettingsRepository
 	invoices          store.InvoiceRepository

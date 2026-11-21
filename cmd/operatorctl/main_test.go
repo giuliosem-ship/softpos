@@ -56,7 +56,7 @@ func TestRunLoad69B_LoadsAndRetroscreens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runLoad69B(ctx, repo, kybRepo, audit, raw, "file:x.csv", "operatorctl:test", false, &out); err != nil {
+	if err := runLoad69B(ctx, repo, kybRepo, audit, raw, "file:x.csv", "operatorctl:test", identity.Load69BOptions{}, &out); err != nil {
 		t.Fatalf("load: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "LOADED rows=6") || !strings.Contains(out.String(), "1 blocked [m1]") {
@@ -69,10 +69,36 @@ func TestRunLoad69B_LoadsAndRetroscreens(t *testing.T) {
 	// A much smaller file is refused without --override-shrink.
 	small, _ := os.ReadFile(filepath.Join("..", "..", "pkg", "identity", "testdata", "sat69b_utf8_bom_small.csv"))
 	out.Reset()
-	if err := runLoad69B(ctx, repo, kybRepo, audit, small, "file:small.csv", "operatorctl:test", false, &out); !errors.Is(err, identity.ErrList69BShrank) {
+	if err := runLoad69B(ctx, repo, kybRepo, audit, small, "file:small.csv", "operatorctl:test", identity.Load69BOptions{}, &out); !errors.Is(err, identity.ErrList69BShrank) {
 		t.Fatalf("shrink: %v", err)
 	}
-	if err := runLoad69B(ctx, repo, kybRepo, audit, small, "file:small.csv", "operatorctl:test", true, &out); err != nil {
+	if err := runLoad69B(ctx, repo, kybRepo, audit, small, "file:small.csv", "operatorctl:test", identity.Load69BOptions{OverrideShrink: true}, &out); err != nil {
 		t.Fatalf("override: %v", err)
+	}
+	// m1 (ZURC660122LUA) is still PRESUNTO: it stays blocked.
+	if rec, _, _ := kybRepo.GetKYB(ctx, "m1"); !rec.Blocked {
+		t.Fatalf("still listed: %+v", rec)
+	}
+
+	// Same RFCs, every situation changed: refused without --override-changes.
+	changed := []byte("No,RFC,Nombre del Contribuyente,Situación del contribuyente\n" +
+		"1,AAA080808HL8,A,Definitivo\n2,ZURC660122LUA,B,Desvirtuado\n")
+	out.Reset()
+	if err := runLoad69B(ctx, repo, kybRepo, audit, changed, "file:changed.csv", "operatorctl:test", identity.Load69BOptions{}, &out); !errors.Is(err, identity.ErrList69BChanged) {
+		t.Fatalf("changes: %v\n%s", err, out.String())
+	}
+	if rec, _, _ := kybRepo.GetKYB(ctx, "m1"); !rec.Blocked {
+		t.Fatalf("a refused load must not unblock: %+v", rec)
+	}
+	out.Reset()
+	if err := runLoad69B(ctx, repo, kybRepo, audit, changed, "file:changed.csv", "operatorctl:test", identity.Load69BOptions{OverrideChanges: true}, &out); err != nil {
+		t.Fatalf("override changes: %v", err)
+	}
+	// ZURC660122LUA is now DESVIRTUADO: the 69-B block is lifted automatically.
+	if rec, _, _ := kybRepo.GetKYB(ctx, "m1"); rec.Blocked || rec.List69B != kyb.List69BClear || !strings.Contains(out.String(), "1 unblocked [m1]") {
+		t.Fatalf("auto-unblock: %+v\n%s", rec, out.String())
+	}
+	if ev := kybRepo.Events(); len(ev) != 2 || ev[0].Type != store.EventMerchantBlocked69B || ev[1].Type != store.EventMerchantUnblocked69B {
+		t.Fatalf("events: %+v", ev)
 	}
 }

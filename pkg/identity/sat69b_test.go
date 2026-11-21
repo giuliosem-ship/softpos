@@ -168,3 +168,53 @@ func TestList69BSyncer_LoadSwapShrinkAndStaleness(t *testing.T) {
 		t.Fatalf("failure not recorded: %+v", loads[0])
 	}
 }
+
+// TestReplaceGuard_AllowsChanges (MVP-27): the change protection compares the
+// situations of the RFCs present in both lists.
+func TestReplaceGuard_AllowsChanges(t *testing.T) {
+	g := ReplaceGuard{MaxChangePct: 10}
+	cases := []struct {
+		common, changed int
+		want            bool
+	}{{0, 0, true}, {100, 10, true}, {100, 11, false}, {1000, 500, false}, {3, 0, true}}
+	for _, c := range cases {
+		if got := g.AllowsChanges(c.common, c.changed); got != c.want {
+			t.Errorf("AllowsChanges(%d,%d)=%v want %v", c.common, c.changed, got, c.want)
+		}
+	}
+	if !(ReplaceGuard{MaxChangePct: 10, OverrideChanges: true}).AllowsChanges(100, 100) || !(ReplaceGuard{MaxChangePct: 100}).AllowsChanges(100, 100) {
+		t.Fatal("override / 100% must allow")
+	}
+	old := map[string]BlacklistStatus{"A": BlacklistPresunto, "B": BlacklistDefinitivo, "C": BlacklistPresunto}
+	common, changed := ChangedSituations(old, []List69BRow{{RFC: "A", Status: BlacklistPresunto}, {RFC: "B", Status: BlacklistDesvirtuado}, {RFC: "D", Status: BlacklistPresunto}})
+	if common != 2 || changed != 1 {
+		t.Fatalf("ChangedSituations: %d %d", common, changed)
+	}
+}
+
+// TestList69BSyncer_ChangeGuard: same RFCs with changed situations are
+// refused (REJECTED_CHANGES recorded, list kept) unless overridden.
+func TestList69BSyncer_ChangeGuard(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemoryList69BStore()
+	sync := &List69BSyncer{Store: st}
+	csv := func(sit string) []byte {
+		return []byte("No,RFC,Nombre,Situación del contribuyente\n1,ZURC660122LUA,A," + sit + "\n2,AAA120730823,B," + sit + "\n")
+	}
+	if _, err := sync.Load(ctx, csv("Presunto"), "f1", "t", false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sync.Load(ctx, csv("Desvirtuado"), "f2", "t", false)
+	if !errors.Is(err, ErrList69BChanged) || res.Load.Status != Load69BRejectedChanges {
+		t.Fatalf("want change rejection, got %+v %v", res.Load, err)
+	}
+	if e, _, _ := st.GetEntry(ctx, "ZURC660122LUA"); e.Status != BlacklistPresunto {
+		t.Fatalf("list must be kept: %+v", e)
+	}
+	if res, err := sync.LoadWithOptions(ctx, csv("Desvirtuado"), "f2", "t", Load69BOptions{OverrideChanges: true}); err != nil || !res.Load.OverrideChanges {
+		t.Fatalf("override: %+v %v", res.Load, err)
+	}
+	if e, _, _ := st.GetEntry(ctx, "ZURC660122LUA"); e.Status != BlacklistDesvirtuado {
+		t.Fatalf("override must swap: %+v", e)
+	}
+}

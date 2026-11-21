@@ -116,6 +116,10 @@ type Config struct {
 	SAT69BRefreshInterval time.Duration // SAT_69B_REFRESH_INTERVAL, default 24h
 	SAT69BMaxAge          time.Duration // SAT_69B_MAX_AGE, default 7 days (older list -> UNKNOWN)
 	SAT69BMaxShrinkPct    int           // SAT_69B_MAX_SHRINK_PCT, default 10 (0..100)
+	// SAT69BMaxChangePct (SAT_69B_MAX_CHANGE_PCT, default 10, 1..100; 100
+	// disables) refuses a load where more than pct% of the RFCs present in
+	// both lists changed situation (MVP-27).
+	SAT69BMaxChangePct int
 
 	// CFDI workers (MVP-22, docs/CFDI.md): automatic factura global and
 	// polling of cancellations waiting for the receptor's acceptance.
@@ -208,6 +212,15 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	changePct := 0
+	if val := os.Getenv("SAT_69B_MAX_CHANGE_PCT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+			changePct = n
+		} else {
+			slog.Warn("invalid SAT_69B_MAX_CHANGE_PCT, using default", "value", val)
+		}
+	}
+
 	cashierRefunds := false
 	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
 		cashierRefunds = true
@@ -240,6 +253,7 @@ func LoadConfigFromEnv() Config {
 		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
 		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
 		SAT69BMaxShrinkPct:        shrinkPct,
+		SAT69BMaxChangePct:        changePct,
 		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
 		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		Port:                      port,
@@ -523,6 +537,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	} else {
 		slog.Warn("SAT_69B_URL not set: the 69-B list is only loaded with cmd/operatorctl load-69b (KYB lookups stay UNKNOWN until then)")
 	}
+	server.SetSAT69BMaxChangePct(cfg.SAT69BMaxChangePct)
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
@@ -828,7 +843,7 @@ func StartSAT69BWorker(ctx context.Context, cfg Config, server *api.Server) (wai
 		run := func() {
 			runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", false)
+			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", identity.Load69BOptions{})
 			if err != nil {
 				slog.Error("SAT 69-B sync failed; previous list kept", "error", err, "status", res.Load.Status)
 				return

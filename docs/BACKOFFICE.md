@@ -16,7 +16,7 @@ tooling, **never by a public endpoint**:
 | Way | How |
 |---|---|
 | Bootstrap at boot | `BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE=+52…` — `cmd/server` creates the user if needed and grants it (idempotent, `created_by = bootstrap:env`). |
-| CLI | `DATABASE_URL=… go run ./cmd/operatorctl add|remove|check +52…` (database already migrated; `created_by = operatorctl:<os user>`). The same tool loads a SAT 69-B file: `operatorctl load-69b <file.csv> [--override-shrink]` (audit `sat69b.load_file`). |
+| CLI | `DATABASE_URL=… go run ./cmd/operatorctl add|remove|check +52…` (database already migrated; `created_by = operatorctl:<os user>`). The same tool loads a SAT 69-B file: `operatorctl load-69b <file.csv> [--override-shrink] [--override-changes]` (audit `sat69b.load_file`). |
 
 **Segregation of duties:** an operator who is also a member of a merchant
 (e.g. its owner) cannot approve that merchant's onboarding nor unblock it
@@ -46,7 +46,7 @@ any `operator` role, as before.)
 | `POST merchants/{merchant}/kyb/approve {"note"?}` | `IN_REVIEW`/`SUBMITTED` → `APPROVED`: assigns the virtual CLABE if missing, onboards the sub-merchant at the processor (`docs/KYB.md`); `409 KYB_INVALID_TRANSITION`, `409 RFC_LISTED_69B` (69-B lookup found the RFC listed), `502 ACQUIRER_ONBOARDING_FAILED` (stays in review, retry) | `kyb.approve` |
 | `POST merchants/{merchant}/kyb/reject {"reason"}` | → `REJECTED` with the reason shown to the owner (`400 REASON_REQUIRED`) | `kyb.reject` |
 | `POST merchants/{merchant}/block {"reason"}` | any status; every money operation of the merchant → `403 MERCHANT_BLOCKED` (`409 ALREADY_BLOCKED`) | `merchant.block` |
-| `POST merchants/{merchant}/unblock {"reason"?}` | lifts the block (`409 NOT_BLOCKED`) | `merchant.unblock` |
+| `POST merchants/{merchant}/unblock {"reason"?}` | lifts the block (`409 NOT_BLOCKED`). If the RFC is still `PRESUNTO`/`DEFINITIVO` in the 69-B list the `reason` is required (`400 REASON_REQUIRED`) and a documented exception for that situation is recorded (`"sat69b_exception": true`; the next loads respect it until the situation changes); `409 SAT69B_STATUS_UNKNOWN` when a merchant recorded as listed cannot be checked (stale list). See `docs/KYB.md` "69-B block lifecycle" | `merchant.unblock` (+ `sat69b.exception`) |
 | `GET merchants/{merchant}/ledger?limit=` | balances (available, tax escrow, RBF) + journal lines of the merchant accounts, newest first | `ledger.view` |
 | `GET payments?merchant_id=&id=&kind=card\|spei\|codi&from=&to=&limit=&before=` | cross-merchant search over the sales view (`docs/MONEY_FLOWS.md`); dates RFC 3339 or `YYYY-MM-DD` (Mexico City day) | — |
 | `GET payouts?merchant_id=&status=&limit=` | payouts newest first | — |
@@ -57,7 +57,7 @@ any `operator` role, as before.)
 | `GET invoices?status=FAILED,PENDING&merchant_id=&limit=` | CFDI stampings to look at (default failed + pending), with attempts and error detail (`docs/CFDI.md`) | — |
 | `POST invoices/{invoice}/retry` | re-stamps a `PENDING` / `FAILED` invoice through the PAC (a `FAILED` one re-links its sales first): `409 INVOICE_NOT_RETRYABLE`, `409 SALE_ALREADY_INVOICED`, `422 RETRY_FAILED` (CSD unavailable) | `invoice.retry` |
 | `GET sat69b` | SAT 69-B list status: loaded, `stale`, version, source, published date, row / malformed counts, fetched / verified times, max age, configured source, last 20 load attempts (`docs/KYB.md`) | — |
-| `POST sat69b/sync {"override_shrink"?, "reason"?}` | downloads `SAT_69B_URL` now and swaps the list in; re-checks approved merchants (listed ones blocked). `409 LIST_SHRANK` (shrink protection; retry with `override_shrink: true` and a `reason`, `400 REASON_REQUIRED` without it), `422 SAT69B_INVALID_FILE`, `502 SAT69B_FETCH_FAILED`, `503 SAT69B_SOURCE_NOT_CONFIGURED` | `sat69b.sync` (every attempt, with result) |
+| `POST sat69b/sync {"override_shrink"?, "override_changes"?, "reason"?}` | downloads `SAT_69B_URL` now and swaps the list in; re-checks approved merchants (listed ones blocked, 69-B blocks of RFCs no longer listed lifted). `409 LIST_SHRANK` (shrink protection; retry with `override_shrink: true` and a `reason`, `400 REASON_REQUIRED` without it), `409 LIST_CHANGED` (change protection; `override_changes: true` and a `reason`), `422 SAT69B_INVALID_FILE`, `502 SAT69B_FETCH_FAILED`, `503 SAT69B_SOURCE_NOT_CONFIGURED` | `sat69b.sync` (every attempt, with result) |
 
 Merchant-scoped operator actions outside the prefix are audited too:
 `POST /api/v1/merchants/{id}/settlement-account/verify`

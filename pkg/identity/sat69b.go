@@ -33,6 +33,10 @@ var (
 	// ErrList69BShrank: the new list is smaller than the loaded one by more
 	// than the allowed percentage (needs an explicit operator override).
 	ErrList69BShrank = errors.New("SAT 69-B list shrank beyond the allowed threshold")
+	// ErrList69BChanged: too many RFCs present in both lists changed their
+	// situation (same size, different content: wrong file, column shift…);
+	// needs an explicit operator override.
+	ErrList69BChanged = errors.New("SAT 69-B list situations changed beyond the allowed threshold")
 	// ErrBlacklistStale: the loaded list was not verified within the max age.
 	ErrBlacklistStale = errors.New("SAT 69-B list is stale")
 )
@@ -217,8 +221,10 @@ type List69BLoad struct {
 	MalformedCount int
 	Detail         string
 	Actor          string
-	Override       bool
-	CreatedAt      time.Time
+	Override       bool // shrink protection lifted
+	// OverrideChanges: change protection lifted.
+	OverrideChanges bool
+	CreatedAt       time.Time
 }
 
 // Load statuses.
@@ -226,13 +232,44 @@ const (
 	Load69BLoaded         = "LOADED"
 	Load69BUnchanged      = "UNCHANGED"
 	Load69BRejectedShrink = "REJECTED_SHRINK"
-	Load69BFailed         = "FAILED"
+	// Load69BRejectedChanges: refused by the change protection (MVP-27).
+	Load69BRejectedChanges = "REJECTED_CHANGES"
+	Load69BFailed          = "FAILED"
 )
 
-// ReplaceGuard is the shrink protection evaluated inside the store's lock.
+// ReplaceGuard is the shrink and change protection evaluated inside the
+// store's lock.
 type ReplaceGuard struct {
 	MaxShrinkPct int  // refuse when the new count < old count * (100-pct)/100
 	Override     bool // operator override of the shrink check
+	// MaxChangePct refuses a load in which more than pct% of the RFCs present
+	// in both the loaded and the new list changed their situation (<= 0 or
+	// >= 100 disables the check).
+	MaxChangePct    int
+	OverrideChanges bool // operator override of the change check
+}
+
+// AllowsChanges reports whether changed of the common RFCs (present in both
+// lists) may change their situation in one load.
+func (g ReplaceGuard) AllowsChanges(common, changed int) bool {
+	if g.OverrideChanges || common <= 0 || g.MaxChangePct <= 0 || g.MaxChangePct >= 100 {
+		return true
+	}
+	return int64(changed)*100 <= int64(common)*int64(g.MaxChangePct)
+}
+
+// ChangedSituations counts the RFCs present in both old and rows and how
+// many of them have a different situation.
+func ChangedSituations(old map[string]BlacklistStatus, rows []List69BRow) (common, changed int) {
+	for _, r := range rows {
+		if prev, ok := old[r.RFC]; ok {
+			common++
+			if prev != r.Status {
+				changed++
+			}
+		}
+	}
+	return common, changed
 }
 
 // Allows reports whether replacing a list of oldCount rows with newCount is allowed.
@@ -249,7 +286,8 @@ func (g ReplaceGuard) Allows(oldCount, newCount int) bool {
 type List69BStore interface {
 	// ReplaceList swaps the whole list for rows and records meta and a
 	// LOADED history row in one transaction. It returns ErrList69BShrank
-	// (recording a REJECTED_SHRINK row) when guard refuses the swap.
+	// (recording a REJECTED_SHRINK row) or ErrList69BChanged (recording a
+	// REJECTED_CHANGES row) when guard refuses the swap.
 	ReplaceList(ctx context.Context, rows []List69BRow, meta List69BMeta, guard ReplaceGuard, actor string) (List69BLoad, error)
 	// List69BMeta returns the loaded list's metadata (found=false: never loaded).
 	List69BMeta(ctx context.Context) (List69BMeta, bool, error)
@@ -265,11 +303,27 @@ type List69BStore interface {
 type List69BSyncer struct {
 	Store        List69BStore
 	MaxShrinkPct int // default 10 (see DefaultMax69BShrinkPct)
+	// MaxChangePct is the change protection (0: DefaultMax69BChangePct;
+	// negative disables it).
+	MaxChangePct int
 	Now          func() time.Time
 }
 
 // DefaultMax69BShrinkPct is the default shrink protection.
 const DefaultMax69BShrinkPct = 10
+
+// DefaultMax69BChangePct is the default change protection: at most 10% of
+// the RFCs present in both lists may change situation in one load.
+const DefaultMax69BChangePct = 10
+
+// Load69BOptions are the operator overrides of a load (audited by the caller).
+type Load69BOptions struct {
+	OverrideShrink  bool // lift the shrink protection
+	OverrideChanges bool // lift the change protection
+}
+
+// Any reports whether some protection is lifted.
+func (o Load69BOptions) Any() bool { return o.OverrideShrink || o.OverrideChanges }
 
 // List69BResult reports a load.
 type List69BResult struct {
@@ -289,6 +343,13 @@ func (s *List69BSyncer) now() time.Time {
 // the verification time moves), replaces the list. override lifts the shrink
 // protection (operator decision, audited by the caller).
 func (s *List69BSyncer) Load(ctx context.Context, raw []byte, source, actor string, override bool) (List69BResult, error) {
+	return s.LoadWithOptions(ctx, raw, source, actor, Load69BOptions{OverrideShrink: override})
+}
+
+// LoadWithOptions is Load with independent overrides of the shrink and the
+// change protection.
+func (s *List69BSyncer) LoadWithOptions(ctx context.Context, raw []byte, source, actor string, opts Load69BOptions) (List69BResult, error) {
+	override := opts.Any()
 	if s == nil || s.Store == nil {
 		return List69BResult{}, errors.New("69-B store not configured")
 	}
@@ -309,7 +370,8 @@ func (s *List69BSyncer) Load(ctx context.Context, raw []byte, source, actor stri
 	parsed, perr := Parse69BCSV(raw)
 	if perr != nil {
 		fail := List69BLoad{Status: Load69BFailed, Version: version, Source: source, PreviousCount: meta.RowCount,
-			MalformedCount: parsed.Malformed, Detail: perr.Error(), Actor: actor, Override: override, CreatedAt: now}
+			MalformedCount: parsed.Malformed, Detail: perr.Error(), Actor: actor, Override: opts.OverrideShrink,
+			OverrideChanges: opts.OverrideChanges, CreatedAt: now}
 		if err := s.Store.RecordLoadFailure(ctx, fail); err != nil {
 			slog.Error("SAT 69-B failure not recorded", "error", err)
 		}
@@ -321,13 +383,18 @@ func (s *List69BSyncer) Load(ctx context.Context, raw []byte, source, actor stri
 	}
 	newMeta := List69BMeta{Version: version, Source: source, Published: parsed.Published, RowCount: len(parsed.Rows),
 		MalformedCount: parsed.Malformed, FetchedAt: now, VerifiedAt: now, LoadedBy: actor}
-	load, err := s.Store.ReplaceList(ctx, parsed.Rows, newMeta, ReplaceGuard{MaxShrinkPct: pct, Override: override}, actor)
+	changePct := s.MaxChangePct
+	if changePct == 0 {
+		changePct = DefaultMax69BChangePct
+	}
+	load, err := s.Store.ReplaceList(ctx, parsed.Rows, newMeta, ReplaceGuard{MaxShrinkPct: pct, Override: opts.OverrideShrink,
+		MaxChangePct: changePct, OverrideChanges: opts.OverrideChanges}, actor)
 	res := List69BResult{Load: load, Malformed: parsed.Malformed, Published: parsed.Published}
 	if err != nil {
 		return res, err
 	}
 	slog.Info("SAT 69-B list loaded", "rows", load.RowCount, "previous", load.PreviousCount, "malformed", parsed.Malformed,
-		"duplicates", parsed.Duplicates, "published", parsed.Published, "version", version[:12], "actor", actor, "override", override)
+		"duplicates", parsed.Duplicates, "published", parsed.Published, "version", version[:12], "actor", actor, "override_shrink", opts.OverrideShrink, "override_changes", opts.OverrideChanges)
 	return res, nil
 }
 

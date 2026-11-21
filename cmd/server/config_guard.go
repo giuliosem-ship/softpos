@@ -86,6 +86,7 @@ var ServerEnvVars = []EnvVar{
 	{Name: "SAT_69B_REFRESH_INTERVAL"},
 	{Name: "SAT_69B_MAX_AGE"},
 	{Name: "SAT_69B_MAX_SHRINK_PCT"},
+	{Name: "SAT_69B_MAX_CHANGE_PCT"},
 	{Name: "CFDI_GLOBAL_INVOICE_INTERVAL"},
 	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
 }

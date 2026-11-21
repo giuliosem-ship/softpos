@@ -39,9 +39,40 @@ type KYBRecord struct {
 	Blocked            bool
 	BlockedReason      string
 	BlockedAt          *time.Time
-	Version            int64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// BlockedSource is who placed the current block (BlockSourceOperator or
+	// BlockSourceSAT69B); only SAT 69-B blocks are lifted automatically.
+	BlockedSource string
+	Version       int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// Block sources (merchant_kyb.blocked_source, migration 020).
+const (
+	BlockSourceOperator = "OPERATOR" // backoffice block: only an operator lifts it
+	BlockSourceSAT69B   = "SAT_69B"  // 69-B re-review: lifted when the RFC leaves the list
+)
+
+// KYBEvent is an outbox event written in the same transaction as a KYB update.
+type KYBEvent struct {
+	Type        string
+	AggregateID string
+	Payload     any
+}
+
+// Sat69BException is a documented operator exception: the merchant was
+// unblocked although its RFC is listed in the given situation. Retroscreens
+// respect it for the same merchant, RFC and situation.
+type Sat69BException struct {
+	ID         int64
+	MerchantID string
+	RFC        string
+	Situation  string
+	Reason     string
+	OperatorID string
+	CreatedAt  time.Time
+	RevokedAt  *time.Time
+	RevokedBy  string
 }
 
 // Active reports whether the merchant may move money (APPROVED, not blocked).
@@ -91,6 +122,18 @@ type KYBRepository interface {
 	// superseded ones only when includeSuperseded.
 	ListKYBDocuments(ctx context.Context, merchantID string, includeSuperseded bool) ([]KYBDocument, error)
 	GetKYBDocument(ctx context.Context, merchantID, documentID string) (KYBDocument, bool, error)
+
+	// UpdateKYBWithEvent is UpdateKYB plus an outbox event in the same
+	// transaction (published only if the update commits).
+	UpdateKYBWithEvent(ctx context.Context, rec KYBRecord, ev KYBEvent) (KYBRecord, error)
+	// AddSat69BException records an active exception (an existing active one
+	// for the same merchant, RFC and situation is kept).
+	AddSat69BException(ctx context.Context, e Sat69BException) error
+	// ActiveSat69BException reports whether an unrevoked exception exists.
+	ActiveSat69BException(ctx context.Context, merchantID, rfc, situation string) (bool, error)
+	// RevokeSat69BExceptions revokes every active exception of the merchant
+	// except the one for keepSituation ("" revokes all); returns how many.
+	RevokeSat69BExceptions(ctx context.Context, merchantID, keepSituation, revokedBy string) (int, error)
 }
 
 // DocumentBlobStore stores encrypted document envelopes. SQLKYBRepository
@@ -145,7 +188,7 @@ func NewSQLKYBRepository(db *sql.DB) *SQLKYBRepository { return &SQLKYBRepositor
 
 const kybColumns = `merchant_id, status, application_json, persona_moral, rfc_valid, list_69b, documents_complete,
 	identity_check, identity_reference, identity_detail, acquirer_merchant_id, reason, submitted_at, decided_at,
-	decided_by, blocked, blocked_reason, blocked_at, version, created_at, updated_at`
+	decided_by, blocked, blocked_reason, blocked_at, blocked_source, version, created_at, updated_at`
 
 func nullTime(t *time.Time) any {
 	if t == nil {
@@ -169,7 +212,7 @@ func scanKYB(row rowScanner) (KYBRecord, error) {
 	var sub, dec, blk sql.NullTime
 	err := row.Scan(&r.MerchantID, &status, &app, &r.PersonaMoral, &r.RFCValid, &list, &r.DocumentsComplete,
 		&idc, &r.IdentityReference, &r.IdentityDetail, &r.AcquirerMerchantID, &r.Reason, &sub, &dec,
-		&r.DecidedBy, &r.Blocked, &r.BlockedReason, &blk, &r.Version, &r.CreatedAt, &r.UpdatedAt)
+		&r.DecidedBy, &r.Blocked, &r.BlockedReason, &blk, &r.BlockedSource, &r.Version, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return KYBRecord{}, err
 	}
@@ -204,13 +247,13 @@ func (r *SQLKYBRepository) CreateKYB(ctx context.Context, rec KYBRecord) (bool, 
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO merchant_kyb (merchant_id, status, application_json, persona_moral, rfc_valid, list_69b,
 			documents_complete, identity_check, identity_reference, identity_detail, acquirer_merchant_id, reason,
-			submitted_at, decided_at, decided_by, blocked, blocked_reason, blocked_at, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 1, $19, $19)
+			submitted_at, decided_at, decided_by, blocked, blocked_reason, blocked_at, blocked_source, version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $20, 1, $19, $19)
 		ON CONFLICT (merchant_id) DO NOTHING`,
 		rec.MerchantID, string(rec.Status), app, rec.PersonaMoral, rec.RFCValid, string(rec.List69B),
 		rec.DocumentsComplete, string(rec.IdentityCheck), rec.IdentityReference, rec.IdentityDetail,
 		rec.AcquirerMerchantID, rec.Reason, nullTime(rec.SubmittedAt), nullTime(rec.DecidedAt), rec.DecidedBy,
-		rec.Blocked, rec.BlockedReason, nullTime(rec.BlockedAt), now)
+		rec.Blocked, rec.BlockedReason, nullTime(rec.BlockedAt), now, rec.BlockedSource)
 	if err != nil {
 		if isForeignKeyViolation(err) {
 			return false, ErrMerchantNotFound
@@ -222,23 +265,51 @@ func (r *SQLKYBRepository) CreateKYB(ctx context.Context, rec KYBRecord) (bool, 
 }
 
 func (r *SQLKYBRepository) UpdateKYB(ctx context.Context, rec KYBRecord) (KYBRecord, error) {
+	return updateKYB(ctx, r.db, rec)
+}
+
+// UpdateKYBWithEvent updates the record and enqueues ev in one transaction.
+func (r *SQLKYBRepository) UpdateKYBWithEvent(ctx context.Context, rec KYBRecord, ev KYBEvent) (KYBRecord, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return KYBRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	out, err := updateKYB(ctx, tx, rec)
+	if err != nil {
+		return KYBRecord{}, err
+	}
+	if err := NewSQLOutboxRepository(r.db).SaveEventTx(ctx, tx, ev.Type, ev.AggregateID, ev.Payload); err != nil {
+		return KYBRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return KYBRecord{}, fmt.Errorf("commit kyb update: %w", err)
+	}
+	return out, nil
+}
+
+type kybQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func updateKYB(ctx context.Context, q kybQuerier, rec KYBRecord) (KYBRecord, error) {
 	rec = normalizeKYB(rec)
 	app, err := json.Marshal(rec.Application)
 	if err != nil {
 		return KYBRecord{}, err
 	}
-	out, err := scanKYB(r.db.QueryRowContext(ctx, `
+	out, err := scanKYB(q.QueryRowContext(ctx, `
 		UPDATE merchant_kyb SET status = $2, application_json = $3, persona_moral = $4, rfc_valid = $5,
 			list_69b = $6, documents_complete = $7, identity_check = $8, identity_reference = $9,
 			identity_detail = $10, acquirer_merchant_id = $11, reason = $12, submitted_at = $13, decided_at = $14,
-			decided_by = $15, blocked = $16, blocked_reason = $17, blocked_at = $18, version = version + 1,
-			updated_at = NOW()
+			decided_by = $15, blocked = $16, blocked_reason = $17, blocked_at = $18, blocked_source = $20,
+			version = version + 1, updated_at = NOW()
 		WHERE merchant_id = $1 AND version = $19
 		RETURNING `+kybColumns,
 		rec.MerchantID, string(rec.Status), app, rec.PersonaMoral, rec.RFCValid, string(rec.List69B),
 		rec.DocumentsComplete, string(rec.IdentityCheck), rec.IdentityReference, rec.IdentityDetail,
 		rec.AcquirerMerchantID, rec.Reason, nullTime(rec.SubmittedAt), nullTime(rec.DecidedAt), rec.DecidedBy,
-		rec.Blocked, rec.BlockedReason, nullTime(rec.BlockedAt), rec.Version))
+		rec.Blocked, rec.BlockedReason, nullTime(rec.BlockedAt), rec.Version, rec.BlockedSource))
 	if errors.Is(err, sql.ErrNoRows) {
 		return KYBRecord{}, ErrKYBConflict
 	}
@@ -246,6 +317,42 @@ func (r *SQLKYBRepository) UpdateKYB(ctx context.Context, rec KYBRecord) (KYBRec
 		return KYBRecord{}, fmt.Errorf("update kyb: %w", err)
 	}
 	return out, nil
+}
+
+func (r *SQLKYBRepository) AddSat69BException(ctx context.Context, e Sat69BException) error {
+	if e.MerchantID == "" || e.RFC == "" || e.Situation == "" || strings.TrimSpace(e.Reason) == "" || e.OperatorID == "" {
+		return errors.New("69-B exception needs merchant, rfc, situation, reason and operator")
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO sat69b_exceptions (merchant_id, rfc, situation, reason, operator_id)
+		VALUES ($1, $2, $3, $4, $5) ON CONFLICT (merchant_id, rfc, situation) WHERE revoked_at IS NULL DO NOTHING`,
+		e.MerchantID, e.RFC, e.Situation, e.Reason, truncate(e.OperatorID, 128))
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return ErrMerchantNotFound
+		}
+		return fmt.Errorf("add 69-B exception: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLKYBRepository) ActiveSat69BException(ctx context.Context, merchantID, rfc, situation string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sat69b_exceptions
+		WHERE merchant_id = $1 AND rfc = $2 AND situation = $3 AND revoked_at IS NULL)`, merchantID, rfc, situation).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("read 69-B exception: %w", err)
+	}
+	return ok, nil
+}
+
+func (r *SQLKYBRepository) RevokeSat69BExceptions(ctx context.Context, merchantID, keepSituation, revokedBy string) (int, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE sat69b_exceptions SET revoked_at = NOW(), revoked_by = $3
+		WHERE merchant_id = $1 AND revoked_at IS NULL AND situation <> $2`, merchantID, keepSituation, truncate(revokedBy, 128))
+	if err != nil {
+		return 0, fmt.Errorf("revoke 69-B exceptions: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (r *SQLKYBRepository) ListKYB(ctx context.Context, q KYBQuery) ([]KYBRecord, error) {
@@ -372,10 +479,12 @@ func (r *SQLKYBRepository) GetBlob(ctx context.Context, key string) ([]byte, boo
 // MemoryKYBRepository is the goroutine-safe in-process KYBRepository and
 // DocumentBlobStore with the same semantics as the SQL implementation.
 type MemoryKYBRepository struct {
-	mu    sync.Mutex
-	recs  map[string]KYBRecord
-	docs  []KYBDocument
-	blobs map[string][]byte
+	mu         sync.Mutex
+	recs       map[string]KYBRecord
+	docs       []KYBDocument
+	blobs      map[string][]byte
+	events     []KYBEvent
+	exceptions []Sat69BException
 }
 
 func NewMemoryKYBRepository() *MemoryKYBRepository {
@@ -405,6 +514,72 @@ func (m *MemoryKYBRepository) CreateKYB(_ context.Context, rec KYBRecord) (bool,
 func (m *MemoryKYBRepository) UpdateKYB(_ context.Context, rec KYBRecord) (KYBRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.updateLocked(rec)
+}
+
+// UpdateKYBWithEvent updates the record and records ev atomically (Events).
+func (m *MemoryKYBRepository) UpdateKYBWithEvent(_ context.Context, rec KYBRecord, ev KYBEvent) (KYBRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out, err := m.updateLocked(rec)
+	if err != nil {
+		return KYBRecord{}, err
+	}
+	m.events = append(m.events, ev)
+	return out, nil
+}
+
+// Events returns the events written by UpdateKYBWithEvent (no-DB mode has
+// no outbox table; tests inspect them here).
+func (m *MemoryKYBRepository) Events() []KYBEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]KYBEvent(nil), m.events...)
+}
+
+func (m *MemoryKYBRepository) AddSat69BException(_ context.Context, e Sat69BException) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e.MerchantID == "" || e.RFC == "" || e.Situation == "" || strings.TrimSpace(e.Reason) == "" || e.OperatorID == "" {
+		return errors.New("69-B exception needs merchant, rfc, situation, reason and operator")
+	}
+	for _, x := range m.exceptions {
+		if x.RevokedAt == nil && x.MerchantID == e.MerchantID && x.RFC == e.RFC && x.Situation == e.Situation {
+			return nil
+		}
+	}
+	e.ID, e.CreatedAt, e.RevokedAt, e.RevokedBy = int64(len(m.exceptions)+1), time.Now().UTC(), nil, ""
+	m.exceptions = append(m.exceptions, e)
+	return nil
+}
+
+func (m *MemoryKYBRepository) ActiveSat69BException(_ context.Context, merchantID, rfc, situation string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.exceptions {
+		if x.RevokedAt == nil && x.MerchantID == merchantID && x.RFC == rfc && x.Situation == situation {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MemoryKYBRepository) RevokeSat69BExceptions(_ context.Context, merchantID, keepSituation, revokedBy string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	now := time.Now().UTC()
+	for i := range m.exceptions {
+		x := &m.exceptions[i]
+		if x.RevokedAt == nil && x.MerchantID == merchantID && x.Situation != keepSituation {
+			x.RevokedAt, x.RevokedBy = &now, revokedBy
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *MemoryKYBRepository) updateLocked(rec KYBRecord) (KYBRecord, error) {
 	cur, ok := m.recs[rec.MerchantID]
 	if !ok || cur.Version != rec.Version {
 		return KYBRecord{}, ErrKYBConflict

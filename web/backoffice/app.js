@@ -201,7 +201,7 @@
       ["Motivo", d.kyb.reason], ["Enviado", d.kyb.submitted_at], ["Decidido", [d.kyb.decided_at, d.kyb.decided_by].filter(Boolean).join(" por ")],
       ["Sub-afiliado procesador", d.kyb.acquirer_merchant_id], ["CLABE virtual", d.merchant.clabe],
       ["Cuenta de liquidación", d.settlement_account ? d.settlement_account.clabe + " (" + d.settlement_account.status + ")" : ""],
-      ["Bloqueo", d.kyb.blocked ? d.kyb.blocked_reason + " (" + d.kyb.blocked_at + ")" : "no"],
+      ["Bloqueo", d.kyb.blocked ? d.kyb.blocked_reason + " (" + (d.kyb.blocked_source || "OPERATOR") + ", " + d.kyb.blocked_at + ")" : "no"],
     ];
     const dl = $("detail-fields");
     dl.replaceChildren();

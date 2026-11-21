@@ -232,7 +232,12 @@ processor configured) handles them:
      `REFUND_SWEEP_ALERT_ATTEMPTS` (default 5) attempts every further one
      logs `ALERT refund request unresolved` (ERROR).
    Direct status changes re-lock card payment then refund and only act if
-   the refund is still `REQUESTED` (`already_resolved` otherwise).
+   the refund is still `REQUESTED` **and still under this sweep's lease**
+   (`updated_at` unchanged since the claim; `already_resolved` otherwise). A
+   merchant retry with the same `Idempotency-Key` that re-sends a
+   `REQUESTED` refund touches `updated_at` before the provider call, so a
+   sweep whose lookup predates that re-send never expires it (audit of
+   Lote L).
 
 `cmd/reconciler` does not run the sweep: it needs the processor adapter and
 the webhook application path of `api.Server` (it only has the database).

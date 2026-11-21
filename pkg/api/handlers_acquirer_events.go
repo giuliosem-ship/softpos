@@ -367,6 +367,12 @@ func (s *Server) HandleCreateCardRefund(w http.ResponseWriter, r *http.Request) 
 				return errIdempotencyKeyReused
 			}
 			rf = prior
+			if prior.Status == store.RefundRequested {
+				// About to re-send it: touching updated_at takes the refund
+				// sweep's lease, so a sweep that looked it up before this
+				// re-send does not expire it (MVP-29 audit).
+				return tx.UpdateCardRefund(ctx, prior)
+			}
 			return nil
 		}
 		if !cp.Status.Refundable() {

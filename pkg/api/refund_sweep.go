@@ -171,7 +171,9 @@ func (s *Server) applySweepEvent(ctx context.Context, e acquirer.Event, provider
 
 // finishStaleRefund moves a still-REQUESTED refund to status under the same
 // lock order as the webhook (card payment, then refund). A refund the
-// webhook already resolved is left alone.
+// webhook already resolved, or touched since the claim (a merchant retry
+// re-sent it to the provider after the lookup: the lease is lost), is left
+// alone.
 func (s *Server) finishStaleRefund(ctx context.Context, rf store.StaleCardRefund, status store.CardRefundStatus, providerRefundID, lastError, eventType, outcome string) (string, error) {
 	changed := false
 	err := s.moneyStore().InTx(ctx, func(tx store.MoneyTx) error {
@@ -187,7 +189,7 @@ func (s *Server) finishStaleRefund(ctx context.Context, rf store.StaleCardRefund
 		if err != nil {
 			return err
 		}
-		if !found || cur.Status != store.RefundRequested {
+		if !found || cur.Status != store.RefundRequested || !cur.UpdatedAt.Equal(rf.UpdatedAt) {
 			return nil
 		}
 		cur.Status, cur.LastError = status, lastError

@@ -234,3 +234,65 @@ func TestRefundSweep_RaceWithWebhook(t *testing.T) {
 		t.Fatal("refund applied twice")
 	}
 }
+
+// retryRaceProvider lets a test run a merchant retry while the sweep is
+// between its provider lookup and its resolution.
+type retryRaceProvider struct {
+	*lossyProvider
+	onGetRefund func()
+	refundGate  chan struct{} // Refund blocks until closed (when set)
+	inRefund    chan struct{}
+}
+
+func (p *retryRaceProvider) GetRefund(ctx context.Context, req acquirer.RefundLookup) (acquirer.RefundState, error) {
+	st, err := p.lossyProvider.GetRefund(ctx, req)
+	if p.onGetRefund != nil {
+		f := p.onGetRefund
+		p.onGetRefund = nil
+		f()
+	}
+	return st, err
+}
+
+func (p *retryRaceProvider) Refund(ctx context.Context, req acquirer.RefundRequest) (acquirer.RefundResult, error) {
+	if p.refundGate != nil {
+		close(p.inRefund)
+		<-p.refundGate
+	}
+	return p.lossyProvider.Refund(ctx, req)
+}
+
+// TestRefundSweep_MerchantRetryDuringSweepIsNotExpired (MVP-29 audit): the
+// sweep looks a never-received refund up (not found) while the merchant
+// retries it with the same Idempotency-Key, which re-sends it to the
+// provider. The sweep must not expire it (releasing the hold and answering
+// the retry ACQUIRER_REJECTED) while the provider is processing it.
+func TestRefundSweep_MerchantRetryDuringSweepIsNotExpired(t *testing.T) {
+	s, mock, lp := setupSweepServer(t, false)
+	intent, id := stuckRefund(t, s, mock, lp, "retry-1", 20000, 8000)
+	rp := &retryRaceProvider{lossyProvider: lp}
+	s.SetAcquirerProvider(rp)
+	retried := make(chan int, 1)
+	rp.onGetRefund = func() {
+		rp.refundGate, rp.inRefund = make(chan struct{}), make(chan struct{})
+		go func() {
+			code, _, _ := requestRefund(t, s, auth.RoleOwner, intent.CardPaymentID, "retry-1", 8000)
+			retried <- code
+		}()
+		<-rp.inRefund // the retry's provider call is in flight
+	}
+	res, err := s.SweepStaleRefunds(context.Background(), sweepLater, RefundSweepConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(rp.refundGate)
+	if code := <-retried; code != http.StatusAccepted {
+		t.Fatalf("the retry reached the provider and must be accepted, got %d (sweep %+v)", code, res)
+	}
+	if res.Expired != 0 {
+		t.Fatalf("a refund retried during the sweep must not be expired: %+v", res)
+	}
+	if rf := refundStatus(t, s, id); rf.Status != store.RefundPending || rf.ProviderRefundID == "" {
+		t.Fatalf("want PENDING with the provider id, got %+v", rf)
+	}
+}

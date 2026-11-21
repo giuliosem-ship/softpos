@@ -172,3 +172,40 @@ func TestSAT69B_ChangeGuard(t *testing.T) {
 		t.Fatalf("override must swap: %q", got)
 	}
 }
+
+// TestSAT69B_OperatorBlockOverSAT69BBlock (MVP-27 audit): an operator must be
+// able to place a manual block on a merchant already blocked by the 69-B
+// process (e.g. fraud found while it was listed) without unblocking it
+// first; the block becomes OPERATOR and a later DESVIRTUADO does not lift it.
+func TestSAT69B_OperatorBlockOverSAT69BBlock(t *testing.T) {
+	s, _ := setupTestServer(t)
+	st := identity.NewMemoryList69BStore()
+	s.blacklist.SetRepository(st)
+	s.SetSAT69BMaxChangePct(100)
+	ctx := context.Background()
+	kybMem := store.NewMemoryKYBRepository()
+	s.SetKYBRepository(kybMem, kybMem)
+	if err := s.RegisterMerchant("m_layer", "ZURC660122LUA", "Comercio", true); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := operatorToken(t, s, "+525500000272")
+	if _, retro, err := s.LoadSAT69B(ctx, list69B("ZURC660122LUA=Presunto"), "file", "test", true); err != nil || len(retro.Blocked) != 1 {
+		t.Fatalf("69-B block: %+v %v", retro, err)
+	}
+	if rec := boCall(s, tok, http.MethodPost, "/api/v1/backoffice/merchants/m_layer/block", map[string]any{"reason": "fraude reportado"}); rec.Code != http.StatusOK {
+		t.Fatalf("operator block over a 69-B block: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, _ := s.loadKYB(ctx, "m_layer")
+	if !rec.Blocked || rec.BlockedSource != store.BlockSourceOperator || rec.BlockedReason != "fraude reportado" {
+		t.Fatalf("block taken over by the operator: %+v", rec)
+	}
+	if r := boCall(s, tok, http.MethodPost, "/api/v1/backoffice/merchants/m_layer/block", map[string]any{"reason": "otra vez"}); r.Code != http.StatusConflict {
+		t.Fatalf("an operator block is not re-blocked: %d", r.Code)
+	}
+	if _, retro, err := s.LoadSAT69B(ctx, list69B("ZURC660122LUA=Desvirtuado"), "file", "test", true); err != nil || len(retro.Unblocked) != 0 {
+		t.Fatalf("a load must not lift the operator block: %+v %v", retro, err)
+	}
+	if rec, _ := s.loadKYB(ctx, "m_layer"); !rec.Blocked {
+		t.Fatalf("still blocked: %+v", rec)
+	}
+}

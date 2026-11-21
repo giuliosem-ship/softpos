@@ -222,7 +222,7 @@ Existing blocks were backfilled (`blocked_reason = RFC_LISTED_69B` →
 | `PRESUNTO` / `DEFINITIVO` | not blocked, no exception for this RFC + situation | **block** (`SAT_69B`, `blocked_reason = RFC_LISTED_69B`, money routes `403 MERCHANT_BLOCKED`), outbox event `merchant.blocked_69b` **in the same transaction** as the update, audit `kyb.retroscreen_69b_block` by `system:69b`, `ALERT` ERROR log; older exceptions of the merchant are revoked |
 | `PRESUNTO` / `DEFINITIVO` | not blocked, active exception for this RFC + situation | nothing (`excepted` in the result) |
 | `DESVIRTUADO` / `SENTENCIA FAVORABLE` / absent from a current list | blocked by `SAT_69B` | **auto-unblock**, outbox `merchant.unblocked_69b` in the same transaction, audit `kyb.retroscreen_69b_unblock`; exceptions revoked |
-| same | blocked by `OPERATOR` | stays blocked: a manual block is never lifted by a load |
+| same | blocked by `OPERATOR` | stays blocked: a manual block is never lifted by a load (an operator block on a `SAT_69B`-blocked merchant takes the block over and makes it `OPERATOR`) |
 | lookup not conclusive (no list, stale list, DB error) | any | nothing (fail closed: blocks stay) |
 
 - **Notification:** the outbox events (`payload`: `merchant_id`, `situation`,

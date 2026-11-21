@@ -478,7 +478,11 @@ func (s *Server) handleBOBlock(block bool) func(http.ResponseWriter, *http.Reque
 			writeKYBStoreError(w, "bo_block", err)
 			return
 		}
-		if rec.Blocked == block {
+		// An operator may take over a block placed by the 69-B process (e.g.
+		// fraud found while listed): it becomes OPERATOR, so a later
+		// DESVIRTUADO no longer lifts it.
+		takeOver := block && rec.Blocked && rec.BlockedSource == store.BlockSourceSAT69B
+		if rec.Blocked == block && !takeOver {
 			if block {
 				writeError(w, http.StatusConflict, "ALREADY_BLOCKED")
 			} else {

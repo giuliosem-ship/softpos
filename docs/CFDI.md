@@ -390,7 +390,8 @@ CoDi `CONFIRMED`) has one public receipt (`sale_receipts`, migration 019).
   required by the production guard; `DEV_MODE` uses an ephemeral random one
   when unset; otherwise receipts are disabled (`503 RECEIPTS_NOT_CONFIGURED`).
 - **Public endpoints** (explicit allowlist, no JWT, per-IP limit 60/min,
-  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`):
+  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`; the request log
+  writes the path as `/r/{token}/…`, never the token):
   - `GET /r/{token}` → JSON (`?format=json` or `Accept: application/json`) or a
     simple HTML page (CSP `default-src 'none'`, no scripts) with a plain HTML
     autofactura form: `{"merchant_name","merchant_rfc","folio","kind","status"

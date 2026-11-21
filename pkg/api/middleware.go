@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,7 +22,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("panic recovered in HTTP handler", "error", rec, "path", r.URL.Path)
+				slog.Error("panic recovered in HTTP handler", "error", rec, "path", loggedPath(r.URL.Path))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				_ = json.NewEncoder(w).Encode(map[string]string{
@@ -43,9 +44,21 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 		slog.Info("http_request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", loggedPath(r.URL.Path),
 			"status", sw.statusCode,
 			"duration_ms", duration.Milliseconds(),
 		)
 	})
+}
+
+// loggedPath redacts credentials carried in the path: the signed token of the
+// public sale receipt routes (/r/{token}/...).
+func loggedPath(p string) string {
+	if rest, ok := strings.CutPrefix(p, receiptPathPrefix); ok && rest != "" {
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			return receiptPathPrefix + "{token}" + rest[i:]
+		}
+		return receiptPathPrefix + "{token}"
+	}
+	return p
 }

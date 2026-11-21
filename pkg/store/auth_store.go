@@ -97,6 +97,25 @@ func (r *SQLAuthRepository) ListMemberships(ctx context.Context, userID string) 
 	return out, rows.Err()
 }
 
+var _ auth.OTPSendCounter = (*SQLAuthRepository)(nil)
+
+// IncrementOTPSends counts one OTP send for phone on day (YYYY-MM-DD) in
+// otp_send_counters (atomic upsert, shared by every instance); rows older
+// than 7 days are pruned on the first send of a phone each day.
+func (r *SQLAuthRepository) IncrementOTPSends(ctx context.Context, phone, day string) (int, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx, `
+		INSERT INTO otp_send_counters (phone, day, sends) VALUES ($1, $2::date, 1)
+		ON CONFLICT (phone, day) DO UPDATE SET sends = otp_send_counters.sends + 1
+		RETURNING sends`, phone, day).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count OTP send: %w", err)
+	}
+	if n == 1 {
+		_, _ = r.db.ExecContext(ctx, `DELETE FROM otp_send_counters WHERE phone = $1 AND day < $2::date - 7`, phone, day)
+	}
+	return n, nil
+}
+
 func (r *SQLAuthRepository) SaveOTPChallenge(ctx context.Context, c auth.OTPChallenge) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO otp_challenges (phone, code_hash, expires_at, attempts, last_sent_at) VALUES ($1, $2, $3, 0, $4)

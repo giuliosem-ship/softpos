@@ -1,4 +1,5 @@
 -- 020_sat69b_lifecycle_refund_sweep.down.sql
+DROP TABLE IF EXISTS otp_send_counters;
 DROP INDEX IF EXISTS idx_card_payment_refunds_requested;
 ALTER TABLE card_payment_refunds DROP COLUMN IF EXISTS last_swept_at;
 ALTER TABLE card_payment_refunds DROP COLUMN IF EXISTS sweep_attempts;

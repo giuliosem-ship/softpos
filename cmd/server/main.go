@@ -59,6 +59,12 @@ type Config struct {
 	JWTSecret      string        // JWT_SECRET (>= 32 bytes); required unless DevMode
 	AuthAccessTTL  time.Duration // AUTH_ACCESS_TTL, default 15m
 	AuthRefreshTTL time.Duration // AUTH_REFRESH_TTL, default 720h
+	// MVP-31 (docs/AUTH.md): access-token issuer / audience, daily OTP cap
+	// and the CORS allowlist.
+	JWTIssuer          string // JWT_ISSUER, default "kerno"
+	JWTAudience        string // JWT_AUDIENCE, default "kerno-api"
+	OTPDailyLimit      int    // OTP_DAILY_LIMIT, default 10 codes per phone per day
+	CORSAllowedOrigins string // CORS_ALLOWED_ORIGINS, comma-separated origins; empty = deny every cross-origin read
 	// AuthRateLimitPerMinute is the per-IP budget for /api/v1/auth/*
 	// (AUTH_RATE_LIMIT_PER_MINUTE, default 30; 0 keeps the default).
 	AuthRateLimitPerMinute int
@@ -235,6 +241,15 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	otpDaily := 0
+	if val := os.Getenv("OTP_DAILY_LIMIT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			otpDaily = n
+		} else {
+			slog.Warn("invalid OTP_DAILY_LIMIT, using default", "value", val)
+		}
+	}
+
 	alertAttempts := 0
 	if val := os.Getenv("REFUND_SWEEP_ALERT_ATTEMPTS"); val != "" {
 		if n, err := strconv.Atoi(val); err == nil && n > 0 {
@@ -266,6 +281,10 @@ func LoadConfigFromEnv() Config {
 		JWTSecret:                 os.Getenv("JWT_SECRET"),
 		AuthAccessTTL:             parseDurationEnv("AUTH_ACCESS_TTL"),
 		AuthRefreshTTL:            parseDurationEnv("AUTH_REFRESH_TTL"),
+		JWTIssuer:                 strings.TrimSpace(os.Getenv("JWT_ISSUER")),
+		JWTAudience:               strings.TrimSpace(os.Getenv("JWT_AUDIENCE")),
+		OTPDailyLimit:             otpDaily,
+		CORSAllowedOrigins:        os.Getenv("CORS_ALLOWED_ORIGINS"),
 		OutboxPollInterval:        outboxPoll,
 		OutboxBatchSize:           outboxBatch,
 		OutboxPublisher:           os.Getenv("OUTBOX_PUBLISHER"),
@@ -341,9 +360,12 @@ func buildAuthService(cfg Config, repo auth.Repository) (*auth.Service, error) {
 		slog.Warn("DEV_MODE: JWT_SECRET not set, using an ephemeral random secret")
 	}
 	svc, err := auth.NewService(repo, auth.LogSender{RevealCode: cfg.DevMode}, auth.Config{
-		JWTSecret:  secret,
-		AccessTTL:  cfg.AuthAccessTTL,
-		RefreshTTL: cfg.AuthRefreshTTL,
+		JWTSecret:     secret,
+		Issuer:        cfg.JWTIssuer,
+		Audience:      cfg.JWTAudience,
+		AccessTTL:     cfg.AuthAccessTTL,
+		RefreshTTL:    cfg.AuthRefreshTTL,
+		OTPDailyLimit: cfg.OTPDailyLimit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth service: %w", err)
@@ -561,6 +583,14 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetDevMode(cfg.DevMode)
+	origins, err := api.ParseCORSOrigins(cfg.CORSAllowedOrigins)
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %w", err)
+	}
+	server.SetCORSAllowedOrigins(origins)
 	if cfg.SAT69BURL != "" {
 		server.SetSAT69BSource(cfg.SAT69BURL, identity.HTTP69BFetcher(cfg.SAT69BURL, nil), cfg.SAT69BMaxShrinkPct)
 	} else {

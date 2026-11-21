@@ -1,6 +1,7 @@
 -- 020_sat69b_lifecycle_refund_sweep.up.sql
 -- MVP-27: 69-B block lifecycle (docs/KYB.md). MVP-29: refund request sweep
--- (docs/ACQUIRER_INTEGRATION.md).
+-- (docs/ACQUIRER_INTEGRATION.md). MVP-31: per-phone daily OTP send cap
+-- (docs/AUTH.md).
 --
 -- blocked_source records who placed the current block: OPERATOR (backoffice)
 -- or SAT_69B (the re-review after a list load). Only SAT_69B blocks are
@@ -44,3 +45,12 @@ ALTER TABLE card_payment_refunds ADD COLUMN IF NOT EXISTS sweep_attempts INTEGER
 ALTER TABLE card_payment_refunds ADD COLUMN IF NOT EXISTS last_swept_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_card_payment_refunds_requested
     ON card_payment_refunds(updated_at) WHERE status = 'REQUESTED';
+
+-- MVP-31: OTP codes sent per phone and calendar day (America/Mexico_City),
+-- shared by every server instance (daily cap OTP_DAILY_LIMIT).
+CREATE TABLE IF NOT EXISTS otp_send_counters (
+    phone VARCHAR(20) NOT NULL,
+    day DATE NOT NULL,
+    sends INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (phone, day)
+);

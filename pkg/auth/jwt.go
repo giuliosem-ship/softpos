@@ -25,6 +25,7 @@ type Claims struct {
 	Role       Role   `json:"role,omitempty"`
 	Typ        string `json:"typ,omitempty"`
 	Iss        string `json:"iss,omitempty"`
+	Aud        string `json:"aud,omitempty"`
 	Jti        string `json:"jti,omitempty"`
 	Iat        int64  `json:"iat,omitempty"`
 	Exp        int64  `json:"exp,omitempty"`

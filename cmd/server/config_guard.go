@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 
+	"softpos/pkg/api"
 	"softpos/pkg/identity"
 )
 
@@ -31,6 +32,7 @@ var (
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrMockKYCInProduction       = errors.New("insecure configuration: KYC_PROVIDER=mock cannot be used in production (it passes every identity check)")
 	ErrInsecureMetricsToken      = errors.New("insecure configuration: METRICS_TOKEN must be at least 32 bytes in production, and is required when METRICS_ADDR is not a loopback address")
+	ErrInsecureCORSOrigins       = errors.New("insecure configuration: CORS_ALLOWED_ORIGINS must list explicit https:// origins in production (no wildcard, no http://)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 )
 
@@ -63,6 +65,10 @@ var ServerEnvVars = []EnvVar{
 	{Name: "AUTH_ACCESS_TTL"},
 	{Name: "AUTH_REFRESH_TTL"},
 	{Name: "AUTH_RATE_LIMIT_PER_MINUTE"},
+	{Name: "JWT_ISSUER"},
+	{Name: "JWT_AUDIENCE"},
+	{Name: "OTP_DAILY_LIMIT"},
+	{Name: "CORS_ALLOWED_ORIGINS"},
 	{Name: "PLAY_INTEGRITY_SECRET", Secret: true},
 	{Name: "PLAY_INTEGRITY_PACKAGE"},
 	{Name: "CODI_WEBHOOK_SECRET", Secret: true},
@@ -214,7 +220,19 @@ func ValidateProductionConfig(cfg Config, env string) error {
 		return ErrMockKYCInProduction
 	}
 
-	// 9. Metrics listener: a token when it is reachable beyond loopback.
+	// 9. Auth hardening (MVP-31): an explicit https CORS allowlist (empty =
+	// deny every cross-origin read).
+	if origins, err := api.ParseCORSOrigins(cfg.CORSAllowedOrigins); err != nil {
+		return ErrInsecureCORSOrigins
+	} else {
+		for _, o := range origins {
+			if !strings.HasPrefix(o, "https://") {
+				return ErrInsecureCORSOrigins
+			}
+		}
+	}
+
+	// 10. Metrics listener: a token when it is reachable beyond loopback.
 	if (cfg.MetricsToken != "" || (cfg.MetricsAddr != "" && !loopbackAddr(cfg.MetricsAddr))) && len(cfg.MetricsToken) < minSecretLen {
 		return ErrInsecureMetricsToken
 	}

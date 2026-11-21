@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -126,5 +127,29 @@ func TestValidateProductionConfig_RejectsInsecureSettingsInProduction(t *testing
 	devCfg.DevMode = true
 	if err := ValidateProductionConfig(devCfg, "production"); !errors.Is(err, ErrDevModeInProduction) {
 		t.Errorf("expected ErrDevModeInProduction, got: %v", err)
+	}
+}
+
+func TestValidateProductionConfig_CORSOrigins(t *testing.T) {
+	cfg := Config{
+		DatabaseURL:       "postgres://softpos:Str0ngRandomPassw0rd@db.prod.internal:5432/softpos?sslmode=require",
+		VaultMasterKeyHex: "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
+		STPHMACSecret:     "prod_stp_hmac_secret_very_long_and_random_string_xyz",
+		JWTSecret:         "prod_jwt_secret_with_at_least_32_random_bytes",
+		CoDiWebhookSecret: "prod_codi_webhook_secret_with_32_random_bytes",
+	}
+	for origins, want := range map[string]error{
+		"":                                    nil,
+		"https://pos.kerno.mx":                nil,
+		"https://pos.kerno.mx,http://x.local": ErrInsecureCORSOrigins,
+		"*":                                   ErrInsecureCORSOrigins,
+	} {
+		cfg.CORSAllowedOrigins = origins
+		if err := ValidateProductionConfig(cfg, "production"); !errors.Is(err, want) {
+			t.Errorf("%q: want %v, got %v", origins, want, err)
+		}
+	}
+	if _, _, _, err := BuildServer(context.Background(), Config{DevMode: true, CORSAllowedOrigins: "*"}); err == nil {
+		t.Fatal("an invalid CORS_ALLOWED_ORIGINS must fail the boot")
 	}
 }

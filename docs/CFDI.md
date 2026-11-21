@@ -222,7 +222,12 @@ drawn as vector modules with `rsc.io/qr` (pure Go). When the receptor has an
 - Only `STAMPED` invoices (`409 INVOICE_NOT_CANCELABLE`). `422
   CANCEL_INVALID {"fields"}` for an unknown motivo, `01` without
   `folio_sustitucion`, `folio_sustitucion` with another motivo, or `04` on an
-  individual invoice.
+  individual invoice. `409 INVOICE_HAS_CREDIT_NOTES {"credit_note_id"}`
+  while a nota de crédito related to it is `PENDING`, `STAMPED` or
+  `CANCEL_REQUESTED` (SAT: a CFDI with related vigente CFDI is not
+  cancelable): cancel the credit notes first. This keeps a motivo 01
+  replacement (built from the sale's net amount) from being credited a second
+  time by the old egreso.
 - **Motivo 01** (errores con relación): first issue the replacement with
   `replaces_invoice_id` (it carries `CfdiRelacionados` TipoRelacion 04 with
   the original UUID and takes over the sales), then cancel the original with
@@ -349,9 +354,11 @@ produces a CFDI de egreso automatically:
   the job ends `ISSUED` and still flagged.
 - **Limitations (accountant to confirm):** egreso vs. cancelación con
   sustitución; clave 84111506 / ACT and InformacionGlobal on the egreso of a
-  global; G02; the egreso of a credited invoice later replaced with motivo 01
-  stays related to the canceled UUID (the replacement is built from the net
-  amount, so it is not credited twice, but the old egreso is not canceled).
+  global; G02. A credited invoice can only be canceled (e.g. motivo 01) after
+  its credit notes are canceled (`409 INVOICE_HAS_CREDIT_NOTES`); the
+  replacement is built from the net amount, so it needs no new egreso for
+  the refunds before it, and later movements credit the replacement (the
+  sale's active invoice).
 
 ### Comprobante de venta y autofactura (MVP-26)
 

@@ -829,6 +829,22 @@ func (s *Server) HandleCancelInvoice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// SAT: a CFDI with related vigente CFDI (its notas de crédito,
+	// TipoRelacion 01) cannot be canceled; cancel them first. Without this a
+	// replacement built from the net amount plus the old egreso still vigente
+	// would credit the refund twice (MVP-23 audit).
+	if rec.Kind != store.InvoiceCreditNote {
+		notes, err := s.invoiceRepo().ListInvoices(ctx, store.InvoiceQuery{MerchantID: rec.MerchantID, Kind: store.InvoiceCreditNote,
+			RelatedInvoiceID: rec.ID, Statuses: []string{store.InvoicePending, store.InvoiceStamped, store.InvoiceCancelRequested}, Limit: 1})
+		if err != nil {
+			writeInvoiceError(w, err)
+			return
+		}
+		if len(notes) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "INVOICE_HAS_CREDIT_NOTES", "credit_note_id": notes[0].ID})
+			return
+		}
+	}
 	now := nowUTC()
 	signer, err := s.activeSigner(rec.MerchantID, now)
 	if err != nil {

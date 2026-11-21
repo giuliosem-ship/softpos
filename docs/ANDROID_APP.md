@@ -227,34 +227,63 @@ until the field is cleared — a platform limitation.)
   only invoiceable sales; *Facturar seleccionadas (n)*). *Facturas* is
   reachable from *Ventas* and *Perfil*.
 - Gate: the form reads `GET .../csd` on every visit; `404 CSD_NOT_FOUND` or a
-  status other than `ACTIVE` blocks it and links to the CSD screen (coming
-  back re-checks). A create answering `CSD_NOT_FOUND`/`CSD_REQUIRED`/
-  `CSD_NOT_ACTIVE`/`CSD_EXPIRED` does the same (assumed codes).
+  status other than `ACTIVE` (the backend sends `EXPIRED` for a stored
+  certificate past `valid_to`) blocks it and links to the CSD screen (coming
+  back re-checks). A create answering `422 CSD_NOT_FOUND` / `422 CSD_EXPIRED`
+  does the same.
 - Receptor form: RFC (upper-cased, SAT shape; 13 chars = persona física,
   12 = moral), nombre (as in the customer's CSF), régimen fiscal and uso CFDI
   from `GET /api/v1/catalogs/sat?names=regimen_fiscal,uso_cfdi`, filtered by
   `persona_fisica`/`persona_moral` and by the use's `regimenes`; changing the
   RFC or régimen drops choices that no longer fit. CP 5 digits, email
   optional. Catalogs live in memory (`SatCatalogCache`, one per process): fresh
-  for 12 h, then revalidated with `If-None-Match` (`304` renews it); a failed
-  refresh serves the stale copy.
-- `POST .../invoices {sale_ids, receptor}` with an `Idempotency-Key` stable per
-  request body: kept on no response / unparsable / 5xx (`502` from the PAC),
-  so *Reintentar* replays the same invoice; dropped on any 4xx or a result,
-  and a new one when the receptor or sales change. `409 SALE_ALREADY_INVOICED`
-  and `422 RECEPTOR_INVALID {fields}` (names with or without `receptor.`) are
-  mapped and mark the fields. The result screen shows `STAMPED` (UUID,
-  total), `PENDING` ("se está timbrando") or `FAILED` (`error`).
+  for 12 h, then refetched. The backend sends no `ETag` (only
+  `Cache-Control: private, max-age=3600` and `X-SAT-Catalog-Version`), so no
+  `If-None-Match` is sent; the `304` path stays only for a future ETag. A
+  failed refresh serves the stale copy.
+- `POST .../invoices {sale_ids, receptor[, replaces_invoice_id]}` with an
+  `Idempotency-Key` stable per request body: kept on no response / unparsable
+  / 5xx (the create's only 5xx is `503 INVOICES_UNAVAILABLE`), so *Reintentar*
+  replays the same invoice; dropped on any 4xx or a result, and a new one
+  when the receptor or sales change. A PAC outage is **not** a 5xx: it answers
+  `201` with `status PENDING, error PAC_UNAVAILABLE` (the sales stay linked;
+  the backoffice / worker retries). Mapped errors: `409 SALE_ALREADY_INVOICED
+  {sale_id, invoice_id}` (the holder is fetched: a `kind GLOBAL` holder shows
+  "ya está en la factura global"), `409 IDEMPOTENCY_KEY_REUSED`,
+  `422 RECEPTOR_INVALID {fields: {field: reason}}` (an object; names with or
+  without `receptor.` mark the fields), `422 FISCAL_PROFILE_INCOMPLETE
+  {missing}`, `422 SALE_NOT_FOUND` / `SALE_NOT_INVOICEABLE`,
+  `422 REPLACEMENT_INVALID`. The result screen shows `STAMPED` (UUID,
+  total), `PENDING` ("se está timbrando") or `FAILED` (`error`, e.g. a SAT
+  code like `CFDI40145`).
 - *Facturas*: `GET .../invoices?limit=50&before=` with the same cursor rules
-  as *Ventas*. Detail: `GET .../invoices/{id}` (status, UUID, serie-folio,
-  subtotal/IVA/total in Long cents, receptor, dates). *Compartir PDF/XML*
+  as *Ventas*. Detail: `GET .../invoices/{id}` (kind, status, UUID, serie-folio
+  — `folio` is a string —, subtotal/IVA/ISR retenido/total in Long cents with
+  `total = subtotal + iva - isr_retenido`, receptor, dates, `global_period`
+  for a factura global, and the `cancellation {motivo, status REQUESTED |
+  ACCEPTED | REJECTED}`: a rejected request leaves the invoice `STAMPED` and
+  is shown as such). *Compartir PDF/XML*
   downloads `GET .../{id}/pdf|xml` into `cache/invoices/` (emptied before each
   write, the download buffer is zeroed) and opens the share sheet with a
   content Uri of `InvoiceFileProvider` (authority `<appId>.invoicefiles`, not
   exported, read grant per Uri, paths file maps only `cache/invoices/`).
-- Cancel (owner, stamped only): SAT motivo `01`–`04`; `01` requires
-  `folio_sustitucion` (UUID shape checked) → `POST .../{id}/cancel`; the
-  response's `CANCEL_REQUESTED` / `CANCELED` replaces the shown invoice.
+  Logout empties `cache/invoices/`.
+- Cancel (owner, stamped only): motivos `01`–`03` for an individual invoice,
+  `02`–`04` for a factura global (what the backend accepts) →
+  `POST .../{id}/cancel`; `200 CANCELED` or `202 CANCEL_REQUESTED` (receptor
+  has 72 h; the backend poller resolves it) replaces the shown invoice.
+  Errors: `422 CANCEL_INVALID {fields}` (`REPLACEMENT_NOT_STAMPED` has its own
+  message), `422 CANCEL_REJECTED`, `409 INVOICE_NOT_CANCELABLE` (reloads),
+  `502 PAC_UNAVAILABLE`, `403 ROLE_FORBIDDEN`. Cancel carries no
+  Idempotency-Key: a repeat answers `409`, never a second PAC call.
+- Motivo `01` (substitute): *Emitir factura sustituta* opens the form for the
+  original's sales with its receptor prefilled; the create sends
+  `replaces_invoice_id` (TipoRelacion 04, the substitute takes over the
+  sales). Once it is `STAMPED`, *Cancelar la factura original* returns to the
+  original with motivo `01` and `folio_sustitucion` = the substitute UUID.
+- Sales already in the factura global are only detected at create time (the
+  409 above): the sales API exposes no invoice link, so the list cannot grey
+  them out beforehand.
 
 ### Contract tests
 
@@ -263,10 +292,15 @@ until the field is cleared — a platform limitation.)
 refund, sales, the `403 MERCHANT_NOT_APPROVED` gate) were captured from the Go
 handlers; `contract/KybContractTest` and `contract/PaymentsContractTest`
 decode them through the real HTTP clients and ViewModels. Batch J (`csd_*`,
-`invoice*`, `invoices_*`, `sat_catalogs_200.json`) are **handwritten from the
-agreed contract** and exercised by `contract/FiscalContractTest` (request
-method, path, query, `Idempotency-Key`, multipart part names, JSON body
-keys, `If-None-Match`); re-verify them against real handler responses.
+`invoice*`, `invoices_*`, `sat_catalogs_200.json`) were captured from the Go
+handlers (batch J audit: `httptest` against `pkg/api` in memory mode with the
+mock PAC — CSD PUT/GET incl. `WRONG_PASSWORD`, `MISSING_KEY`, `EXPIRED`,
+`403`; invoice create `STAMPED`/`PENDING`/`FAILED`/substitute and every
+error above; list pages; detail incl. global and rejected cancellation;
+cancel `200`/`202`/`409`/`422`/`502`/`403`; catalogs) and exercised by
+`contract/FiscalContractTest` (request method, path, query,
+`Idempotency-Key`, multipart part names `cer`/`key`/`password` — the names
+the handler reads —, JSON body keys, the motivo 01 flow).
 `ui/fiscal/FileProviderHygieneTest` asserts both FileProviders are not
 exported and that the invoice one maps only `cache/invoices/`. CSD tests use a
 synthetic certificate built in memory (`fiscal/TestCertificates`): no `.cer`

@@ -1304,6 +1304,20 @@
       "test_results": "go vet clean; go test -race all ok; PGIntegration GlobalInvoiceParts (5 sales, 2 per part, 3 concurrent runs -> 3 stamped parts, each sale linked once).",
       "audit_notes": "Bahía de Banderas / Juárez / Ojinaga CP sub-ranges are best-effort; the Coahuila/NL/Tamaulipas border strip (America/Matamoros) is not mapped (Fecha up to 1 h in the past there, accepted). The exact source is the huso horario columns of c_CodigoPostal (not embedded yet). Each run scans the window's sales per merchant (no un-invoiced index yet). Global period boundaries remain in CDMX time.",
       "priority": 84
+    },
+    {
+      "id": "MVP-25",
+      "component": "api",
+      "title": "Sales expose their active invoice and credit notes; sale detail endpoint; memberships expose the merchant name",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/sales_invoice_test.go",
+        "implementation": "pkg/api/handlers_sales.go, pkg/store/invoices.go (SaleInvoiceLinks), pkg/api/handlers_auth.go, pkg/auth/auth.go, pkg/api/server.go, docs/MONEY_FLOWS.md, docs/AUTH.md, docs/ANDROID_APP.md"
+      },
+      "spec": "GET /api/v1/merchants/{id}/sales items gain invoice_id / invoice_kind (INDIVIDUAL|GLOBAL) / invoice_status of the active invoice (explicit null when none) and credit_notes [{invoice_id,status,uuid,related_invoice_id,total_cents}] (omitted when empty), one invoice_sales query per page. New GET /api/v1/merchants/{id}/sales/{sale_id} (any member, 404 SALE_NOT_FOUND). Token pairs of otp/verify and refresh fill memberships[].merchant_name. Additive fields only.",
+      "test_results": "go vet clean; go test -race all ok.",
+      "audit_notes": "The Android app does not consume the new fields yet (F9 row reduced to the Android part). merchant_name is the business name given at registration, not the KYB legal name.",
+      "priority": 85
     }
   ]
 }

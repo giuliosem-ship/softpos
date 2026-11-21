@@ -76,6 +76,11 @@ Token pair response:
  "user_id":"usr_…","merchant_id":"…","role":"owner","memberships":[…]}
 ```
 
+Each membership is `{"user_id","merchant_id","role","created_at","merchant_name"}`;
+`merchant_name` (the merchant's business name, MVP-25) is filled by the API
+on login and refresh for the app's merchant picker (omitted if the merchant
+cannot be read).
+
 ## Access token
 
 HS256 JWT signed with `JWT_SECRET`. Claims: `sub` (user id), `merchant_id`

@@ -65,6 +65,9 @@ type Membership struct {
 	MerchantID string    `json:"merchant_id"`
 	Role       Role      `json:"role"`
 	CreatedAt  time.Time `json:"created_at"`
+	// MerchantName is the merchant's business name, filled by the API layer
+	// for the app's merchant picker (not stored with the membership).
+	MerchantName string `json:"merchant_name,omitempty"`
 }
 
 // OTPChallenge is the pending one-time code for a phone (one per phone).

@@ -252,6 +252,19 @@ rows strictly older. Legacy EMV payments (`emv_payments`, DEV_MODE only) are
 not listed. The backoffice searches the same view across merchants
 (`docs/BACKOFFICE.md`).
 
+**Invoice fields (MVP-25, additive):** every item also carries
+`"invoice_id"`, `"invoice_kind"` (`INDIVIDUAL` | `GLOBAL`) and
+`"invoice_status"` (`PENDING` | `STAMPED` | `CANCEL_REQUESTED`) of the active
+invoice holding the sale — explicit `null` when the sale is in no active
+invoice (so the app can disable "Facturar" beforehand instead of waiting for
+`409 SALE_ALREADY_INVOICED`) — and, when the sale was credited after
+invoicing, `"credit_notes":[{"invoice_id","status","uuid"?,"related_invoice_id","total_cents"}]`
+(omitted when empty; `docs/CFDI.md`). One `invoice_sales` query per page.
+
+`GET /api/v1/merchants/{id}/sales/{sale_id}` (any member; `404
+SALE_NOT_FOUND`, other tenant `403`) returns one item with the same fields
+(sale detail; the receipt fields of MVP-26 are added there).
+
 ## Not covered yet
 
 - A real processor adapter (only the mock exists), STP confirmations of

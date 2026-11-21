@@ -88,7 +88,18 @@ func (s *Server) HandleOTPVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, tp)
+	writeJSON(w, http.StatusOK, s.withMerchantNames(tp))
+}
+
+// withMerchantNames fills each membership's merchant_name (MVP-25: the
+// app's merchant picker shows names, not ids). Lookup failures leave it empty.
+func (s *Server) withMerchantNames(tp auth.TokenPair) auth.TokenPair {
+	for i := range tp.Memberships {
+		if m, ok := s.GetMerchant(tp.Memberships[i].MerchantID); ok {
+			tp.Memberships[i].MerchantName = m.Name
+		}
+	}
+	return tp
 }
 
 type RefreshBody struct {
@@ -109,7 +120,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, tp)
+	writeJSON(w, http.StatusOK, s.withMerchantNames(tp))
 }
 
 // HandleLogout: POST /api/v1/auth/logout {refresh_token} revokes the session family.

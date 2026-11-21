@@ -116,7 +116,10 @@ also validates the wrapper jar against Gradle's published checksums.
 ### Sales
 
 `GET /api/v1/merchants/{id}/sales?limit=50&before=<cursor>` →
-`{"items":[{id, kind:"card"|"spei"|"codi", status, amount_cents, created_at, card_payment_id?}], "next_cursor"}`.
+`{"items":[{id, kind:"card"|"spei"|"codi", status, amount_cents, created_at, card_payment_id?,
+invoice_id, invoice_kind, invoice_status, credit_notes?}], "next_cursor"}` (invoice fields since
+the backend Lote K, `null` when not invoiced; the app does not use them yet, see
+`docs/MONEY_FLOWS.md`).
 Statuses: card = `card_payments.status`; SPEI and CoDi rows come from
 `merchant_sales`, which only holds credited money (`RECEIVED` / `CONFIRMED`,
 both shown as approved). A card intent that was never tapped stays `CREATED`

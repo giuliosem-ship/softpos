@@ -4,7 +4,7 @@
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl add +525512345678
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl remove +525512345678
 //	DATABASE_URL=postgres://… go run ./cmd/operatorctl check +525512345678
-//	DATABASE_URL=postgres://… go run ./cmd/operatorctl load-69b Listado_Completo_69-B.csv [--override-shrink]
+//	DATABASE_URL=postgres://… go run ./cmd/operatorctl load-69b Listado_Completo_69-B.csv [--override-shrink] [--override-changes]
 //
 // load-69b loads the SAT Article 69-B list from a local file (same parser,
 // atomic swap and shrink protection as the server worker, docs/KYB.md) and
@@ -33,7 +33,7 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: operatorctl add|remove|check <E.164 phone>   (DATABASE_URL required)")
-	fmt.Fprintln(os.Stderr, "       operatorctl load-69b <file.csv> [--override-shrink]")
+	fmt.Fprintln(os.Stderr, "       operatorctl load-69b <file.csv> [--override-shrink] [--override-changes]")
 	os.Exit(2)
 }
 
@@ -75,11 +75,13 @@ func openDB() *sql.DB {
 }
 
 func mainLoad69B(args []string) {
-	path, override := "", false
+	path, opts := "", identity.Load69BOptions{}
 	for _, a := range args {
 		switch {
 		case a == "--override-shrink":
-			override = true
+			opts.OverrideShrink = true
+		case a == "--override-changes":
+			opts.OverrideChanges = true
 		case path == "" && !strings.HasPrefix(a, "-"):
 			path = a
 		default:
@@ -99,7 +101,7 @@ func mainLoad69B(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if err := runLoad69B(ctx, store.NewSQLBlacklistRepository(db), store.NewSQLKYBRepository(db), store.NewSQLAuditRepository(db),
-		raw, "file:"+filepath.Base(path), actor(), override, os.Stdout); err != nil {
+		raw, "file:"+filepath.Base(path), actor(), opts, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -112,14 +114,17 @@ type list69BRepo interface {
 }
 
 // runLoad69B loads raw as the SAT 69-B list and re-checks approved merchants.
-func runLoad69B(ctx context.Context, repo list69BRepo, kybRepo store.KYBRepository, audit store.OperatorAuditRepository, raw []byte, source, actor string, override bool, out io.Writer) error {
-	if override {
+func runLoad69B(ctx context.Context, repo list69BRepo, kybRepo store.KYBRepository, audit store.OperatorAuditRepository, raw []byte, source, actor string, opts identity.Load69BOptions, out io.Writer) error {
+	if opts.OverrideShrink {
 		fmt.Fprintln(out, "WARNING: --override-shrink lifts the shrink protection")
 	}
-	syncer := &identity.List69BSyncer{Store: repo, MaxShrinkPct: identity.DefaultMax69BShrinkPct}
-	res, err := syncer.Load(ctx, raw, source, actor, override)
+	if opts.OverrideChanges {
+		fmt.Fprintln(out, "WARNING: --override-changes lifts the situation-change protection")
+	}
+	syncer := &identity.List69BSyncer{Store: repo, MaxShrinkPct: identity.DefaultMax69BShrinkPct, MaxChangePct: identity.DefaultMax69BChangePct}
+	res, err := syncer.LoadWithOptions(ctx, raw, source, actor, opts)
 	fmt.Fprintln(out, identity.FormatLoad(res.Load))
-	detail := identity.FormatLoad(res.Load) + fmt.Sprintf(" source=%s override_shrink=%t", source, override)
+	detail := identity.FormatLoad(res.Load) + fmt.Sprintf(" source=%s override_shrink=%t override_changes=%t", source, opts.OverrideShrink, opts.OverrideChanges)
 	if err != nil {
 		detail += " error=" + err.Error()
 	}
@@ -135,7 +140,8 @@ func runLoad69B(ctx context.Context, repo list69BRepo, kybRepo store.KYBReposito
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "retroscreen: %d approved merchants checked, %d blocked %v, %d not conclusive\n", retro.Checked, len(retro.Blocked), retro.Blocked, retro.Unknown)
+	fmt.Fprintf(out, "retroscreen: %d approved merchants checked, %d blocked %v, %d unblocked %v, %d excepted, %d not conclusive\n",
+		retro.Checked, len(retro.Blocked), retro.Blocked, len(retro.Unblocked), retro.Unblocked, len(retro.Excepted), retro.Unknown)
 	return nil
 }
 

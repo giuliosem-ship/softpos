@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,4 +420,87 @@ func TestPGIntegration_AcquirerPayoutReconciliation(t *testing.T) {
 	wait := StartAcquirerSettlementWatcher(ctx, Config{AcquirerReconcileInterval: 10 * time.Millisecond}, db)
 	cancel()
 	wait()
+}
+
+// TestPGIntegration_RefundSweepRaceSafe (MVP-29): on PostgreSQL, refunds
+// stuck in REQUESTED are claimed once by concurrent sweepers (SKIP LOCKED);
+// a refund the provider completed is applied exactly once even when sweeps
+// and the webhook run concurrently; a refund the provider never received is
+// expired and its hold released.
+func TestPGIntegration_RefundSweepRaceSafe(t *testing.T) {
+	srv, merchantID, tok, db := buildCardServerDB(t, func(c *Config) { c.AcquirerWebhookSecret = pgAcquirerSecret })
+	ctx := context.Background()
+	_, intent := cardIntent(t, srv, tok, "pg-sweep-1", 20000)
+	mock := srv.AcquirerProvider().(*acquirer.MockProvider)
+	for _, e := range mock.SimulateTap(intent.ProviderPaymentID, intent.CardPaymentID, 20000) {
+		if code := deliverSigned(t, srv, e); code != http.StatusOK {
+			t.Fatalf("tap %s: %d", e.Type, code)
+		}
+	}
+	// Two refund requests left REQUESTED (crash before / after the provider call).
+	for _, rf := range []struct {
+		id     string
+		amount int64
+	}{{"cr_pg_done", 5000}, {"cr_pg_lost", 3000}} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO card_payment_refunds (id, card_payment_id, merchant_id, idempotency_key, amount_cents, status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 'REQUESTED', NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour')`, rf.id, intent.CardPaymentID, merchantID, "key-"+rf.id, rf.amount); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := mock.Refund(ctx, acquirer.RefundRequest{IdempotencyKey: "kerno_refund_cr_pg_done", ProviderPaymentID: intent.ProviderPaymentID, AmountCents: 5000, KernoRefundID: "cr_pg_done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.SetRefundStatus("kerno_refund_cr_pg_done", acquirer.RefundStatusSucceeded)
+	before := availableBalance(t, srv, tok, merchantID)
+
+	var claimed, succeeded, expired atomic.Int64
+	runConcurrently(8, func(i int) int {
+		if i%2 == 0 {
+			r, err := srv.SweepStaleRefunds(ctx, time.Now(), api.RefundSweepConfig{})
+			if err != nil {
+				t.Errorf("sweep: %v", err)
+			}
+			claimed.Add(int64(r.Claimed))
+			succeeded.Add(int64(r.Succeeded))
+			expired.Add(int64(r.Expired))
+			return 200
+		}
+		return deliverSigned(t, srv, acquirer.Event{ID: "evt_pg_sweep_" + strconv.Itoa(i), Type: acquirer.EventRefunded,
+			ProviderPaymentID: intent.ProviderPaymentID, RefundID: res.ProviderRefundID, KernoRefundID: "cr_pg_done", AmountCents: 5000})
+	})
+	if expired.Load() != 1 {
+		t.Fatalf("the lost refund must be expired exactly once (claimed=%d expired=%d)", claimed.Load(), expired.Load())
+	}
+	var refunded int64
+	if err := db.QueryRowContext(ctx, `SELECT refunded_cents FROM card_payments WHERE id = $1`, intent.CardPaymentID).Scan(&refunded); err != nil || refunded != 5000 {
+		t.Fatalf("refund must be posted exactly once: refunded_cents=%d %v", refunded, err)
+	}
+	statuses := map[string]string{}
+	rows, err := db.QueryContext(ctx, `SELECT id, status FROM card_payment_refunds WHERE card_payment_id = $1`, intent.CardPaymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id, st string
+		_ = rows.Scan(&id, &st)
+		statuses[id] = st
+	}
+	_ = rows.Close()
+	if statuses["cr_pg_done"] != "SUCCEEDED" || statuses["cr_pg_lost"] != "FAILED" {
+		t.Fatalf("statuses: %v", statuses)
+	}
+	after := availableBalance(t, srv, tok, merchantID)
+	if after >= before {
+		t.Fatalf("available must drop: %d -> %d", before, after)
+	}
+	// Nothing left to sweep; the released hold is refundable again.
+	if r, _ := srv.SweepStaleRefunds(ctx, time.Now().Add(time.Hour), api.RefundSweepConfig{}); r.Claimed != 0 {
+		t.Fatalf("nothing left: %+v", r)
+	}
+	var open int64
+	_ = db.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM card_payment_refunds WHERE card_payment_id = $1 AND status IN ('REQUESTED','PENDING')`, intent.CardPaymentID).Scan(&open)
+	if open != 0 {
+		t.Fatalf("holds left: %d", open)
+	}
 }

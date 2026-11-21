@@ -1332,6 +1332,56 @@
       "test_results": "go vet clean; go test -race all ok; PGIntegration ReceiptAndAutofactura (card details stored, 6 concurrent autofactura requests -> one active invoice, receipt valid after restart) and Migrations018And019DownUp.",
       "audit_notes": "No real email/SMS/WhatsApp provider. Receipt links are bearer credentials for the receipt and its autofactura (rate limited, no-store, no-referrer). Autofactura window = calendar month of the sale in CDMX (accountant to confirm); DAILY globals make most sales 409 the next day. The rate limiter is per process (multi-replica needs a gateway limit).",
       "priority": 86
+    },
+    {
+      "id": "MVP-27",
+      "component": "kyb",
+      "title": "SAT 69-B block lifecycle",
+      "status": "completed",
+      "spec": "blocked_source (OPERATOR|SAT_69B); outbox merchant.blocked_69b / merchant.unblocked_69b in the same tx; auto-unblock only of SAT_69B blocks on DESVIRTUADO/SENTENCIA FAVORABLE or absence from a current list; sat69b_exceptions per RFC+situation (re-block on situation change); change guard REJECTED_CHANGES (SAT_69B_MAX_CHANGE_PCT, override_changes / --override-changes); unblock fails closed with stale list. Migration 020.",
+      "test_results": "go vet clean; go test -race 22/22 packages; PGIntegration 45/45 (after audit); node 8/8.",
+      "audit_notes": "Audit: change guard now counts replaced RFCs beyond net shrink (a same-size file with different RFCs would have auto-unblocked everyone); operator block takes over a 69-B block (source OPERATOR). Process to agree with compliance.",
+      "priority": 87
+    },
+    {
+      "id": "MVP-28",
+      "component": "backoffice",
+      "title": "Immutable operator audit log + KYB retention",
+      "status": "completed",
+      "spec": "Migration 021 triggers reject UPDATE/DELETE/TRUNCATE on operator_audit_log; merchant_kyb/kyb_documents ON DELETE RESTRICT; REVOKE/GRANT SQL in docs/BACKOFFICE.md.",
+      "test_results": "go vet clean; go test -race 22/22 packages; PGIntegration 45/45 (after audit); node 8/8.",
+      "audit_notes": "WORM export and separate migration/app roles pending.",
+      "priority": 88
+    },
+    {
+      "id": "MVP-29",
+      "component": "acquirer",
+      "title": "Refund request sweep",
+      "status": "completed",
+      "spec": "Provider.GetRefund; SKIP LOCKED claim with attempts and updated_at lease; resolution through the webhook path (exactly once); not found -> FAILED (EXPIRED) releasing the hold; ALERT after REFUND_SWEEP_ALERT_ATTEMPTS; chargeback with refunds in flight alerts.",
+      "test_results": "go vet clean; go test -race 22/22 packages; PGIntegration 45/45 (after audit); node 8/8.",
+      "audit_notes": "Audit: a merchant retry with the same Idempotency-Key now touches updated_at and the sweep acts only on an unchanged lease. PENDING refunds without webhook are not swept (gap row).",
+      "priority": 89
+    },
+    {
+      "id": "MVP-30",
+      "component": "ops",
+      "title": "Observability",
+      "status": "completed",
+      "spec": "pkg/metrics (no deps, Prometheus text format), /metrics on METRICS_ADDR with METRICS_TOKEN, DB gauges every METRICS_SAMPLE_INTERVAL, HTTP/webhook/reconciliation/refund/69-B counters without PII labels, docs/OBSERVABILITY.md, deploy/prometheus/kerno-alerts.yml.",
+      "test_results": "go vet clean; go test -race 22/22 packages; PGIntegration 45/45 (after audit); node 8/8.",
+      "audit_notes": "Pager routing, tracing and dashboards pending.",
+      "priority": 90
+    },
+    {
+      "id": "MVP-31",
+      "component": "auth",
+      "title": "Auth hardening",
+      "status": "completed",
+      "spec": "JWT iss/aud (JWT_ISSUER/JWT_AUDIENCE); OTP_DAILY_LIMIT per phone per CDMX day across instances (otp_send_counters); CORS_ALLOWED_ORIGINS exact allowlist, https in production.",
+      "test_results": "go vet clean; go test -race 22/22 packages; PGIntegration 45/45 (after audit); node 8/8.",
+      "audit_notes": "Tokens minted before deploy (no aud) are rejected once; clients recover via refresh.",
+      "priority": 91
     }
   ]
 }

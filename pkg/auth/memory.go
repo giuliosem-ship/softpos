@@ -18,6 +18,7 @@ type MemoryRepository struct {
 	refreshHash map[string]string       // hash -> id
 	nonces      map[string]memNonce
 	operators   map[string]bool
+	otpSends    map[string]int // phone + "|" + day -> sends
 }
 
 type memNonce struct {
@@ -37,7 +38,19 @@ func NewMemoryRepository() *MemoryRepository {
 		refreshHash: map[string]string{},
 		nonces:      map[string]memNonce{},
 		operators:   map[string]bool{},
+		otpSends:    map[string]int{},
 	}
+}
+
+var _ OTPSendCounter = (*MemoryRepository)(nil)
+
+// IncrementOTPSends implements OTPSendCounter (per process only).
+func (r *MemoryRepository) IncrementOTPSends(_ context.Context, phone, day string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := phone + "|" + day
+	r.otpSends[k]++
+	return r.otpSends[k], nil
 }
 
 func (r *MemoryRepository) CreateUser(_ context.Context, u User) error {

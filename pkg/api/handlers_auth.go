@@ -30,6 +30,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "OTP_INVALID")
 	case errors.Is(err, auth.ErrOTPLocked):
 		writeError(w, http.StatusTooManyRequests, "OTP_LOCKED")
+	case errors.Is(err, auth.ErrOTPDailyLimit):
+		writeError(w, http.StatusTooManyRequests, "OTP_DAILY_LIMIT")
 	case errors.Is(err, auth.ErrOTPDelivery):
 		writeError(w, http.StatusBadGateway, "OTP_DELIVERY_FAILED")
 	case errors.Is(err, auth.ErrRefreshTokenReused):

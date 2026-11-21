@@ -28,7 +28,12 @@ database dump alone cannot brute-force the 6-digit codes.
 1. `POST /api/v1/auth/otp/request {"phone":"+52..."}` → `202 {"status":"OTP_SENT"}`.
    Generates a 6-digit code (crypto/rand), stores only its hash, sends it via
    `auth.OTPSender`. A new request for the same phone within the resend
-   interval returns `429 OTP_RATE_LIMITED` + `Retry-After`. Invalid phone → `400 INVALID_PHONE`.
+   interval returns `429 OTP_RATE_LIMITED` + `Retry-After`. More than
+   `OTP_DAILY_LIMIT` (default 10) codes for one phone in a calendar day
+   (America/Mexico_City) → `429 OTP_DAILY_LIMIT` (MVP-31: counted in
+   `otp_send_counters` with an atomic upsert, so every instance shares the
+   cap; requests refused by the resend interval do not count; rows older than
+   7 days are pruned). Invalid phone → `400 INVALID_PHONE`.
 2. `POST /api/v1/auth/otp/verify {"phone","code","merchant_id"?}` → `200` token pair.
    Each attempt is counted atomically *before* comparing (constant-time);
    after `OTP max attempts` the challenge stays locked (`429 OTP_LOCKED`) until
@@ -84,9 +89,14 @@ cannot be read).
 ## Access token
 
 HS256 JWT signed with `JWT_SECRET`. Claims: `sub` (user id), `merchant_id`
-(tenant, may be empty), `role`, `typ:"access"`, `iss:"kerno"`, `jti`, `iat`,
-`exp`. Validation rejects any `alg` other than HS256, a missing `exp`, and
-tokens whose `typ` is not `access`.
+(tenant, may be empty), `role`, `typ:"access"`, `iss` (`JWT_ISSUER`, default
+`kerno`), `aud` (`JWT_AUDIENCE`, default `kerno-api`), `jti`, `iat`, `exp`.
+Validation rejects any `alg` other than HS256, a missing `exp`, tokens whose
+`typ` is not `access`, and (MVP-31) tokens whose `iss` or `aud` differ from
+the configured ones — e.g. a staging token when an environment shares the
+secret by mistake. Set a distinct `JWT_ISSUER` per environment. Tokens minted
+before MVP-31 (no `aud`) are rejected once: clients refresh (refresh tokens
+are opaque, not JWTs) and get a new access token.
 
 ## Lifetimes and limits
 
@@ -98,6 +108,7 @@ tokens whose `typ` is not `access`.
 | OTP TTL | 5 min | — |
 | OTP resend interval | 60 s | — |
 | OTP max attempts | 5 | — |
+| OTP codes per phone per day | 10 | `OTP_DAILY_LIMIT` |
 
 ## Tenancy (MVP-05)
 
@@ -153,7 +164,31 @@ Rules for protected handlers:
 Rate limiting: `/api/v1/auth/*` is limited per client IP (fixed window,
 `AUTH_RATE_LIMIT_PER_MINUTE`, default 30) → `429 RATE_LIMITED` + `Retry-After`.
 The IP is the TCP peer (`X-Forwarded-For` is ignored); behind a proxy put the
-limit in the gateway. CORS/TLS are also gateway concerns.
+limit in the gateway. This per-IP limiter is per process (in memory); the
+per-phone daily OTP cap is the cross-instance protection. TLS terminates in
+the gateway / load balancer.
+
+## CORS (MVP-31)
+
+Deny by default: with `CORS_ALLOWED_ORIGINS` empty no response carries
+`Access-Control-Allow-Origin`, so no other origin can read API responses from
+a browser. The Web POS (`/pos/`) and the backoffice (`/backoffice/`) are
+served by this server (same origin) and need no entry; list an origin only
+if they (or another first-party web client) are hosted elsewhere, e.g.
+`CORS_ALLOWED_ORIGINS=https://pos.kerno.mx,https://backoffice.kerno.mx`.
+
+- Entries are exact `scheme://host[:port]` origins (case-insensitive, port
+  significant); `*`, wildcards and paths are refused at boot. The production
+  guard additionally requires `https://`.
+- Allowed origin: responses get `Access-Control-Allow-Origin: <origin>`,
+  `Vary: Origin` and `Access-Control-Expose-Headers: Idempotent-Replayed,
+  Retry-After`; preflights (`OPTIONS` + `Access-Control-Request-Method`) are
+  answered `204` with `Allow-Methods: GET, POST, PUT, DELETE, OPTIONS`,
+  `Allow-Headers: Authorization, Content-Type, Idempotency-Key`, `Max-Age:
+  600`. Credentials are never allowed (auth is a bearer token).
+- Other origins: preflight `403 CORS_ORIGIN_NOT_ALLOWED`; simple requests are
+  served without CORS headers (same-origin `POST`s also send `Origin`). CORS
+  never replaces authentication: the JWT gate still applies.
 
 ## Device attestation (Play Integrity)
 
@@ -224,6 +259,9 @@ can simulate a CoDi payment without holding the secret.
 | `JWT_SECRET` | ≥ 32 bytes. Required unless `DEV_MODE=true`; the production guard rejects missing/short values. |
 | `DEV_MODE` | `true`/`1` enables explicit local-dev conveniences: ephemeral random JWT secret if `JWT_SECRET` is unset, OTP codes printed in the log, `POST /api/v1/auth/dev-session`. Rejected in production. |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | Per-IP budget for `/api/v1/auth/*` (default 30). |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | `iss` / `aud` minted and required on access tokens (defaults `kerno` / `kerno-api`); use a distinct issuer per environment. |
+| `OTP_DAILY_LIMIT` | OTP codes per phone per calendar day, shared by all instances (default 10). |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed cross-origin (empty = deny; production requires `https://`). |
 | `PLAY_INTEGRITY_SECRET` | Enables attestation verification; empty → `503`. |
 | `PLAY_INTEGRITY_PACKAGE` | Expected Android applicationId (default `mx.kerno.softpos`, the release app; set `mx.kerno.softpos.debug` for debug builds). |
 | `CODI_WEBHOOK_SECRET` | HMAC secret for the CoDi webhook (≥ 32 bytes in production). Unset → webhook 503; in `DEV_MODE` an ephemeral random one is used. |
@@ -242,8 +280,10 @@ or < 32-byte `STP_HMAC_SECRET`, a missing/default/malformed
 `VAULT_MASTER_KEY_HEX`, a malformed `VAULT_PREVIOUS_KEYS`, a
 `PLAY_INTEGRITY_SECRET` set but < 32 bytes, a missing `DATABASE_URL` or one
 with `sslmode=disable`, `REDIS_ADDR` without a ≥ 16-byte `REDIS_PASSWORD`, any
-secret still holding the `.env.example` `CHANGE_ME` placeholder, or demo
-seeding. The full list of variables (secret or not) is `ServerEnvVars` in
+secret still holding the `.env.example` `CHANGE_ME` placeholder, a
+`CORS_ALLOWED_ORIGINS` entry that is not an explicit `https://` origin, a
+`METRICS_TOKEN` < 32 bytes (or none while `METRICS_ADDR` is not loopback;
+`docs/OBSERVABILITY.md`), or demo seeding. The full list of variables (secret or not) is `ServerEnvVars` in
 `cmd/server/config_guard.go`; tests keep it equal to the variables the code
 reads, require `.env.example` to document each one and require a guard case
 for every secret (MVP-11). `docker-compose.yml` holds no secrets: it loads
@@ -262,4 +302,5 @@ cloud SDK is wired yet.
 
 OTP delivery: only `auth.LogSender` exists (no SMS/WhatsApp provider yet).
 Outside `DEV_MODE` it logs a masked phone and **does not reveal the code**, so
-real logins need a provider implementing `auth.OTPSender`.
+real logins need a provider implementing `auth.OTPSender` (the daily cap
+above already bounds what a provider would be charged per phone).

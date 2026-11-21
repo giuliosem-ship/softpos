@@ -74,6 +74,8 @@ type Server struct {
 	sat69bSource      string
 	sat69bFetch       SAT69BFetcher
 	sat69bShrinkPct   int
+	sat69bChangePct   int
+	corsOrigins       map[string]bool
 	sat69bMu          sync.Mutex
 	fiscalSettings    store.FiscalSettingsRepository
 	invoices          store.InvoiceRepository
@@ -732,8 +734,8 @@ func (s *Server) routes() {
 	})
 }
 
-// Router returns the HTTP handler: recovery -> logging -> auth gate (JWT on
+// Router returns the HTTP handler: recovery -> logging -> metrics -> CORS -> auth gate (JWT on
 // every route outside the public allowlist, per-IP limit on /api/v1/auth/*).
 func (s *Server) Router() http.Handler {
-	return RecoveryMiddleware(LoggingMiddleware(s.authGate(s.router)))
+	return RecoveryMiddleware(LoggingMiddleware(s.metricsMiddleware(s.corsMiddleware(s.authGate(s.router)))))
 }

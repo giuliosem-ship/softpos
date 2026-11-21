@@ -208,9 +208,22 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		if err != nil {
 			return false, err
 		}
+		// Refunds still in flight (REQUESTED / PENDING) are not netted here:
+		// the processor already took the disputed funds, and a refund it
+		// still completes beyond the remainder arrives as EVENT_CONFLICT for
+		// operator review (never posted twice). Flag it now so the operator
+		// can cancel the refund at the processor (docs/ACQUIRER_INTEGRATION.md).
+		open, err := tx.OpenRefundCents(ctx, cp.ID)
+		if err != nil {
+			return false, err
+		}
+		if open > 0 && open > cp.CapturedCents-cp.RefundedCents-cp.ChargebackCents {
+			slog.Error("ALERT chargeback opened with refunds in flight beyond the remaining amount", "card_payment_id", cp.ID,
+				"chargeback_id", e.ChargebackID, "open_refund_cents", open)
+		}
 		return true, tx.EnqueueEvent(ctx, "card_payment.chargeback_opened", cp.ID, map[string]any{
 			"card_payment_id": cp.ID, "merchant_id": cp.MerchantID, "chargeback_id": e.ChargebackID,
-			"amount_cents": e.AmountCents, "available_after_cents": bal[avail],
+			"amount_cents": e.AmountCents, "available_after_cents": bal[avail], "open_refund_cents": open,
 		})
 
 	case acquirer.EventChargebackReversed:
@@ -378,6 +391,12 @@ func (s *Server) HandleCreateCardRefund(w http.ResponseWriter, r *http.Request) 
 				return errIdempotencyKeyReused
 			}
 			rf = prior
+			if prior.Status == store.RefundRequested {
+				// About to re-send it: touching updated_at takes the refund
+				// sweep's lease, so a sweep that looked it up before this
+				// re-send does not expire it (MVP-29 audit).
+				return tx.UpdateCardRefund(ctx, prior)
+			}
 			return nil
 		}
 		if !cp.Status.Refundable() {

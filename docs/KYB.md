@@ -172,27 +172,76 @@ contribuyente,…`).
   `source`, `published`, `row_count`, `malformed_count`, `fetched_at`,
   `verified_at`. Lookups (MVCC) see either the old or the new list, never a
   half one. Every attempt is a `sat_blacklist_loads` row (`LOADED`,
-  `UNCHANGED`, `REJECTED_SHRINK`, `FAILED`).
+  `UNCHANGED`, `REJECTED_SHRINK`, `REJECTED_CHANGES`, `FAILED`).
 - **Shrink protection:** a list with more than `SAT_69B_MAX_SHRINK_PCT`
   (default 10 %) fewer rows than the loaded one is refused
   (`REJECTED_SHRINK`, ERROR log) and the previous list stays, until an
   operator overrides it (backoffice with a reason, or
   `operatorctl load-69b --override-shrink`).
+- **Change protection (MVP-27, migration 020):** the row count alone does not
+  catch a wrong file of the same size (column shift, another list). Inside
+  the swap transaction the new rows are compared with the loaded list: if
+  more than `SAT_69B_MAX_CHANGE_PCT` (default 10 %) of the RFCs of the
+  loaded list changed situation **or were replaced** by other RFCs (removed
+  beyond the net shrink, `identity.GuardedChanges`), the load is refused
+  (`REJECTED_CHANGES`, `ALERT` ERROR log, `409 LIST_CHANGED` in the
+  backoffice) and the previous list stays, until an operator overrides it
+  (`override_changes` + reason in the backoffice, or
+  `operatorctl load-69b --override-changes`; recorded in
+  `sat_blacklist_loads.override_changes`). Removed RFCs count because the retroscreen lifts the
+  69-B block of an RFC absent from a current list: a same-size file with
+  other RFCs would pass the shrink protection and unblock every listed
+  merchant (audit of Lote L); the net shrink stays the shrink protection's.
+  Additions only block more merchants (fail-closed) and are not changes. The
+  check needs a list loaded by the ingestion (`sat_blacklist_meta`):
+  pre-ingestion rows (`AddEntry`) only count for the shrink protection. A real SAT update changes the
+  situation of a few hundred of ~14k RFCs (< 5 %). `operatorctl` uses the
+  default thresholds.
 - **Staleness:** the same file again only moves `verified_at`. A list not
   verified for `SAT_69B_MAX_AGE` (default 7 days) makes every lookup
   `UNKNOWN` (`identity.ErrBlacklistStale`).
 - **Retroscreen:** after each load (or unchanged verification) every
-  `APPROVED` merchant is re-checked (`store.Retroscreen69B`): a `LISTED` RFC
-  **blocks** the merchant (`blocked_reason = RFC_LISTED_69B`, money routes
-  `403 MERCHANT_BLOCKED`, audit `kyb.retroscreen_69b_block` by
-  `system:69b`, ERROR alert); the operator reviews and may unblock.
-  `list_69b` is refreshed for the rest.
+  `APPROVED` merchant is re-checked (`store.Retroscreen69B`); see the block
+  lifecycle below. `list_69b` is refreshed for every merchant whose lookup
+  is conclusive.
 - **Ways to load:** worker in `cmd/server` (`SAT_69B_URL`, at boot and every
   `SAT_69B_REFRESH_INTERVAL`, default 24 h; no URL = no worker); backoffice
   `POST /api/v1/backoffice/sat69b/sync` and `GET /api/v1/backoffice/sat69b`
   (`docs/BACKOFFICE.md`); `DATABASE_URL=… go run ./cmd/operatorctl load-69b
-  <file.csv> [--override-shrink]` (audited as `sat69b.load_file`). Without
-  `DATABASE_URL` the list is kept in memory (`identity.MemoryList69BStore`).
+  <file.csv> [--override-shrink] [--override-changes]` (audited as
+  `sat69b.load_file`). Without `DATABASE_URL` the list is kept in memory
+  (`identity.MemoryList69BStore`).
+
+### 69-B block lifecycle (MVP-27)
+
+`merchant_kyb.blocked_source` (migration 020) records who placed the current
+block: `OPERATOR` (backoffice `POST …/block`) or `SAT_69B` (retroscreen).
+Existing blocks were backfilled (`blocked_reason = RFC_LISTED_69B` →
+`SAT_69B`, any other → `OPERATOR`).
+
+| Retroscreen sees | Merchant state | Result |
+|---|---|---|
+| `PRESUNTO` / `DEFINITIVO` | not blocked, no exception for this RFC + situation | **block** (`SAT_69B`, `blocked_reason = RFC_LISTED_69B`, money routes `403 MERCHANT_BLOCKED`), outbox event `merchant.blocked_69b` **in the same transaction** as the update, audit `kyb.retroscreen_69b_block` by `system:69b`, `ALERT` ERROR log; older exceptions of the merchant are revoked |
+| `PRESUNTO` / `DEFINITIVO` | not blocked, active exception for this RFC + situation | nothing (`excepted` in the result) |
+| `DESVIRTUADO` / `SENTENCIA FAVORABLE` / absent from a current list | blocked by `SAT_69B` | **auto-unblock**, outbox `merchant.unblocked_69b` in the same transaction, audit `kyb.retroscreen_69b_unblock`; exceptions revoked |
+| same | blocked by `OPERATOR` | stays blocked: a manual block is never lifted by a load (an operator block on a `SAT_69B`-blocked merchant takes the block over and makes it `OPERATOR`) |
+| lookup not conclusive (no list, stale list, DB error) | any | nothing (fail closed: blocks stay) |
+
+- **Notification:** the outbox events (`payload`: `merchant_id`, `situation`,
+  `blocked_reason` / dates) are published by the outbox dispatcher (log
+  publisher today); a real notification channel (SMS/e-mail/push) plugs in
+  as an `outbox.Publisher` (see the pending list).
+- **Documented exception:** an operator unblock of a merchant whose RFC is
+  still `PRESUNTO`/`DEFINITIVO` requires a `reason` (`400 REASON_REQUIRED`)
+  and records a `sat69b_exceptions` row (merchant, RFC, situation, reason,
+  operator) plus the audit rows `merchant.unblock` and `sat69b.exception`.
+  The next loads respect it while the situation stays the same; a situation
+  change (e.g. `PRESUNTO → DEFINITIVO`) re-blocks and revokes it, and so does
+  the RFC leaving the list. If the list cannot be consulted (stale /
+  unavailable) a merchant recorded as `LISTED` is not unblocked
+  (`409 SAT69B_STATUS_UNKNOWN`).
+- The process itself (who reviews, how long an exception may last, what the
+  merchant is told) must still be agreed with compliance.
 
 ## Operator decision (backoffice)
 

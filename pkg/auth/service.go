@@ -19,12 +19,17 @@ import (
 // Config tunes token lifetimes and OTP policy. Zero values take the defaults.
 type Config struct {
 	JWTSecret         []byte        // required, >= 32 bytes
-	Issuer            string        // default "kerno"
+	Issuer            string        // "iss" minted and required on access tokens; default "kerno"
+	Audience          string        // "aud" minted and required on access tokens; default "kerno-api"
 	AccessTTL         time.Duration // default 15m
 	RefreshTTL        time.Duration // default 30 days
 	OTPTTL            time.Duration // default 5m
 	OTPResendInterval time.Duration // default 60s
 	OTPMaxAttempts    int           // default 5
+	// OTPDailyLimit caps the codes sent to one phone per calendar day
+	// (America/Mexico_City) across instances, when the repository is an
+	// OTPSendCounter (default 10; negative disables).
+	OTPDailyLimit int
 	// RefreshGrace is how long after a rotation the immediately previous
 	// refresh token may be presented again (once) and get the same new
 	// refresh token back instead of revoking the family (default 30s,
@@ -39,6 +44,9 @@ const (
 	DefaultOTPTTL            = 5 * time.Minute
 	DefaultOTPResendInterval = 60 * time.Second
 	DefaultOTPMaxAttempts    = 5
+	DefaultOTPDailyLimit     = 10
+	DefaultIssuer            = "kerno"
+	DefaultAudience          = "kerno-api"
 	DefaultRefreshGrace      = 30 * time.Second
 	maxRefreshGrace          = 2 * time.Minute
 	otpDigits                = 6
@@ -80,7 +88,10 @@ func NewService(repo Repository, sender OTPSender, cfg Config) (*Service, error)
 		return nil, errors.New("auth: repository and OTP sender are required")
 	}
 	if cfg.Issuer == "" {
-		cfg.Issuer = "kerno"
+		cfg.Issuer = DefaultIssuer
+	}
+	if cfg.Audience == "" {
+		cfg.Audience = DefaultAudience
 	}
 	if cfg.AccessTTL <= 0 {
 		cfg.AccessTTL = DefaultAccessTTL
@@ -96,6 +107,9 @@ func NewService(repo Repository, sender OTPSender, cfg Config) (*Service, error)
 	}
 	if cfg.OTPMaxAttempts <= 0 {
 		cfg.OTPMaxAttempts = DefaultOTPMaxAttempts
+	}
+	if cfg.OTPDailyLimit == 0 {
+		cfg.OTPDailyLimit = DefaultOTPDailyLimit
 	}
 	if cfg.RefreshGrace == 0 {
 		cfg.RefreshGrace = DefaultRefreshGrace
@@ -138,6 +152,16 @@ func (s *Service) hashOTP(phone, code string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// otpDayZone is the calendar of the daily OTP cap (Mexican users).
+var otpDayZone = func() *time.Location {
+	if loc, err := time.LoadLocation("America/Mexico_City"); err == nil {
+		return loc
+	}
+	return time.FixedZone("CST", -6*3600)
+}()
+
+func otpDay(t time.Time) string { return t.In(otpDayZone).Format("2006-01-02") }
+
 // HashToken returns the hex SHA-256 used to store opaque tokens.
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -157,6 +181,15 @@ func (s *Service) RequestOTP(ctx context.Context, phone string) (retryAfter time
 	} else if found {
 		if wait := prev.LastSentAt.Add(s.cfg.OTPResendInterval).Sub(now); wait > 0 {
 			return wait, ErrOTPRateLimited
+		}
+	}
+	if counter, ok := s.repo.(OTPSendCounter); ok && s.cfg.OTPDailyLimit > 0 {
+		sends, err := counter.IncrementOTPSends(ctx, phone, otpDay(now))
+		if err != nil {
+			return 0, err
+		}
+		if sends > s.cfg.OTPDailyLimit {
+			return 0, ErrOTPDailyLimit
 		}
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
@@ -476,6 +509,7 @@ func (s *Service) MintAccessToken(userID, merchantID string, role Role) (string,
 		Role:       role,
 		Typ:        TokenTypeAccess,
 		Iss:        s.cfg.Issuer,
+		Aud:        s.cfg.Audience,
 		Jti:        jti,
 		Iat:        now.Unix(),
 		Exp:        now.Add(s.cfg.AccessTTL).Unix(),
@@ -488,7 +522,7 @@ func (s *Service) ParseAccessToken(token string) (*Claims, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.Typ != TokenTypeAccess || c.Sub == "" {
+	if c.Typ != TokenTypeAccess || c.Sub == "" || c.Iss != s.cfg.Issuer || c.Aud != s.cfg.Audience {
 		return nil, ErrTokenInvalid
 	}
 	return c, nil

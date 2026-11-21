@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"net"
 	"strings"
 
+	"softpos/pkg/api"
 	"softpos/pkg/identity"
 )
 
@@ -29,6 +31,8 @@ var (
 	ErrInsecureAcquirerSecret    = errors.New("insecure configuration: ACQUIRER_WEBHOOK_SECRET must be set to at least 32 bytes in production when ACQUIRER_PROVIDER is set")
 	ErrMockAcquirerInProduction  = errors.New("insecure configuration: ACQUIRER_PROVIDER=mock cannot be used in production (it approves without a processor)")
 	ErrMockKYCInProduction       = errors.New("insecure configuration: KYC_PROVIDER=mock cannot be used in production (it passes every identity check)")
+	ErrInsecureMetricsToken      = errors.New("insecure configuration: METRICS_TOKEN must be at least 32 bytes in production, and is required when METRICS_ADDR is not a loopback address")
+	ErrInsecureCORSOrigins       = errors.New("insecure configuration: CORS_ALLOWED_ORIGINS must list explicit https:// origins in production (no wildcard, no http://)")
 	ErrPlaceholderSecret         = errors.New("insecure configuration: a secret still holds the .env.example placeholder")
 	ErrWeakReceiptTokenSecret    = errors.New("insecure configuration: RECEIPT_TOKEN_SECRET must be set to at least 32 bytes in production (it signs public receipt links)")
 )
@@ -62,6 +66,10 @@ var ServerEnvVars = []EnvVar{
 	{Name: "AUTH_ACCESS_TTL"},
 	{Name: "AUTH_REFRESH_TTL"},
 	{Name: "AUTH_RATE_LIMIT_PER_MINUTE"},
+	{Name: "JWT_ISSUER"},
+	{Name: "JWT_AUDIENCE"},
+	{Name: "OTP_DAILY_LIMIT"},
+	{Name: "CORS_ALLOWED_ORIGINS"},
 	{Name: "PLAY_INTEGRITY_SECRET", Secret: true},
 	{Name: "PLAY_INTEGRITY_PACKAGE"},
 	{Name: "CODI_WEBHOOK_SECRET", Secret: true},
@@ -83,10 +91,17 @@ var ServerEnvVars = []EnvVar{
 	{Name: "OUTBOX_PUBLISH_TIMEOUT"},
 	{Name: "PAYOUT_RECONCILE_INTERVAL"},
 	{Name: "PAYOUT_RECONCILE_AFTER"},
+	{Name: "METRICS_ADDR"},
+	{Name: "METRICS_TOKEN", Secret: true},
+	{Name: "METRICS_SAMPLE_INTERVAL"},
+	{Name: "REFUND_SWEEP_INTERVAL"},
+	{Name: "REFUND_SWEEP_AFTER"},
+	{Name: "REFUND_SWEEP_ALERT_ATTEMPTS"},
 	{Name: "SAT_69B_URL"},
 	{Name: "SAT_69B_REFRESH_INTERVAL"},
 	{Name: "SAT_69B_MAX_AGE"},
 	{Name: "SAT_69B_MAX_SHRINK_PCT"},
+	{Name: "SAT_69B_MAX_CHANGE_PCT"},
 	{Name: "CFDI_GLOBAL_INVOICE_INTERVAL"},
 	{Name: "CFDI_CANCEL_POLL_INTERVAL"},
 	{Name: "CFDI_CREDIT_NOTE_INTERVAL"},
@@ -94,6 +109,19 @@ var ServerEnvVars = []EnvVar{
 	{Name: "RECEIPT_TOKEN_SECRET", Secret: true},
 	{Name: "RECEIPT_BASE_URL"},
 	{Name: "RECEIPT_TTL"},
+}
+
+// loopbackAddr reports whether a host:port listen address binds loopback only.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isPlaceholder reports whether v still holds a .env.example placeholder.
@@ -124,7 +152,7 @@ func ValidateProductionConfig(cfg Config, env string) error {
 
 	// 0. No secret may still hold the .env.example placeholder.
 	for _, v := range []string{cfg.DatabaseURL, cfg.RedisPassword, cfg.JWTSecret, cfg.PlayIntegritySecret,
-		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret, cfg.ReceiptTokenSecret} {
+		cfg.CoDiWebhookSecret, cfg.STPHMACSecret, cfg.VaultMasterKeyHex, cfg.VaultPreviousKeys, cfg.AcquirerWebhookSecret, cfg.ReceiptTokenSecret, cfg.MetricsToken} {
 		if isPlaceholder(v) {
 			return ErrPlaceholderSecret
 		}
@@ -201,6 +229,23 @@ func ValidateProductionConfig(cfg Config, env string) error {
 	// 9. Public sale receipts: the token secret is what makes links unguessable.
 	if len(cfg.ReceiptTokenSecret) < minSecretLen {
 		return ErrWeakReceiptTokenSecret
+	}
+
+	// 10. Auth hardening (MVP-31): an explicit https CORS allowlist (empty =
+	// deny every cross-origin read).
+	if origins, err := api.ParseCORSOrigins(cfg.CORSAllowedOrigins); err != nil {
+		return ErrInsecureCORSOrigins
+	} else {
+		for _, o := range origins {
+			if !strings.HasPrefix(o, "https://") {
+				return ErrInsecureCORSOrigins
+			}
+		}
+	}
+
+	// 11. Metrics listener: a token when it is reachable beyond loopback.
+	if (cfg.MetricsToken != "" || (cfg.MetricsAddr != "" && !loopbackAddr(cfg.MetricsAddr))) && len(cfg.MetricsToken) < minSecretLen {
+		return ErrInsecureMetricsToken
 	}
 
 	return nil

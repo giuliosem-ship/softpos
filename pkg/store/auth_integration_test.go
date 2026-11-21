@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"softpos/pkg/auth"
 	"softpos/pkg/auth/authtest"
@@ -118,5 +119,56 @@ func TestPGIntegration_AuthOTPLoginRefreshReuseAndConcurrency(t *testing.T) {
 	code2, _ := sender.LastCode(phone2)
 	if _, err := svc.VerifyOTP(ctx, phone2, code2, ""); err == nil {
 		t.Fatal("correct code must be locked out after concurrent brute force")
+	}
+}
+
+// TestPGIntegration_OTPDailyLimitAcrossInstances (MVP-31): two services
+// (two server instances) over one database share the per-phone daily cap;
+// concurrent sends count exactly once each.
+func TestPGIntegration_OTPDailyLimitAcrossInstances(t *testing.T) {
+	db := openMigratedPG(t)
+	ctx := context.Background()
+	repo := NewSQLAuthRepository(db)
+	var wg sync.WaitGroup
+	counts := make([]int, 20)
+	for i := range counts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			n, err := repo.IncrementOTPSends(ctx, "+525500001111", "2026-11-20")
+			if err != nil {
+				t.Errorf("increment: %v", err)
+			}
+			counts[i] = n
+		}(i)
+	}
+	wg.Wait()
+	seen := map[int]bool{}
+	for _, n := range counts {
+		seen[n] = true
+	}
+	if len(seen) != 20 || !seen[1] || !seen[20] {
+		t.Fatalf("atomic counter: %v", counts)
+	}
+	mk := func() *auth.Service {
+		svc, err := auth.NewService(NewSQLAuthRepository(db), auth.NewMemorySender(), auth.Config{
+			JWTSecret: []byte("pg_integration_jwt_secret_32_bytes_min"), OTPDailyLimit: 2, OTPResendInterval: time.Nanosecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return svc
+	}
+	a, b := mk(), mk()
+	phone := "+525500002222"
+	if _, err := a.RequestOTP(ctx, phone); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, err := b.RequestOTP(ctx, phone); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, err := a.RequestOTP(ctx, phone); !errors.Is(err, auth.ErrOTPDailyLimit) {
+		t.Fatalf("third send on another instance: want ErrOTPDailyLimit, got %v", err)
 	}
 }

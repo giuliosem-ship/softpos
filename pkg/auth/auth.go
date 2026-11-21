@@ -43,6 +43,7 @@ var (
 	ErrOTPInvalid              = errors.New("auth: invalid or expired OTP")
 	ErrOTPLocked               = errors.New("auth: too many OTP attempts")
 	ErrOTPDelivery             = errors.New("auth: OTP delivery failed")
+	ErrOTPDailyLimit           = errors.New("auth: daily OTP limit reached for this phone")
 	ErrRefreshTokenInvalid     = errors.New("auth: invalid or expired refresh token")
 	ErrRefreshTokenReused      = errors.New("auth: refresh token reuse detected; session family revoked")
 	ErrNotMember               = errors.New("auth: user is not a member of the merchant")
@@ -68,6 +69,15 @@ type Membership struct {
 	// MerchantName is the merchant's business name, filled by the API layer
 	// for the app's merchant picker (not stored with the membership).
 	MerchantName string `json:"merchant_name,omitempty"`
+}
+
+// OTPSendCounter counts OTP sends per phone and day, shared by every
+// server instance (SQL: otp_send_counters). Repositories that implement it
+// enable the daily cap (Config.OTPDailyLimit).
+type OTPSendCounter interface {
+	// IncrementOTPSends atomically adds one send for phone on day
+	// (YYYY-MM-DD) and returns the new count.
+	IncrementOTPSends(ctx context.Context, phone, day string) (int, error)
 }
 
 // OTPChallenge is the pending one-time code for a phone (one per phone).

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"softpos/pkg/identity"
 	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
+	"softpos/pkg/metrics"
 	"softpos/pkg/outbox"
 	"softpos/pkg/payouts"
 	"softpos/pkg/store"
@@ -57,6 +59,12 @@ type Config struct {
 	JWTSecret      string        // JWT_SECRET (>= 32 bytes); required unless DevMode
 	AuthAccessTTL  time.Duration // AUTH_ACCESS_TTL, default 15m
 	AuthRefreshTTL time.Duration // AUTH_REFRESH_TTL, default 720h
+	// MVP-31 (docs/AUTH.md): access-token issuer / audience, daily OTP cap
+	// and the CORS allowlist.
+	JWTIssuer          string // JWT_ISSUER, default "kerno"
+	JWTAudience        string // JWT_AUDIENCE, default "kerno-api"
+	OTPDailyLimit      int    // OTP_DAILY_LIMIT, default 10 codes per phone per day
+	CORSAllowedOrigins string // CORS_ALLOWED_ORIGINS, comma-separated origins; empty = deny every cross-origin read
 	// AuthRateLimitPerMinute is the per-IP budget for /api/v1/auth/*
 	// (AUTH_RATE_LIMIT_PER_MINUTE, default 30; 0 keeps the default).
 	AuthRateLimitPerMinute int
@@ -109,6 +117,18 @@ type Config struct {
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
 	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
 
+	// Metrics (MVP-30, docs/OBSERVABILITY.md): Prometheus text format on a
+	// separate listener, never on the public API port.
+	MetricsAddr           string        // METRICS_ADDR, e.g. 127.0.0.1:9090; empty = no metrics listener
+	MetricsToken          string        // METRICS_TOKEN: bearer token required on /metrics when set (>= 32 bytes; required in production off loopback)
+	MetricsSampleInterval time.Duration // METRICS_SAMPLE_INTERVAL, default 30s (database gauges)
+
+	// Refund request sweep (MVP-29, docs/ACQUIRER_INTEGRATION.md): refunds
+	// stuck in REQUESTED are re-queried at the processor.
+	RefundSweepInterval      time.Duration // REFUND_SWEEP_INTERVAL, default 5m
+	RefundSweepAfter         time.Duration // REFUND_SWEEP_AFTER, default 15m (min 2m)
+	RefundSweepAlertAttempts int           // REFUND_SWEEP_ALERT_ATTEMPTS, default 5
+
 	// SAT 69-B list ingestion (MVP-20, docs/KYB.md). SAT69BURL
 	// (SAT_69B_URL, e.g. the SAT's Listado_Completo_69-B.csv) enables the
 	// download worker; empty = lists are loaded only with cmd/operatorctl.
@@ -116,6 +136,10 @@ type Config struct {
 	SAT69BRefreshInterval time.Duration // SAT_69B_REFRESH_INTERVAL, default 24h
 	SAT69BMaxAge          time.Duration // SAT_69B_MAX_AGE, default 7 days (older list -> UNKNOWN)
 	SAT69BMaxShrinkPct    int           // SAT_69B_MAX_SHRINK_PCT, default 10 (0..100)
+	// SAT69BMaxChangePct (SAT_69B_MAX_CHANGE_PCT, default 10, 1..100; 100
+	// disables) refuses a load where more than pct% of the RFCs present in
+	// both lists changed situation (MVP-27).
+	SAT69BMaxChangePct int
 
 	// CFDI workers (MVP-22, docs/CFDI.md): automatic factura global and
 	// polling of cancellations waiting for the receptor's acceptance.
@@ -225,6 +249,33 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	changePct := 0
+	if val := os.Getenv("SAT_69B_MAX_CHANGE_PCT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+			changePct = n
+		} else {
+			slog.Warn("invalid SAT_69B_MAX_CHANGE_PCT, using default", "value", val)
+		}
+	}
+
+	otpDaily := 0
+	if val := os.Getenv("OTP_DAILY_LIMIT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			otpDaily = n
+		} else {
+			slog.Warn("invalid OTP_DAILY_LIMIT, using default", "value", val)
+		}
+	}
+
+	alertAttempts := 0
+	if val := os.Getenv("REFUND_SWEEP_ALERT_ATTEMPTS"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			alertAttempts = n
+		} else {
+			slog.Warn("invalid REFUND_SWEEP_ALERT_ATTEMPTS, using default", "value", val)
+		}
+	}
+
 	cashierRefunds := false
 	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
 		cashierRefunds = true
@@ -247,16 +298,27 @@ func LoadConfigFromEnv() Config {
 		JWTSecret:                 os.Getenv("JWT_SECRET"),
 		AuthAccessTTL:             parseDurationEnv("AUTH_ACCESS_TTL"),
 		AuthRefreshTTL:            parseDurationEnv("AUTH_REFRESH_TTL"),
+		JWTIssuer:                 strings.TrimSpace(os.Getenv("JWT_ISSUER")),
+		JWTAudience:               strings.TrimSpace(os.Getenv("JWT_AUDIENCE")),
+		OTPDailyLimit:             otpDaily,
+		CORSAllowedOrigins:        os.Getenv("CORS_ALLOWED_ORIGINS"),
 		OutboxPollInterval:        outboxPoll,
 		OutboxBatchSize:           outboxBatch,
 		OutboxPublisher:           os.Getenv("OUTBOX_PUBLISHER"),
 		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
 		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
 		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		MetricsAddr:               strings.TrimSpace(os.Getenv("METRICS_ADDR")),
+		MetricsToken:              os.Getenv("METRICS_TOKEN"),
+		MetricsSampleInterval:     parseDurationEnv("METRICS_SAMPLE_INTERVAL"),
+		RefundSweepInterval:       parseDurationEnv("REFUND_SWEEP_INTERVAL"),
+		RefundSweepAfter:          parseDurationEnv("REFUND_SWEEP_AFTER"),
+		RefundSweepAlertAttempts:  alertAttempts,
 		SAT69BURL:                 strings.TrimSpace(os.Getenv("SAT_69B_URL")),
 		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
 		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
 		SAT69BMaxShrinkPct:        shrinkPct,
+		SAT69BMaxChangePct:        changePct,
 		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
 		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
 		CFDICreditNoteInterval:    parseDurationEnv("CFDI_CREDIT_NOTE_INTERVAL"),
@@ -320,9 +382,12 @@ func buildAuthService(cfg Config, repo auth.Repository) (*auth.Service, error) {
 		slog.Warn("DEV_MODE: JWT_SECRET not set, using an ephemeral random secret")
 	}
 	svc, err := auth.NewService(repo, auth.LogSender{RevealCode: cfg.DevMode}, auth.Config{
-		JWTSecret:  secret,
-		AccessTTL:  cfg.AuthAccessTTL,
-		RefreshTTL: cfg.AuthRefreshTTL,
+		JWTSecret:     secret,
+		Issuer:        cfg.JWTIssuer,
+		Audience:      cfg.JWTAudience,
+		AccessTTL:     cfg.AuthAccessTTL,
+		RefreshTTL:    cfg.AuthRefreshTTL,
+		OTPDailyLimit: cfg.OTPDailyLimit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth service: %w", err)
@@ -557,11 +622,20 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetDevMode(cfg.DevMode)
+	origins, err := api.ParseCORSOrigins(cfg.CORSAllowedOrigins)
+	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, nil, nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %w", err)
+	}
+	server.SetCORSAllowedOrigins(origins)
 	if cfg.SAT69BURL != "" {
 		server.SetSAT69BSource(cfg.SAT69BURL, identity.HTTP69BFetcher(cfg.SAT69BURL, nil), cfg.SAT69BMaxShrinkPct)
 	} else {
 		slog.Warn("SAT_69B_URL not set: the 69-B list is only loaded with cmd/operatorctl load-69b (KYB lookups stay UNKNOWN until then)")
 	}
+	server.SetSAT69BMaxChangePct(cfg.SAT69BMaxChangePct)
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
@@ -796,6 +870,103 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
+// defaultMetricsSampleInterval is how often the database gauges are sampled.
+const defaultMetricsSampleInterval = 30 * time.Second
+
+// StartMetrics serves /metrics (Prometheus text format, metrics.Default) on
+// METRICS_ADDR, a listener separate from the public API (bind it to
+// loopback / the cluster network; METRICS_TOKEN adds a bearer token), and
+// samples the database gauges every METRICS_SAMPLE_INTERVAL when a database
+// is configured. Without METRICS_ADDR nothing is started. The returned wait
+// function shuts the listener down after ctx is cancelled.
+func StartMetrics(ctx context.Context, cfg Config, db *sql.DB) (wait func(), err error) {
+	if cfg.MetricsAddr == "" {
+		return func() {}, nil
+	}
+	ln, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		return nil, fmt.Errorf("METRICS_ADDR: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(metrics.Default, cfg.MetricsToken))
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		slog.Info("metrics listener", "addr", ln.Addr().String(), "token", cfg.MetricsToken != "")
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics listener failed", "error", err)
+		}
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		if db != nil {
+			every := cfg.MetricsSampleInterval
+			if every <= 0 {
+				every = defaultMetricsSampleInterval
+			}
+			runEvery(ctx, every, func(ctx context.Context) {
+				sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				snap, err := store.SampleOps(sctx, db, time.Now())
+				if err != nil {
+					api.RecordOpsSampleError()
+					slog.Warn("metrics sample failed", "error", err)
+					return
+				}
+				api.RecordOpsSnapshot(snap)
+			})
+		} else {
+			<-ctx.Done()
+		}
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	return func() { <-done; <-done }, nil
+}
+
+// defaultRefundSweepInterval is how often the refund sweep runs.
+const defaultRefundSweepInterval = 5 * time.Minute
+
+// StartRefundSweeper launches the refund request sweep (MVP-29) when a card
+// processor is configured: every REFUND_SWEEP_INTERVAL, refunds stuck in
+// REQUESTED for REFUND_SWEEP_AFTER are re-queried at the processor and
+// resolved (applied through the webhook path, PENDING, FAILED or expired).
+// The returned wait function blocks until the loop exits after ctx is
+// cancelled.
+func StartRefundSweeper(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if server == nil || server.AcquirerProvider() == nil {
+		return func() {}
+	}
+	interval := cfg.RefundSweepInterval
+	if interval <= 0 {
+		interval = defaultRefundSweepInterval
+	}
+	after := cfg.RefundSweepAfter
+	if after != 0 && after < api.MinRefundSweepAfter {
+		slog.Warn("REFUND_SWEEP_AFTER below minimum, using minimum", "value", after, "min", api.MinRefundSweepAfter)
+		after = api.MinRefundSweepAfter
+	}
+	sweepCfg := api.RefundSweepConfig{After: after, AlertAttempts: cfg.RefundSweepAlertAttempts}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runEvery(ctx, interval, func(ctx context.Context) {
+			res, err := server.SweepStaleRefunds(ctx, time.Now(), sweepCfg)
+			if err != nil {
+				slog.Error("refund sweep failed", "error", err)
+				return
+			}
+			if res.Claimed > 0 {
+				slog.Info("refund sweep", "claimed", res.Claimed, "succeeded", res.Succeeded, "pending", res.Pending,
+					"failed", res.Failed, "expired", res.Expired, "already_resolved", res.Resolved, "unknown", res.Unknown, "alerted", res.Alerted)
+			}
+		})
+	}()
+	return func() { <-done }
+}
+
 // CFDI worker defaults.
 const (
 	defaultCFDIGlobalInterval = time.Hour
@@ -895,7 +1066,7 @@ func StartSAT69BWorker(ctx context.Context, cfg Config, server *api.Server) (wai
 		run := func() {
 			runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", false)
+			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", identity.Load69BOptions{})
 			if err != nil {
 				slog.Error("SAT 69-B sync failed; previous list kept", "error", err, "status", res.Load.Status)
 				return
@@ -982,6 +1153,12 @@ func main() {
 	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
 	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
 	waitCFDI := StartCFDIWorkers(dispatcherCtx, cfg, server)
+	waitRefunds := StartRefundSweeper(dispatcherCtx, cfg, server)
+	waitMetrics, err := StartMetrics(dispatcherCtx, cfg, db)
+	if err != nil {
+		slog.Error("fatal initialization error", "error", err)
+		os.Exit(1)
+	}
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -1026,6 +1203,8 @@ func main() {
 			waitAcquirer()
 			wait69B()
 			waitCFDI()
+			waitRefunds()
+			waitMetrics()
 			close(dispatcherDone)
 		}()
 		select {

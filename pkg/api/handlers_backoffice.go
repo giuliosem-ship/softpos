@@ -248,6 +248,7 @@ type BOKYBDetail struct {
 	Blocked            bool            `json:"blocked"`
 	BlockedReason      string          `json:"blocked_reason,omitempty"`
 	BlockedAt          string          `json:"blocked_at,omitempty"`
+	BlockedSource      string          `json:"blocked_source,omitempty"`
 	Version            int64           `json:"version"`
 }
 
@@ -270,7 +271,7 @@ func boKYB(rec store.KYBRecord) BOKYBDetail {
 		IdentityCheck: string(rec.IdentityCheck), IdentityReference: rec.IdentityReference, IdentityDetail: rec.IdentityDetail,
 		AcquirerMerchantID: rec.AcquirerMerchantID, SubmittedAt: fmtTime(rec.SubmittedAt), DecidedAt: fmtTime(rec.DecidedAt),
 		DecidedBy: rec.DecidedBy, Blocked: rec.Blocked, BlockedReason: rec.BlockedReason, BlockedAt: fmtTime(rec.BlockedAt),
-		Version: rec.Version,
+		BlockedSource: rec.BlockedSource, Version: rec.Version,
 	}
 }
 
@@ -281,6 +282,7 @@ type kybStateSummary struct {
 	Reason             string     `json:"reason,omitempty"`
 	Blocked            bool       `json:"blocked"`
 	BlockedReason      string     `json:"blocked_reason,omitempty"`
+	BlockedSource      string     `json:"blocked_source,omitempty"`
 	AcquirerMerchantID string     `json:"acquirer_merchant_id,omitempty"`
 	VirtualCLABE       string     `json:"virtual_clabe,omitempty"`
 }
@@ -288,7 +290,7 @@ type kybStateSummary struct {
 func (s *Server) kybSummary(rec store.KYBRecord) kybStateSummary {
 	clabe, _ := s.GetMerchantCLABE(rec.MerchantID)
 	return kybStateSummary{Status: rec.Status, Reason: rec.Reason, Blocked: rec.Blocked, BlockedReason: rec.BlockedReason,
-		AcquirerMerchantID: rec.AcquirerMerchantID, VirtualCLABE: clabe}
+		BlockedSource: rec.BlockedSource, AcquirerMerchantID: rec.AcquirerMerchantID, VirtualCLABE: clabe}
 }
 
 func (s *Server) handleBOMerchantDetail(w http.ResponseWriter, r *http.Request, op string) {
@@ -477,7 +479,11 @@ func (s *Server) handleBOBlock(block bool) func(http.ResponseWriter, *http.Reque
 			writeKYBStoreError(w, "bo_block", err)
 			return
 		}
-		if rec.Blocked == block {
+		// An operator may take over a block placed by the 69-B process (e.g.
+		// fraud found while listed): it becomes OPERATOR, so a later
+		// DESVIRTUADO no longer lifts it.
+		takeOver := block && rec.Blocked && rec.BlockedSource == store.BlockSourceSAT69B
+		if rec.Blocked == block && !takeOver {
 			if block {
 				writeError(w, http.StatusConflict, "ALREADY_BLOCKED")
 			} else {
@@ -485,15 +491,44 @@ func (s *Server) handleBOBlock(block bool) func(http.ResponseWriter, *http.Reque
 			}
 			return
 		}
+		// Unblocking a merchant whose RFC is still listed in the SAT 69-B
+		// list records a documented exception for that situation (reason
+		// required), which the next loads respect. Fail closed: a listed
+		// merchant is not unblocked while the list cannot be consulted.
+		var exception *store.Sat69BException
+		if !block {
+			if rfc := rec.Application.Normalize().RFC; rfc != "" {
+				st, lerr := s.blacklist.Lookup(ctx, rfc)
+				switch {
+				case lerr != nil && rec.List69B == kyb.List69BListed:
+					writeError(w, http.StatusConflict, "SAT69B_STATUS_UNKNOWN")
+					return
+				case lerr == nil && kyb.Classify69B(st) == kyb.List69BListed:
+					if body.Reason == "" || len(body.Reason) > 1000 {
+						writeError(w, http.StatusBadRequest, "REASON_REQUIRED")
+						return
+					}
+					exception = &store.Sat69BException{MerchantID: id, RFC: rfc, Situation: string(st), Reason: body.Reason, OperatorID: op}
+				}
+			}
+		}
 		beforeSum := s.kybSummary(rec)
 		rec.Blocked = block
 		if block {
 			now := nowUTC()
-			rec.BlockedReason, rec.BlockedAt = body.Reason, &now
+			rec.BlockedReason, rec.BlockedAt, rec.BlockedSource = body.Reason, &now, store.BlockSourceOperator
 		} else {
-			rec.BlockedReason, rec.BlockedAt = "", nil
+			rec.BlockedReason, rec.BlockedAt, rec.BlockedSource = "", nil, ""
 		}
 		repo, _ := s.kybStore()
+		if exception != nil {
+			// The exception is stored first: if the unblock then fails, a
+			// leftover exception without an unblock changes nothing.
+			if err := repo.AddSat69BException(ctx, *exception); err != nil {
+				writeKYBStoreError(w, "bo_block", err)
+				return
+			}
+		}
 		if rec, err = repo.UpdateKYB(ctx, rec); err != nil {
 			writeKYBStoreError(w, "bo_block", err)
 			return
@@ -504,7 +539,12 @@ func (s *Server) handleBOBlock(block bool) func(http.ResponseWriter, *http.Reque
 			slog.Warn("merchant blocked by operator", "merchant_id", id, "operator", op)
 		}
 		_ = s.audit(ctx, op, action, id, "", beforeSum, s.kybSummary(rec), body.Reason)
-		writeJSON(w, http.StatusOK, map[string]any{"merchant_id": id, "blocked": rec.Blocked, "blocked_reason": rec.BlockedReason})
+		if exception != nil {
+			slog.Warn("merchant unblocked with a documented SAT 69-B exception", "merchant_id", id, "operator", op, "situation", exception.Situation)
+			_ = s.audit(ctx, op, "sat69b.exception", id, exception.Situation, nil, map[string]any{"situation": exception.Situation}, body.Reason)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"merchant_id": id, "blocked": rec.Blocked, "blocked_reason": rec.BlockedReason,
+			"sat69b_exception": exception != nil})
 	}
 }
 

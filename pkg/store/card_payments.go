@@ -88,8 +88,17 @@ type CardRefundRecord struct {
 	Status           CardRefundStatus
 	ProviderRefundID string
 	LastError        string
+	SweepAttempts    int // provider lookups by the refund sweep (MVP-29)
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// StaleCardRefund is a REQUESTED refund claimed by the refund sweep, with the
+// card payment's provider identifiers.
+type StaleCardRefund struct {
+	CardRefundRecord
+	Provider          string
+	ProviderPaymentID string
 }
 
 // AcquirerPayoutRecord is one processor payout to Kerno (acquirer_payouts).
@@ -159,6 +168,10 @@ type CardPaymentTx interface {
 	UpdateCardRefund(ctx context.Context, rec CardRefundRecord) error
 	// OpenRefundCents sums REQUESTED + PENDING refunds of a payment.
 	OpenRefundCents(ctx context.Context, cardPaymentID string) (int64, error)
+	// ClaimStaleCardRefunds claims REQUESTED refunds not touched since before
+	// for the refund sweep (skipping rows locked by others), counting the
+	// attempt and leasing them until now + threshold.
+	ClaimStaleCardRefunds(ctx context.Context, before, now time.Time, limit int) ([]StaleCardRefund, error)
 
 	// InsertAcquirerPayout stores a payout (created=false if it already exists).
 	InsertAcquirerPayout(ctx context.Context, rec AcquirerPayoutRecord) (bool, error)
@@ -291,14 +304,14 @@ func (t *sqlMoneyTx) UpdateCardPayment(ctx context.Context, r CardPaymentRecord)
 }
 
 const cardRefundColumns = `id, card_payment_id, merchant_id, idempotency_key, amount_cents, status,
-	COALESCE(provider_refund_id, ''), last_error, created_at, updated_at`
+	COALESCE(provider_refund_id, ''), last_error, sweep_attempts, created_at, updated_at`
 
 func (t *sqlMoneyTx) queryCardRefund(ctx context.Context, where string, args ...any) (CardRefundRecord, bool, error) {
 	var r CardRefundRecord
 	var status string
 	err := t.tx.QueryRowContext(ctx, `SELECT `+cardRefundColumns+` FROM card_payment_refunds WHERE `+where+` FOR UPDATE`, args...).Scan(
 		&r.ID, &r.CardPaymentID, &r.MerchantID, &r.IdempotencyKey, &r.AmountCents, &status, &r.ProviderRefundID,
-		&r.LastError, &r.CreatedAt, &r.UpdatedAt)
+		&r.LastError, &r.SweepAttempts, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CardRefundRecord{}, false, nil
 	}
@@ -357,6 +370,49 @@ func (t *sqlMoneyTx) UpdateCardRefund(ctx context.Context, r CardRefundRecord) e
 		return fmt.Errorf("failed to update card refund: %w", err)
 	}
 	return requireRowAffected(res, ErrCardPaymentConflict)
+}
+
+// ClaimStaleCardRefunds claims up to limit REQUESTED refunds last touched
+// before `before` (FOR UPDATE SKIP LOCKED: concurrent sweepers and webhooks
+// holding a row are skipped), counts the attempt and moves updated_at to now
+// (the lease: the row is not claimed again for another threshold). The card
+// payment rows are read, not locked, so the lock order of the webhook path
+// (card payment, then refund) is never inverted.
+func (t *sqlMoneyTx) ClaimStaleCardRefunds(ctx context.Context, before, now time.Time, limit int) ([]StaleCardRefund, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := t.tx.QueryContext(ctx, `
+		WITH due AS (
+			SELECT id FROM card_payment_refunds
+			WHERE status = 'REQUESTED' AND updated_at < $1
+			ORDER BY updated_at, id
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE card_payment_refunds r SET sweep_attempts = r.sweep_attempts + 1, last_swept_at = $3, updated_at = $3
+		FROM due, card_payments c
+		WHERE r.id = due.id AND c.id = r.card_payment_id
+		RETURNING r.id, r.card_payment_id, r.merchant_id, r.idempotency_key, r.amount_cents, r.status,
+			COALESCE(r.provider_refund_id, ''), r.last_error, r.sweep_attempts, r.created_at, r.updated_at,
+			c.provider, COALESCE(c.provider_payment_id, '')
+	`, before.UTC(), limit, now.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim stale refunds: %w", err)
+	}
+	defer rows.Close()
+	var out []StaleCardRefund
+	for rows.Next() {
+		var r StaleCardRefund
+		var status string
+		if err := rows.Scan(&r.ID, &r.CardPaymentID, &r.MerchantID, &r.IdempotencyKey, &r.AmountCents, &status, &r.ProviderRefundID,
+			&r.LastError, &r.SweepAttempts, &r.CreatedAt, &r.UpdatedAt, &r.Provider, &r.ProviderPaymentID); err != nil {
+			return nil, err
+		}
+		r.Status = CardRefundStatus(status)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (t *sqlMoneyTx) OpenRefundCents(ctx context.Context, cardPaymentID string) (int64, error) {

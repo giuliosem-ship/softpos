@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -66,10 +67,19 @@ func (m *MemoryList69BStore) ReplaceList(_ context.Context, rows []List69BRow, m
 		prev = m.meta.RowCount
 	}
 	load := List69BLoad{Version: meta.Version, Source: meta.Source, RowCount: len(rows), PreviousCount: prev,
-		MalformedCount: meta.MalformedCount, Actor: actor, Override: guard.Override, CreatedAt: meta.FetchedAt}
+		MalformedCount: meta.MalformedCount, Actor: actor, Override: guard.Override, OverrideChanges: guard.OverrideChanges, CreatedAt: meta.FetchedAt}
 	if !guard.Allows(prev, len(rows)) {
 		load.Status, load.Detail = Load69BRejectedShrink, ErrList69BShrank.Error()
 		return m.addLoad(load), ErrList69BShrank
+	}
+	old := make(map[string]BlacklistStatus, len(m.entries))
+	for rfc, e := range m.entries {
+		old[rfc] = e.Status
+	}
+	// Only against a list loaded by the ingestion (same rule as the SQL store).
+	if loaded, changed := ChangedSituations(old, rows); m.meta != nil && !guard.AllowsChanges(loaded, changed) {
+		load.Status, load.Detail = Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", ErrList69BChanged, changed, loaded, guard.MaxChangePct)
+		return m.addLoad(load), ErrList69BChanged
 	}
 	next := make(map[string]BlacklistEntry, len(rows))
 	for _, r := range rows {

@@ -27,7 +27,7 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 		return load, fmt.Errorf("begin 69-B swap: %w", err)
 	}
 	defer func() {
-		if err != nil && !errors.Is(err, identity.ErrList69BShrank) {
+		if err != nil && !errors.Is(err, identity.ErrList69BShrank) && !errors.Is(err, identity.ErrList69BChanged) {
 			_ = tx.Rollback()
 		}
 	}()
@@ -39,14 +39,16 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 	if err = tx.QueryRowContext(ctx, `SELECT row_count FROM sat_blacklist_meta WHERE id = 1`).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return load, fmt.Errorf("read 69-B meta: %w", err)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	ingested := !errors.Is(err, sql.ErrNoRows)
+	if !ingested {
 		// Rows written before the ingestion existed (AddEntry) count as the old list.
 		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sat_blacklist`).Scan(&prev); err != nil {
 			return load, fmt.Errorf("count 69-B rows: %w", err)
 		}
 	}
 	load = identity.List69BLoad{Version: meta.Version, Source: truncate(meta.Source, 512), RowCount: len(rows), PreviousCount: prev,
-		MalformedCount: meta.MalformedCount, Actor: truncate(actor, 128), Override: guard.Override, CreatedAt: meta.FetchedAt.UTC()}
+		MalformedCount: meta.MalformedCount, Actor: truncate(actor, 128), Override: guard.Override, OverrideChanges: guard.OverrideChanges,
+		CreatedAt: meta.FetchedAt.UTC()}
 	if !guard.Allows(prev, len(rows)) {
 		load.Status, load.Detail = identity.Load69BRejectedShrink, fmt.Sprintf("%v: %d -> %d rows (max %d%%)", identity.ErrList69BShrank, prev, len(rows), guard.MaxShrinkPct)
 		if load.ID, err = insertLoad(ctx, tx, load); err != nil {
@@ -79,6 +81,30 @@ func (r *SQLBlacklistRepository) ReplaceList(ctx context.Context, rows []identit
 		if _, err = tx.ExecContext(ctx, sb.String(), args...); err != nil {
 			return load, fmt.Errorf("fill 69-B staging: %w", err)
 		}
+	}
+	// Change protection: RFCs of the loaded list whose situation differs or
+	// that were replaced (identity.GuardedChanges). Only against a list loaded
+	// by the ingestion: pre-ingestion rows (AddEntry) are not a verified list.
+	var loaded, situation, removed int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE s.status <> b.status), COUNT(*) FILTER (WHERE s.rfc IS NULL)
+		FROM sat_blacklist b LEFT JOIN sat_blacklist_staging s ON s.rfc = b.rfc`).Scan(&loaded, &situation, &removed); err != nil {
+		return load, fmt.Errorf("compare 69-B lists: %w", err)
+	}
+	changed := identity.GuardedChanges(loaded, len(rows), situation, removed)
+	if ingested && !guard.AllowsChanges(loaded, changed) {
+		load.Status, load.Detail = identity.Load69BRejectedChanges, fmt.Sprintf("%v: %d of %d loaded RFCs changed or replaced (max %d%%)", identity.ErrList69BChanged, changed, loaded, guard.MaxChangePct)
+		if _, err = tx.ExecContext(ctx, `TRUNCATE sat_blacklist_staging`); err != nil {
+			_ = tx.Rollback()
+			return load, fmt.Errorf("truncate 69-B staging: %w", err)
+		}
+		if load.ID, err = insertLoad(ctx, tx, load); err != nil {
+			_ = tx.Rollback()
+			return load, err
+		}
+		if err = tx.Commit(); err != nil {
+			return load, fmt.Errorf("commit 69-B rejection: %w", err)
+		}
+		return load, identity.ErrList69BChanged
 	}
 	now := meta.FetchedAt.UTC()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM sat_blacklist`); err != nil {
@@ -120,9 +146,9 @@ func insertLoad(ctx context.Context, q execQuerier, l identity.List69BLoad) (int
 		created = time.Now().UTC()
 	}
 	err := q.QueryRowContext(ctx, `INSERT INTO sat_blacklist_loads
-		(status, list_version, source, row_count, previous_count, malformed_count, override_shrink, detail, actor, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-		l.Status, l.Version, truncate(l.Source, 512), l.RowCount, l.PreviousCount, l.MalformedCount, l.Override, l.Detail, truncate(l.Actor, 128), created.UTC()).Scan(&id)
+		(status, list_version, source, row_count, previous_count, malformed_count, override_shrink, override_changes, detail, actor, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+		l.Status, l.Version, truncate(l.Source, 512), l.RowCount, l.PreviousCount, l.MalformedCount, l.Override, l.OverrideChanges, l.Detail, truncate(l.Actor, 128), created.UTC()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("record 69-B load: %w", err)
 	}
@@ -173,7 +199,7 @@ func (r *SQLBlacklistRepository) ListLoads(ctx context.Context, limit int) ([]id
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, status, list_version, source, row_count, previous_count, malformed_count, override_shrink, detail, actor, created_at
+	rows, err := r.db.QueryContext(ctx, `SELECT id, status, list_version, source, row_count, previous_count, malformed_count, override_shrink, override_changes, detail, actor, created_at
 		FROM sat_blacklist_loads ORDER BY created_at DESC, id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list 69-B loads: %w", err)
@@ -182,7 +208,7 @@ func (r *SQLBlacklistRepository) ListLoads(ctx context.Context, limit int) ([]id
 	var out []identity.List69BLoad
 	for rows.Next() {
 		var l identity.List69BLoad
-		if err := rows.Scan(&l.ID, &l.Status, &l.Version, &l.Source, &l.RowCount, &l.PreviousCount, &l.MalformedCount, &l.Override, &l.Detail, &l.Actor, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.Status, &l.Version, &l.Source, &l.RowCount, &l.PreviousCount, &l.MalformedCount, &l.Override, &l.OverrideChanges, &l.Detail, &l.Actor, &l.CreatedAt); err != nil {
 			return nil, err
 		}
 		l.CreatedAt = l.CreatedAt.UTC()

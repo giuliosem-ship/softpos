@@ -61,7 +61,7 @@ func TestStoreAndDecryptCSD(t *testing.T) {
 	if !bytes.Equal(decrypted.KeyBytes, dummyKey) {
 		t.Errorf("Key bytes mismatch after decryption")
 	}
-	if decrypted.Password != password {
+	if string(decrypted.Password) != password {
 		t.Errorf("password mismatch: expected %s, got %s", password, decrypted.Password)
 	}
 }

@@ -80,7 +80,7 @@ func TestBuildCFDI40XML_Individual(t *testing.T) {
 				ObjetoImp:     "02",
 			},
 		},
-		Impuestos: fiscal.CFDIImpuestos{
+		Impuestos: &fiscal.CFDIImpuestos{
 			TotalImpuestosTrasladados: "16.00",
 			Traslados: []fiscal.CFDITraslado{
 				{

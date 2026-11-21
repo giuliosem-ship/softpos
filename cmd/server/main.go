@@ -3,15 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +23,7 @@ import (
 	"softpos/pkg/acquirer"
 	"softpos/pkg/api"
 	"softpos/pkg/auth"
+	"softpos/pkg/fiscal/fiscaltest"
 	"softpos/pkg/identity"
 	"softpos/pkg/kyb"
 	"softpos/pkg/ledger"
@@ -567,6 +564,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		sqlKYB := store.NewSQLKYBRepository(db)
 		server.SetKYBRepository(sqlKYB, sqlKYB)
 		server.SetOperatorAuditRepository(store.NewSQLAuditRepository(db))
+		server.SetFiscalSettingsRepository(store.NewSQLFiscalSettingsRepository(db))
 
 		sqlRBFRepo := store.NewSQLRBFRepository(db)
 		server.SetRBFRepository(sqlRBFRepo)
@@ -622,7 +620,7 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 	// 6. Seed demo merchant if enabled
 	if cfg.SeedDemoMerchant {
 		demoID := "merch_demo_01"
-		demoRFC := "TAQ850101XYZ"
+		demoRFC := demoMerchantRFC
 		demoCLABE := "646180123400000007"
 		if err := server.RegisterMerchantCLABE(demoCLABE, demoID, demoRFC); err != nil {
 			slog.Warn("demo merchant seeding failed", "error", err)
@@ -644,6 +642,10 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		privDER, certDER, err := generateSelfSignedCSD()
 		if err == nil {
 			_ = server.RegisterMerchantCSD(demoID, privDER, certDER)
+		}
+		// CFDI lugar de expedición (the provisioned demo KYB has no address).
+		if err := server.SeedFiscalSettings(ctx, demoID, "06000"); err != nil {
+			slog.Warn("demo fiscal settings seeding failed", "error", err)
 		}
 	}
 
@@ -780,28 +782,20 @@ func StartSAT69BWorker(ctx context.Context, cfg Config, server *api.Server) (wai
 	return func() { <-done }
 }
 
+// generateSelfSignedCSD returns a self-signed, SAT-shaped demo CSD (never a
+// real SAT certificate) for the demo merchant: plaintext PKCS#8 key and DER
+// certificate.
 func generateSelfSignedCSD() ([]byte, []byte, error) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	c, err := fiscaltest.NewCSD(fiscaltest.CSDOptions{RFC: demoMerchantRFC, Name: "TAQUERIA SOFTPOS DEMO",
+		Serial: "30001000000400002434", NotAfter: time.Now().Add(365 * 24 * time.Hour)})
 	if err != nil {
 		return nil, nil, err
 	}
-	privDER, err := x509.MarshalPKCS8PrivateKey(privKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	serial, _ := new(big.Int).SetString("30001000000400002434", 10)
-	tpl := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "TAQUERIA SOFTPOS DEMO"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, &tpl, &tpl, &privKey.PublicKey, privKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	return privDER, certDER, nil
+	return c.PlainKey, c.CertDER, nil
 }
+
+// demoMerchantRFC is the RFC of the seeded demo merchant.
+const demoMerchantRFC = "TAQ850101XYZ"
 
 func main() {
 	cfg := LoadConfigFromEnv()

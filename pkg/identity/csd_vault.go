@@ -23,11 +23,26 @@ type EncryptedCSD struct {
 	IV                []byte
 }
 
+// DecryptedCSD is a CSD opened for signing. Call Wipe when done.
 type DecryptedCSD struct {
 	MerchantID string
 	CERBytes   []byte
-	KeyBytes   []byte
-	Password   string
+	KeyBytes   []byte // SAT encrypted .key, or a plaintext PKCS#8 key when Password is CSDPlaintextKeyMarker
+	Password   []byte
+}
+
+// CSDPlaintextKeyMarker is the password stored with CSDs whose key was
+// registered already decrypted (RegisterMerchantCSD: DEV_MODE demo, tests).
+const CSDPlaintextKeyMarker = "vault-managed"
+
+// PlaintextKey reports whether KeyBytes is an unencrypted PKCS#8 key.
+func (d DecryptedCSD) PlaintextKey() bool { return string(d.Password) == CSDPlaintextKeyMarker }
+
+// Wipe zeroes the decrypted key material and password.
+func (d *DecryptedCSD) Wipe() {
+	clear(d.KeyBytes)
+	clear(d.Password)
+	d.KeyBytes, d.Password = nil, nil
 }
 
 type CSDVaultService struct {
@@ -77,7 +92,13 @@ func openWithPrependedNonce(gcm cipher.AEAD, sealed []byte) ([]byte, error) {
 }
 
 func (v *CSDVaultService) StoreCSD(merchantID string, cerBytes []byte, keyBytes []byte, password string) (EncryptedCSD, error) {
-	if merchantID == "" || len(cerBytes) == 0 || len(keyBytes) == 0 || password == "" {
+	return v.StoreCSDBytes(merchantID, cerBytes, keyBytes, []byte(password))
+}
+
+// StoreCSDBytes is StoreCSD with the password as bytes (the caller can wipe
+// its buffer afterwards).
+func (v *CSDVaultService) StoreCSDBytes(merchantID string, cerBytes []byte, keyBytes []byte, password []byte) (EncryptedCSD, error) {
+	if merchantID == "" || len(cerBytes) == 0 || len(keyBytes) == 0 || len(password) == 0 {
 		return EncryptedCSD{}, ErrCSDVault
 	}
 
@@ -105,7 +126,7 @@ func (v *CSDVaultService) StoreCSD(merchantID string, cerBytes []byte, keyBytes 
 	if err != nil {
 		return EncryptedCSD{}, ErrCSDVault
 	}
-	encryptedPassword, err := sealWithUniqueNonce(gcm, []byte(password))
+	encryptedPassword, err := sealWithUniqueNonce(gcm, password)
 	if err != nil {
 		return EncryptedCSD{}, ErrCSDVault
 	}
@@ -192,6 +213,6 @@ func (v *CSDVaultService) DecryptCSDForSigning(enc EncryptedCSD) (DecryptedCSD, 
 		MerchantID: enc.MerchantID,
 		CERBytes:   cerBytes,
 		KeyBytes:   keyBytes,
-		Password:   string(passwordBytes),
+		Password:   passwordBytes,
 	}, nil
 }

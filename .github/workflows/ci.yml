@@ -31,6 +31,8 @@ jobs:
           cache: true
       - name: Verify toolchain
         run: go version | grep -q 'go1.27.1' || { go version; echo "expected go1.27.1"; exit 1; }
+      - name: Install xsltproc (SAT cadena original XSLT golden tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xsltproc
       - name: go vet
         run: go vet ./...
       - name: go test -race

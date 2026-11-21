@@ -75,6 +75,7 @@ type Server struct {
 	sat69bFetch       SAT69BFetcher
 	sat69bShrinkPct   int
 	sat69bMu          sync.Mutex
+	fiscalSettings    store.FiscalSettingsRepository
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux
@@ -112,6 +113,7 @@ func NewServer(
 		docVault:          docVault,
 		kycProvider:       kyb.MockKYCProvider{},
 		auditRepo:         store.NewMemoryAuditRepository(),
+		fiscalSettings:    store.NewMemoryFiscalSettingsRepository(),
 		router:            http.NewServeMux(),
 	}
 	s.money = s.newMemoryMoneyStore()
@@ -307,7 +309,7 @@ func (s *Server) vault() *identity.CSDVaultService {
 // RegisterMerchantCSD encrypts and stores a merchant's CSD certificate and private key in the envelope-encrypted vault.
 // The merchant must already be registered.
 func (s *Server) RegisterMerchantCSD(merchantID string, keyDER []byte, certDER []byte) error {
-	enc, err := s.vault().StoreCSD(merchantID, certDER, keyDER, "vault-managed")
+	enc, err := s.vault().StoreCSD(merchantID, certDER, keyDER, identity.CSDPlaintextKeyMarker)
 	if err != nil {
 		return err
 	}
@@ -662,9 +664,15 @@ func (s *Server) routes() {
 	s.router.HandleFunc("POST /api/v1/payments/settle", s.legacyCardOnly(s.HandlePaymentSettle))
 	s.router.HandleFunc("POST /api/v1/dev/codi/simulate-confirm", s.HandleDevCoDiSimulate) // DEV_MODE only
 
-	// CFDI 4.0 Invoicing & Multi-PAC Stamping
-	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.HandleStampIndividualCFDI)
-	s.router.HandleFunc("POST /api/v1/invoices/global", s.HandleStampFacturaGlobal)
+	// CFDI 4.0: merchant CSD, fiscal defaults and SAT catalogs (docs/CFDI.md)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/csd", s.HandlePutCSD)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/csd", s.HandleGetCSD)
+	s.router.HandleFunc("GET /api/v1/merchants/{id}/fiscal-settings", s.HandleGetFiscalSettings)
+	s.router.HandleFunc("PUT /api/v1/merchants/{id}/fiscal-settings", s.HandlePutFiscalSettings)
+	s.router.HandleFunc("GET /api/v1/catalogs/sat", s.HandleSATCatalogs)
+	// Legacy client-amount stamping (DEV_MODE demo / Web POS only)
+	s.router.HandleFunc("POST /api/v1/invoices/cfdi", s.legacyCardOnly(s.HandleStampIndividualCFDI))
+	s.router.HandleFunc("POST /api/v1/invoices/global", s.legacyCardOnly(s.HandleStampFacturaGlobal))
 
 	// Revenue-Based Financing (RBF) & Merchant Balances
 	s.router.HandleFunc("POST /api/v1/rbf/loans", s.HandleOriginateRBFLoan)

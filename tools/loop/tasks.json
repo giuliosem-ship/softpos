@@ -1248,6 +1248,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 36/36 (new: SAT69BAtomicSwap with concurrent readers); node --test web/pos/softpos_sdk.test.js ok. Real SAT file (downloaded once to the scratchpad, not committed): 14,054 RFCs loaded, 91 malformed (redacted XXXXXXXXXXXX rows), 89 duplicates, ~0.1 s into Postgres 16.",
       "audit_notes": "Retroscreen blocks automatically (operator unblocks after review). The fetch uses plain HTTP (the SAT URL is http); integrity relies on the shrink guard and header checks, not a signature.",
       "priority": 80
+    },
+    {
+      "id": "MVP-21",
+      "component": "fiscal",
+      "title": "CFDI correctness: cadena original validated against the SAT XSLT, merchant CSD upload, SAT catalogs and fiscal settings",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/fiscal/cadena_xslt_test.go, pkg/fiscal/testdata/sat/*, pkg/fiscal/csd_test.go, pkg/fiscal/catalog_test.go, pkg/fiscal/cfdi40_test.go, pkg/api/csd_test.go, cmd/server/cfdi_integration_test.go, pkg/identity/csd_vault_test.go",
+        "implementation": "pkg/fiscal/cfdi40.go, pkg/fiscal/csd.go, pkg/fiscal/catalog.go, pkg/fiscal/catalogs/sat_catalogs.json, pkg/fiscal/fiscaltest/csd.go, pkg/identity/csd_vault.go, pkg/store/fiscal_settings.go, migrations/016_cfdi_fiscal_settings.*.sql, pkg/api/handlers_csd.go, pkg/api/handlers_invoices.go, pkg/api/server.go, cmd/server/main.go, .github/workflows/ci.yml, docs/CFDI.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Keep the Go cadena builder but make it a faithful port of cadenaoriginal_4_0.xslt + utilerias.xslt (Requerido/Opcional, normalize-space, concept taxes, Exento, retenciones, CfdiRelacionados) and prove it with golden tests that run the vendored official XSLT through xsltproc for many CFDI variants (skip with a message without xsltproc; CI installs it). Sello signs the cadena (not the XML); NoCertificado from the SAT ASCII serial. PUT/GET /api/v1/merchants/{id}/csd: parse .cer (DER/PEM) and SAT .key (PKCS#8 PBES2, DES-EDE3/AES) with the password, key/cert match, RFC from x500UniqueIdentifier = KYB RFC, validity, CSD vs FIEL; store encrypted key + password via the vault; zero buffers. Embedded versioned SAT catalogs (c_RegimenFiscal, c_UsoCFDI with regimen compatibility, ClaveProdServ/ClaveUnidad subset, motivos, periodicidad) + GET /api/v1/catalogs/sat; receptor validator; merchant fiscal settings (owner).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; XSLT golden: 12 variants match the official SAT XSLT via xsltproc (macOS /usr/bin/xsltproc) + sello verification over the XSLT cadena; PGIntegration all pass (new: CSD upload and fiscal settings survive restart); node --test web/pos/softpos_sdk.test.js 8/8.",
+      "audit_notes": "SAT root CA chain and LCO revocation checks are not done (the PAC validates). PBKDF2 takes the password as a string internally (stdlib API). Catalog subset transcribed from catCFDI_V_4; needs accountant review. Legacy client-amount /api/v1/invoices/{cfdi,global} now DEV_MODE-only (legacyCardOnly). Deflaked TestKYBRepository_MemoryContract (equal updated_at).",
+      "priority": 81
     }
   ]
 }

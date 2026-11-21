@@ -72,7 +72,9 @@ Notes:
   `refresh_tokens.grace_sealed/grace_used_at`) and 014 (`platform_operators`,
   `operator_audit_log`, `docs/BACKOFFICE.md`).
 - Batch I: migration 015 (SAT 69-B ingestion: staging table + atomic swap,
-  `sat_blacklist_meta`, `sat_blacklist_loads`).
+  `sat_blacklist_meta`, `sat_blacklist_loads`) and 016
+  (`merchant_fiscal_settings`: CFDI defaults, `store.FiscalSettingsRepository`,
+  `docs/CFDI.md`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements.
 - Payment state change, ledger journal, RESICO monthly accumulator,

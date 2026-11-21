@@ -72,6 +72,7 @@ func kybRepoContract(t *testing.T, repo KYBRepository, blobs DocumentBlobStore, 
 	if _, err := repo.UpdateKYB(ctx, cur); !errors.Is(err, ErrKYBConflict) {
 		t.Fatalf("stale version: %v", err)
 	}
+	time.Sleep(2 * time.Millisecond) // distinct updated_at: the listing is newest first
 	_, _ = repo.CreateKYB(ctx, KYBRecord{MerchantID: "m_kyb_2"})
 	inReview, _ := repo.ListKYB(ctx, KYBQuery{Status: kyb.StatusInReview})
 	blocked := true

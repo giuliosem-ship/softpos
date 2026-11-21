@@ -83,7 +83,7 @@ func TestVault_EnvelopeCarriesKeyIDAndRotates(t *testing.T) {
 	// After re-wrapping, v1 can be dropped.
 	only2, _ := NewStaticKeyProvider("v2", k2, nil)
 	v2only, _ := NewCSDVaultServiceWithProvider(only2)
-	if dec, err := v2only.DecryptCSDForSigning(rewrapped); err != nil || dec.Password != "pwd" {
+	if dec, err := v2only.DecryptCSDForSigning(rewrapped); err != nil || string(dec.Password) != "pwd" {
 		t.Fatalf("decrypt rewrapped: %v", err)
 	}
 	if _, err := v2only.DecryptCSDForSigning(enc); !errors.Is(err, ErrCSDVault) {
@@ -138,7 +138,7 @@ func TestKMSKeyProvider_WrapsThroughClient(t *testing.T) {
 	if err != nil || enc.KeyID != "arn:aws:kms:us-east-2:000:key/test" {
 		t.Fatalf("kms store: %+v %v", enc.KeyID, err)
 	}
-	if dec, err := v.DecryptCSDForSigning(enc); err != nil || dec.Password != "pwd" {
+	if dec, err := v.DecryptCSDForSigning(enc); err != nil || string(dec.Password) != "pwd" {
 		t.Fatalf("kms decrypt: %v", err)
 	}
 	if _, _, err := (&KMSKeyProvider{}).WrapDEK(context.Background(), key); err == nil {

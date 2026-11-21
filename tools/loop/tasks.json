@@ -1234,6 +1234,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok (20 packages); PGIntegration 35/35 (new: bootstrap operator reviews, downloads, approves and blocks on PostgreSQL with the audit trail in operator_audit_log; auth contract platform-operator subtest on PostgreSQL); node --test 8/8; DEV_MODE smoke: /backoffice/ CSP headers, OTP backoffice login, demo merchant APPROVED and card intent OK.",
       "audit_notes": "No per-operator permissions or operator 2FA yet. Mutation audit rows are written after the change (a failed write is an ERROR ALERT). GET /api/v1/acquirer/reconciliation still accepts per-merchant operator memberships.",
       "priority": 79
+    },
+    {
+      "id": "MVP-20",
+      "component": "identity",
+      "title": "SAT 69-B list ingestion wired: parser, atomic swap, shrink guard, staleness, worker, backoffice and operatorctl",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/identity/sat69b_test.go, pkg/identity/testdata/sat69b_*.csv, pkg/store/sat69b_integration_test.go, pkg/api/sat69b_test.go, cmd/server/sat69b_worker_test.go, cmd/operatorctl/main_test.go",
+        "implementation": "migrations/015_sat_69b_ingestion.*.sql, pkg/identity/sat69b.go, pkg/identity/sat69b_memory.go, pkg/identity/blacklist.go, pkg/identity/sat_worker.go, pkg/store/sat69b.go, pkg/store/retroscreen_69b.go, pkg/store/kyb.go, pkg/api/handlers_sat69b.go, pkg/api/handlers_backoffice.go, pkg/api/server.go, cmd/server/main.go, cmd/server/config_guard.go, cmd/operatorctl/main.go, .env.example, docs/KYB.md, docs/BACKOFFICE.md, docs/PERSISTENCE.md"
+      },
+      "spec": "Parse the SAT Listado_Completo_69-B.csv robustly (UTF-8/BOM or Windows-1252, header row detected by RFC + Situación columns, malformed rows counted and logged, duplicates keep the most severe situation). Replace the list atomically (staging table + swap in one transaction serialized by a lock on sat_blacklist_meta; meta list_version/source/published/row_count/fetched_at/verified_at; history in sat_blacklist_loads). Refuse a list that shrank more than SAT_69B_MAX_SHRINK_PCT (default 10) without operator override. Lookup: Presunto/Definitivo LISTED, Desvirtuado/Sentencia Favorable CLEAR, stale list (> SAT_69B_MAX_AGE, default 7d) UNKNOWN. Worker in cmd/server (SAT_69B_URL, SAT_69B_REFRESH_INTERVAL), backoffice GET /sat69b and POST /sat69b/sync (audited), operatorctl load-69b <file> [--override-shrink]; after a load approved merchants are re-checked and listed ones blocked (audited).",
+      "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration 36/36 (new: SAT69BAtomicSwap with concurrent readers); node --test web/pos/softpos_sdk.test.js ok. Real SAT file (downloaded once to the scratchpad, not committed): 14,054 RFCs loaded, 91 malformed (redacted XXXXXXXXXXXX rows), 89 duplicates, ~0.1 s into Postgres 16.",
+      "audit_notes": "Retroscreen blocks automatically (operator unblocks after review). The fetch uses plain HTTP (the SAT URL is http); integrity relies on the shrink guard and header checks, not a signature.",
+      "priority": 80
     }
   ]
 }

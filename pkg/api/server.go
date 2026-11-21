@@ -71,6 +71,10 @@ type Server struct {
 	kycProvider       kyb.KYCProvider
 	auditRepo         store.OperatorAuditRepository
 	backofficeDir     string
+	sat69bSource      string
+	sat69bFetch       SAT69BFetcher
+	sat69bShrinkPct   int
+	sat69bMu          sync.Mutex
 	rbfMu             sync.Mutex
 	mu                sync.RWMutex
 	router            *http.ServeMux

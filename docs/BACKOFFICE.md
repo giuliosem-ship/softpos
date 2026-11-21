@@ -16,7 +16,7 @@ tooling, **never by a public endpoint**:
 | Way | How |
 |---|---|
 | Bootstrap at boot | `BACKOFFICE_BOOTSTRAP_OPERATOR_PHONE=+52…` — `cmd/server` creates the user if needed and grants it (idempotent, `created_by = bootstrap:env`). |
-| CLI | `DATABASE_URL=… go run ./cmd/operatorctl add|remove|check +52…` (database already migrated; `created_by = operatorctl:<os user>`). |
+| CLI | `DATABASE_URL=… go run ./cmd/operatorctl add|remove|check +52…` (database already migrated; `created_by = operatorctl:<os user>`). The same tool loads a SAT 69-B file: `operatorctl load-69b <file.csv> [--override-shrink]` (audit `sat69b.load_file`). |
 
 **Segregation of duties:** an operator who is also a member of a merchant
 (e.g. its owner) cannot approve that merchant's onboarding nor unblock it
@@ -54,6 +54,8 @@ any `operator` role, as before.)
 | `GET reconciliation?status=&limit=` | processor reconciliation report (same as `GET /api/v1/acquirer/reconciliation`) | — |
 | `POST reconciliation/{item}/resolve {"note"}` | resolve a difference (same as the acquirer endpoint) | `reconciliation.resolve` |
 | `GET audit-log?merchant_id=&action=&limit=` | the audit log, newest first | — |
+| `GET sat69b` | SAT 69-B list status: loaded, `stale`, version, source, published date, row / malformed counts, fetched / verified times, max age, configured source, last 20 load attempts (`docs/KYB.md`) | — |
+| `POST sat69b/sync {"override_shrink"?, "reason"?}` | downloads `SAT_69B_URL` now and swaps the list in; re-checks approved merchants (listed ones blocked). `409 LIST_SHRANK` (shrink protection; retry with `override_shrink: true` and a `reason`, `400 REASON_REQUIRED` without it), `422 SAT69B_INVALID_FILE`, `502 SAT69B_FETCH_FAILED`, `503 SAT69B_SOURCE_NOT_CONFIGURED` | `sat69b.sync` (every attempt, with result) |
 
 Merchant-scoped operator actions outside the prefix are audited too:
 `POST /api/v1/merchants/{id}/settlement-account/verify`

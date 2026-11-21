@@ -111,6 +111,14 @@ type Config struct {
 	// Payout recovery (only runs when DatabaseURL is set).
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
 	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
+
+	// SAT 69-B list ingestion (MVP-20, docs/KYB.md). SAT69BURL
+	// (SAT_69B_URL, e.g. the SAT's Listado_Completo_69-B.csv) enables the
+	// download worker; empty = lists are loaded only with cmd/operatorctl.
+	SAT69BURL             string
+	SAT69BRefreshInterval time.Duration // SAT_69B_REFRESH_INTERVAL, default 24h
+	SAT69BMaxAge          time.Duration // SAT_69B_MAX_AGE, default 7 days (older list -> UNKNOWN)
+	SAT69BMaxShrinkPct    int           // SAT_69B_MAX_SHRINK_PCT, default 10 (0..100)
 }
 
 func LoadConfigFromEnv() Config {
@@ -189,6 +197,15 @@ func LoadConfigFromEnv() Config {
 		integrityPkg = DefaultPlayIntegrityPackage
 	}
 
+	shrinkPct := 0
+	if val := os.Getenv("SAT_69B_MAX_SHRINK_PCT"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+			shrinkPct = n
+		} else {
+			slog.Warn("invalid SAT_69B_MAX_SHRINK_PCT, using default", "value", val)
+		}
+	}
+
 	cashierRefunds := false
 	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
 		cashierRefunds = true
@@ -217,6 +234,10 @@ func LoadConfigFromEnv() Config {
 		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
 		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
 		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		SAT69BURL:                 strings.TrimSpace(os.Getenv("SAT_69B_URL")),
+		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
+		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
+		SAT69BMaxShrinkPct:        shrinkPct,
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -457,7 +478,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 
 		sqlBlacklist := store.NewSQLBlacklistRepository(db)
 		blacklistService.SetRepository(sqlBlacklist)
+	} else {
+		// In-memory 69-B list (lost on restart): loadable through the backoffice.
+		blacklistService.SetRepository(identity.NewMemoryList69BStore())
 	}
+	blacklistService.SetMaxAge(cfg.SAT69BMaxAge)
 
 	// 2. Initialize STP Signer
 	stpSigner := stp.NewSTPSigner(nil, nil, stpSecret)
@@ -489,6 +514,11 @@ func BuildServer(ctx context.Context, cfg Config) (*api.Server, *sql.DB, *store.
 		return nil, nil, nil, err
 	}
 	server.SetDevMode(cfg.DevMode)
+	if cfg.SAT69BURL != "" {
+		server.SetSAT69BSource(cfg.SAT69BURL, identity.HTTP69BFetcher(cfg.SAT69BURL, nil), cfg.SAT69BMaxShrinkPct)
+	} else {
+		slog.Warn("SAT_69B_URL not set: the 69-B list is only loaded with cmd/operatorctl load-69b (KYB lookups stay UNKNOWN until then)")
+	}
 	if cfg.HasDefaultFeeBps {
 		server.SetDefaultPlatformFeeBps(cfg.DefaultPlatformFeeBps)
 	}
@@ -706,6 +736,50 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
+// defaultSAT69BRefresh is how often the 69-B worker re-downloads the list.
+const defaultSAT69BRefresh = 24 * time.Hour
+
+// StartSAT69BWorker downloads and loads the SAT 69-B list at boot and then
+// every SAT_69B_REFRESH_INTERVAL (only with SAT_69B_URL). Each successful
+// load re-checks approved merchants. The returned wait function blocks until
+// the loop has exited after ctx is cancelled.
+func StartSAT69BWorker(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if cfg.SAT69BURL == "" || server == nil {
+		return func() {}
+	}
+	interval := cfg.SAT69BRefreshInterval
+	if interval <= 0 {
+		interval = defaultSAT69BRefresh
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run := func() {
+			runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			res, retro, err := server.SyncSAT69B(runCtx, "system:69b-worker", false)
+			if err != nil {
+				slog.Error("SAT 69-B sync failed; previous list kept", "error", err, "status", res.Load.Status)
+				return
+			}
+			slog.Info("SAT 69-B sync", "status", res.Load.Status, "rows", res.Load.RowCount, "malformed", res.Malformed,
+				"retroscreen_checked", retro.Checked, "retroscreen_blocked", len(retro.Blocked))
+		}
+		run()
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				run()
+			}
+		}
+	}()
+	return func() { <-done }
+}
+
 func generateSelfSignedCSD() ([]byte, []byte, error) {
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -776,6 +850,7 @@ func main() {
 	}
 	waitPayouts := StartPayoutReconciler(dispatcherCtx, cfg, db, server)
 	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
+	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -814,7 +889,7 @@ func main() {
 		// Stop the outbox dispatcher after HTTP drains so in-flight requests can still enqueue events.
 		stopDispatcher()
 		dispatcherDone := make(chan struct{})
-		go func() { waitDispatcher(); waitPayouts(); waitAcquirer(); close(dispatcherDone) }()
+		go func() { waitDispatcher(); waitPayouts(); waitAcquirer(); wait69B(); close(dispatcherDone) }()
 		select {
 		case <-dispatcherDone:
 		case <-shutdownCtx.Done():

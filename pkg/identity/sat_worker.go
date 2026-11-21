@@ -2,11 +2,9 @@ package identity
 
 import (
 	"crypto/sha256"
-	"encoding/csv"
 	"fmt"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
 type SyncResult struct {
@@ -41,75 +39,17 @@ func NewSATIngestionWorker(service *BlacklistService) *SATIngestionWorker {
 	}
 }
 
-func decodeLatin1OrUTF8(b []byte) string {
-	if utf8.Valid(b) {
-		return string(b)
-	}
-	runes := make([]rune, len(b))
-	for i, c := range b {
-		runes[i] = rune(c)
-	}
-	return string(runes)
-}
-
+// ParseCSVContent parses a SAT 69-B CSV (see Parse69BCSV).
 func (w *SATIngestionWorker) ParseCSVContent(csvBytes []byte) ([]SATBlacklistRecord, error) {
-	text := decodeLatin1OrUTF8(csvBytes)
-	reader := csv.NewReader(strings.NewReader(text))
-	reader.FieldsPerRecord = -1
-	reader.LazyQuotes = true
-
-	records, err := reader.ReadAll()
+	parsed, err := Parse69BCSV(csvBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse CSV: %w", err)
 	}
-
-	var blacklistRecords []SATBlacklistRecord
-	headerFound := false
-
-	for _, record := range records {
-		joined := strings.Join(record, ",")
-		if !headerFound {
-			if strings.Contains(joined, "RFC") {
-				headerFound = true
-			}
-			continue
-		}
-
-		if len(record) < 3 {
-			continue
-		}
-
-		rfc := strings.TrimSpace(record[1])
-		if len(rfc) < 12 {
-			continue
-		}
-
-		var statusText string
-		if len(record) > 3 {
-			statusText = record[3]
-		}
-		status := normalizeStatus(statusText)
-		if status == "" {
-			continue
-		}
-
-		oficioSAT := ""
-		for _, field := range record {
-			cleanField := strings.TrimSpace(field)
-			if strings.HasPrefix(cleanField, "500-") {
-				oficioSAT = cleanField
-				break
-			}
-		}
-
-		blacklistRecords = append(blacklistRecords, SATBlacklistRecord{
-			RFC:       rfc,
-			Status:    status,
-			OficioSAT: oficioSAT,
-		})
+	out := make([]SATBlacklistRecord, 0, len(parsed.Rows))
+	for _, r := range parsed.Rows {
+		out = append(out, SATBlacklistRecord{RFC: r.RFC, Status: r.Status, OficioSAT: r.Oficio})
 	}
-
-	return blacklistRecords, nil
+	return out, nil
 }
 
 func normalizeStatus(statusText string) BlacklistStatus {

@@ -121,11 +121,15 @@ func normalizeKYB(rec KYBRecord) KYBRecord {
 	return rec
 }
 
+// maxKYBListing caps ListKYB (the backoffice applies its own page limits;
+// batch jobs such as the 69-B retroscreen read every approved merchant).
+const maxKYBListing = 100000
+
 func kybLimit(n int) int {
-	if n <= 0 || n > 500 {
+	if n <= 0 {
 		return 100
 	}
-	return n
+	return min(n, maxKYBListing)
 }
 
 // ----------------------------------------------------------------------------

@@ -44,7 +44,7 @@ same interfaces use in-memory implementations.
 | Card payment state machine | `payments.PaymentProcessor` | `store.SQLPaymentEngine` (`emv_payments`) | `payments.PaymentEngine` |
 | CoDi requests / confirmations | `payments.CoDiRepository` | `store.SQLCoDiRepository` (`codi_requests`, `codi_confirmations`) | maps inside `payments.CoDiService` |
 | Idempotency keys | `api.IdempotencyStore` backend | `store.SQLIdempotencyRepository` (Redis if `REDIS_ADDR`) | map |
-| SAT 69-B blacklist | `identity` repository | `store.SQLBlacklistRepository` | map |
+| SAT 69-B blacklist, list metadata and load history (migration 015, `docs/KYB.md`) | `identity.BlacklistRepository`, `identity.List69BStore` | `store.SQLBlacklistRepository` (`sat_blacklist`, `sat_blacklist_staging`, `sat_blacklist_meta`, `sat_blacklist_loads`) | `identity.MemoryList69BStore` |
 | Users, memberships, OTP challenges, refresh tokens, attestation nonces (`docs/AUTH.md`) | `auth.Repository` | `store.SQLAuthRepository` (migrations 005, 006) | `auth.MemoryRepository` |
 | Merchant onboarding (KYB), KYC document metadata and encrypted blobs (migration 012, `docs/KYB.md`) | `store.KYBRepository`, `store.DocumentBlobStore` | `store.SQLKYBRepository` (`merchant_kyb`, `kyb_documents`, `kyb_document_blobs`) | `store.MemoryKYBRepository` |
 | Sales view: SPEI abonos and CoDi confirmations (`merchant_sales`, migration 013) merged with `card_payments` | `store.SalesRepository`, `MoneyTx.RecordSale` | `store.SQLMoneyStore` | `store.MemoryMoneyStore` |
@@ -71,8 +71,10 @@ Notes:
   `kyb_document_blobs`, `docs/KYB.md`), 013 (`merchant_sales` + backfill,
   `refresh_tokens.grace_sealed/grace_used_at`) and 014 (`platform_operators`,
   `operator_audit_log`, `docs/BACKOFFICE.md`).
+- Batch I: migration 015 (SAT 69-B ingestion: staging table + atomic swap,
+  `sat_blacklist_meta`, `sat_blacklist_loads`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
-  exists but is not wired), CEP tracking of disbursements, SAT ingestion state.
+  exists but is not wired), CEP tracking of disbursements.
 - Payment state change, ledger journal, RESICO monthly accumulator,
   settlement record, webhook exactly-once key and outbox event are written in
   **one transaction** (`store.SQLMoneyStore`, see `docs/MONEY_FLOWS.md`);

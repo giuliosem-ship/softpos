@@ -28,6 +28,9 @@ var (
 	ErrProviderRejected = errors.New("acquirer provider rejected the request")
 	// ErrPaymentNotFound is returned when the provider does not know the payment.
 	ErrPaymentNotFound = errors.New("acquirer payment not found")
+	// ErrRefundNotFound is returned by GetRefund when the provider never
+	// received the refund request (no refund under that idempotency key).
+	ErrRefundNotFound = errors.New("acquirer refund not found")
 	// ErrInvalidEvent is returned when a webhook payload cannot be parsed or validated.
 	ErrInvalidEvent = errors.New("invalid acquirer webhook event")
 	// ErrUnknownProvider is returned by New for an unsupported provider name.
@@ -101,6 +104,27 @@ type RefundResult struct {
 	Status           string // "pending" | "succeeded" | "failed"
 }
 
+// RefundLookup identifies a refund request at the provider.
+type RefundLookup struct {
+	ProviderPaymentID string
+	IdempotencyKey    string // "kerno_refund_<refund_id>"
+	KernoRefundID     string
+}
+
+// RefundState is the provider's view of a refund request.
+type RefundState struct {
+	ProviderRefundID string
+	Status           string // "pending" | "succeeded" | "failed"
+	AmountCents      int64
+}
+
+// Refund statuses reported by the provider.
+const (
+	RefundStatusPending   = "pending"
+	RefundStatusSucceeded = "succeeded"
+	RefundStatusFailed    = "failed"
+)
+
 // CancelRequest cancels an intent that was not captured.
 type CancelRequest struct {
 	IdempotencyKey    string
@@ -140,6 +164,11 @@ type Provider interface {
 	GetPayment(ctx context.Context, providerPaymentID string) (PaymentState, error)
 	Capture(ctx context.Context, req CaptureRequest) (PaymentState, error)
 	Refund(ctx context.Context, req RefundRequest) (RefundResult, error)
+	// GetRefund looks a refund request up by the idempotency key Kerno sent
+	// ("kerno_refund_<refund_id>", also echoed as kerno_refund_id) for the
+	// refund sweep (MVP-29). ErrRefundNotFound means the provider never
+	// received it; ErrProviderUnavailable means the outcome is still unknown.
+	GetRefund(ctx context.Context, req RefundLookup) (RefundState, error)
 	Cancel(ctx context.Context, req CancelRequest) (PaymentState, error)
 	// OnboardMerchant creates (idempotently) the processor sub-merchant of an
 	// approved Kerno merchant (called when an operator approves its KYB).

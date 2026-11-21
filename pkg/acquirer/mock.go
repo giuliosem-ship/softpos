@@ -59,6 +59,7 @@ type MockProvider struct {
 	cfg     MockConfig
 	mu      sync.Mutex
 	intents map[string]PaymentState // provider payment id -> state
+	refunds map[string]RefundState  // idempotency key -> refund received
 	calls   map[string]int          // method -> count (tests)
 }
 
@@ -74,7 +75,7 @@ func NewMockProvider(cfg MockConfig) *MockProvider {
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &MockProvider{cfg: cfg, intents: map[string]PaymentState{}, calls: map[string]int{}}
+	return &MockProvider{cfg: cfg, intents: map[string]PaymentState{}, refunds: map[string]RefundState{}, calls: map[string]int{}}
 }
 
 func (m *MockProvider) Name() string { return MockProviderName }
@@ -153,7 +154,7 @@ func (m *MockProvider) Capture(_ context.Context, req CaptureRequest) (PaymentSt
 }
 
 // Refund acknowledges any refund of a positive amount as pending; amounts
-// ending in 52 time out. The mock is stateless here so refunds keep working
+// ending in 52 are recorded but time out. The mock is stateless here so refunds keep working
 // after a server restart (DEV_MODE).
 func (m *MockProvider) Refund(_ context.Context, req RefundRequest) (RefundResult, error) {
 	m.mu.Lock()
@@ -162,10 +163,46 @@ func (m *MockProvider) Refund(_ context.Context, req RefundRequest) (RefundResul
 	if req.IdempotencyKey == "" || req.AmountCents <= 0 || req.ProviderPaymentID == "" {
 		return RefundResult{}, fmt.Errorf("%w: invalid refund", ErrProviderRejected)
 	}
+	id := mockID("mock_re_", req.IdempotencyKey)
+	if _, ok := m.refunds[req.IdempotencyKey]; !ok {
+		m.refunds[req.IdempotencyKey] = RefundState{ProviderRefundID: id, Status: RefundStatusPending, AmountCents: req.AmountCents}
+	}
 	if ScenarioForAmount(req.AmountCents) == MockTimeout {
+		// Received, but the answer never comes back (and GetRefund keeps
+		// timing out): the outcome stays unknown.
 		return RefundResult{}, fmt.Errorf("%w: mock timeout", ErrProviderUnavailable)
 	}
-	return RefundResult{ProviderRefundID: mockID("mock_re_", req.IdempotencyKey), Status: "pending"}, nil
+	return RefundResult{ProviderRefundID: id, Status: RefundStatusPending}, nil
+}
+
+// GetRefund returns a refund the mock received (pending unless changed with
+// SetRefundStatus); ErrRefundNotFound otherwise (e.g. after a restart: the
+// mock keeps no state). Amounts ending in 52 time out.
+func (m *MockProvider) GetRefund(_ context.Context, req RefundLookup) (RefundState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls["GetRefund"]++
+	st, ok := m.refunds[req.IdempotencyKey]
+	if !ok {
+		return RefundState{}, ErrRefundNotFound
+	}
+	if ScenarioForAmount(st.AmountCents) == MockTimeout {
+		return RefundState{}, fmt.Errorf("%w: mock timeout", ErrProviderUnavailable)
+	}
+	return st, nil
+}
+
+// SetRefundStatus changes the status of a received refund (tests / dev);
+// false if the mock never received it.
+func (m *MockProvider) SetRefundStatus(idempotencyKey, status string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.refunds[idempotencyKey]
+	if ok {
+		st.Status = status
+		m.refunds[idempotencyKey] = st
+	}
+	return ok
 }
 
 func (m *MockProvider) Cancel(_ context.Context, req CancelRequest) (PaymentState, error) {

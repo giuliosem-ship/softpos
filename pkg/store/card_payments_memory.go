@@ -193,6 +193,37 @@ func (t *memMoneyTx) UpdateCardRefund(_ context.Context, r CardRefundRecord) err
 	return nil
 }
 
+func (t *memMoneyTx) ClaimStaleCardRefunds(_ context.Context, before, now time.Time, limit int) ([]StaleCardRefund, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var due []CardRefundRecord
+	for id := range t.store.card.refunds {
+		r, _ := t.refundByID(id)
+		if r.Status == RefundRequested && r.UpdatedAt.Before(before) {
+			due = append(due, r)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if !due[i].UpdatedAt.Equal(due[j].UpdatedAt) {
+			return due[i].UpdatedAt.Before(due[j].UpdatedAt)
+		}
+		return due[i].ID < due[j].ID
+	})
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	out := make([]StaleCardRefund, 0, len(due))
+	for _, r := range due {
+		r.SweepAttempts++
+		r.UpdatedAt = now.UTC()
+		t.card.refunds[r.ID] = r
+		cp, _ := t.cardByID(r.CardPaymentID)
+		out = append(out, StaleCardRefund{CardRefundRecord: r, Provider: cp.Provider, ProviderPaymentID: cp.ProviderPaymentID})
+	}
+	return out, nil
+}
+
 func (t *memMoneyTx) OpenRefundCents(_ context.Context, cardPaymentID string) (int64, error) {
 	var sum int64
 	for _, r := range t.allRefunds(cardPaymentID) {

@@ -21,13 +21,16 @@ rejected in production).
 | `GetPayment(providerPaymentID)` → `PaymentState` | provider view (support / future polling) | — |
 | `Capture(CaptureRequest)` | manual-capture providers (Kerno assumes auto-capture today) | caller-defined |
 | `Refund(RefundRequest)` → `RefundResult{ProviderRefundID, Status}` | refund request; ledger moves only on the webhook | `kerno_refund_<refund_id>` |
+| `GetRefund(RefundLookup{ProviderPaymentID, IdempotencyKey, KernoRefundID})` → `RefundState{ProviderRefundID, Status, AmountCents}` | refund sweep (§4): `pending` / `succeeded` / `failed`; `ErrRefundNotFound` = the provider never received it; `ErrProviderUnavailable` = still unknown | looks up `kerno_refund_<refund_id>` |
 | `Cancel(CancelRequest)` | cancel an uncaptured intent | `kerno_cancel_<card_payment_id>` |
 | `OnboardMerchant(OnboardRequest)` → `OnboardResult{ProviderMerchantID, Status}` | create the processor sub-merchant when an operator approves the KYB (`docs/KYB.md`); the mock rejects RFCs starting with `REJECT` and times out on `TIMEOUT` | `kerno_onboard_<merchant_id>` |
 | `ParseWebhookEvent(body)` → `Event` | translate the provider payload into the normalized `Event` | — |
 
 Error contract: `ErrProviderUnavailable` = outcome unknown (timeout, reset,
 5xx) → Kerno never assumes success or failure and retries with the **same**
-key; `ErrProviderRejected` = definitive; `ErrPaymentNotFound`.
+key; `ErrProviderRejected` = definitive; `ErrPaymentNotFound`;
+`ErrRefundNotFound` (only from `GetRefund`, must mean "never received", not
+"lookup failed").
 
 Optional `WebhookVerifier` (`VerifyWebhook(header, body, now)`): adapters whose
 provider signs webhooks with its own scheme implement it; otherwise the server
@@ -38,7 +41,7 @@ verifies the Kerno scheme (§3).
 | Amount ends in | Outcome |
 |---|---|
 | `51` | tap declined (`payment.declined`, `decline_code=do_not_honor`) |
-| `52` | every provider call times out (`ErrProviderUnavailable`) |
+| `52` | every provider call times out (`ErrProviderUnavailable`); a refund is recorded before timing out, and `GetRefund` keeps timing out |
 | other | approved: `payment.authorized` + `payment.captured` (fee 250 bps half-up, settlement T+1) |
 
 Ids derive from the idempotency keys (SHA-256), so retries return the same
@@ -197,6 +200,53 @@ replays the stored request (`Idempotent-Replayed: true`; another amount →
 before the provider refund id was stored leaves the request `PENDING` (the
 refund itself is applied); an operator closes it.
 
+### Refund sweep (MVP-29)
+
+A request can stay `REQUESTED` forever when the provider call's outcome is
+unknown (timeout, crash between the commit and the call) and the merchant
+never retries; it holds its amount. `Server.SweepStaleRefunds` (worker in
+`cmd/server`, every `REFUND_SWEEP_INTERVAL`, default 5 min, only with a
+processor configured) handles them:
+
+1. **Claim:** in one short transaction, `REQUESTED` rows untouched for
+   `REFUND_SWEEP_AFTER` (default 15 min, min 2 min, well beyond the 30 s
+   provider call) are selected `FOR UPDATE SKIP LOCKED` (concurrent replicas
+   and webhooks holding a row are skipped), `sweep_attempts` is incremented
+   and `updated_at` moved to now (the lease: the next attempt comes one
+   threshold later). Card payment rows are only read, so the webhook's lock
+   order (card payment → refund) is never inverted (migration 020).
+2. **Ask the provider** (`GetRefund`, outside any transaction), then:
+   - `succeeded` → a synthetic `payment.refunded` (`id = sweep_<refund>_succeeded`,
+     the provider refund id) goes through `ApplyAcquirerEvent`, the **same
+     path as the webhook**: the refund is posted exactly once per provider
+     refund id (`claimSub`), so the real webhook, earlier, concurrent or
+     later, never posts it again;
+   - `failed` → synthetic `refund.failed` (or directly `FAILED` without a
+     provider id), hold released, `card_payment.refund_failed`;
+   - `pending` → `PENDING` + `provider_refund_id` (the webhook finishes it);
+   - `ErrRefundNotFound` → `FAILED` with `last_error = EXPIRED: …`, hold
+     released, outbox `card_payment.refund_expired`; a retry with the same
+     `Idempotency-Key` replays the expired request (no new provider call; the
+     merchant requests a new refund with a new key);
+   - unavailable / anything else → stays `REQUESTED`; after
+     `REFUND_SWEEP_ALERT_ATTEMPTS` (default 5) attempts every further one
+     logs `ALERT refund request unresolved` (ERROR).
+   Direct status changes re-lock card payment then refund and only act if
+   the refund is still `REQUESTED` (`already_resolved` otherwise).
+
+`cmd/reconciler` does not run the sweep: it needs the processor adapter and
+the webhook application path of `api.Server` (it only has the database).
+
+**Chargebacks and refunds in flight.** A `chargeback.opened` does not net
+`REQUESTED`/`PENDING` refunds: the processor already took the disputed funds
+and Kerno cannot cancel a refund the processor may still complete. If the
+refunds in flight exceed what remains after the chargeback, an `ALERT` is
+logged and the outbox event carries `open_refund_cents`, so an operator can
+cancel the refund at the processor; a refund that still completes beyond the
+remainder arrives as `422 EVENT_CONFLICT` (never posted, operator review) —
+netting it automatically would require knowing which of the two the
+processor actually honored.
+
 ## 5. Processor settlement reconciliation (Kerno ← processor, T+n)
 
 **Payout lines** arrive in the `payout.settled` webhook:
@@ -280,8 +330,13 @@ stub; needs `DATABASE_URL`). Settlement dates are Mexico City calendar days.
 7. Config: `ACQUIRER_PROVIDER=<name>` (the production guard rejects `mock`
    and requires a ≥ 32-byte `ACQUIRER_WEBHOOK_SECRET`); keep `DEV_MODE` off
    so the legacy EMV endpoints stay disabled.
-8. Tests: an adapter contract test against the provider sandbox (create /
-   refund / cancel idempotency, webhook parsing fixtures, signature).
+8. Refund lookup: implement `GetRefund` by the refund idempotency key or
+   the `kerno_refund_id` metadata; return `ErrRefundNotFound` only when the
+   provider confirms it has no such refund (the sweep then releases the
+   hold), `ErrProviderUnavailable` for anything inconclusive.
+9. Tests: an adapter contract test against the provider sandbox (create /
+   refund / cancel idempotency, refund lookup, webhook parsing fixtures,
+   signature).
 
 ## DEV_MODE simulation
 

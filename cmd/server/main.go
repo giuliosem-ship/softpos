@@ -109,6 +109,12 @@ type Config struct {
 	PayoutReconcileInterval time.Duration // PAYOUT_RECONCILE_INTERVAL, default 1m
 	PayoutReconcileAfter    time.Duration // PAYOUT_RECONCILE_AFTER, default 10m (min 1m)
 
+	// Refund request sweep (MVP-29, docs/ACQUIRER_INTEGRATION.md): refunds
+	// stuck in REQUESTED are re-queried at the processor.
+	RefundSweepInterval      time.Duration // REFUND_SWEEP_INTERVAL, default 5m
+	RefundSweepAfter         time.Duration // REFUND_SWEEP_AFTER, default 15m (min 2m)
+	RefundSweepAlertAttempts int           // REFUND_SWEEP_ALERT_ATTEMPTS, default 5
+
 	// SAT 69-B list ingestion (MVP-20, docs/KYB.md). SAT69BURL
 	// (SAT_69B_URL, e.g. the SAT's Listado_Completo_69-B.csv) enables the
 	// download worker; empty = lists are loaded only with cmd/operatorctl.
@@ -221,6 +227,15 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 
+	alertAttempts := 0
+	if val := os.Getenv("REFUND_SWEEP_ALERT_ATTEMPTS"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			alertAttempts = n
+		} else {
+			slog.Warn("invalid REFUND_SWEEP_ALERT_ATTEMPTS, using default", "value", val)
+		}
+	}
+
 	cashierRefunds := false
 	if val := strings.ToLower(os.Getenv("ALLOW_CASHIER_REFUNDS")); val == "true" || val == "1" {
 		cashierRefunds = true
@@ -249,6 +264,9 @@ func LoadConfigFromEnv() Config {
 		OutboxPublishTimeout:      parseDurationEnv("OUTBOX_PUBLISH_TIMEOUT"),
 		PayoutReconcileInterval:   parseDurationEnv("PAYOUT_RECONCILE_INTERVAL"),
 		PayoutReconcileAfter:      parseDurationEnv("PAYOUT_RECONCILE_AFTER"),
+		RefundSweepInterval:       parseDurationEnv("REFUND_SWEEP_INTERVAL"),
+		RefundSweepAfter:          parseDurationEnv("REFUND_SWEEP_AFTER"),
+		RefundSweepAlertAttempts:  alertAttempts,
 		SAT69BURL:                 strings.TrimSpace(os.Getenv("SAT_69B_URL")),
 		SAT69BRefreshInterval:     parseDurationEnv("SAT_69B_REFRESH_INTERVAL"),
 		SAT69BMaxAge:              parseDurationEnv("SAT_69B_MAX_AGE"),
@@ -761,6 +779,47 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 	return func() { <-done }
 }
 
+// defaultRefundSweepInterval is how often the refund sweep runs.
+const defaultRefundSweepInterval = 5 * time.Minute
+
+// StartRefundSweeper launches the refund request sweep (MVP-29) when a card
+// processor is configured: every REFUND_SWEEP_INTERVAL, refunds stuck in
+// REQUESTED for REFUND_SWEEP_AFTER are re-queried at the processor and
+// resolved (applied through the webhook path, PENDING, FAILED or expired).
+// The returned wait function blocks until the loop exits after ctx is
+// cancelled.
+func StartRefundSweeper(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
+	if server == nil || server.AcquirerProvider() == nil {
+		return func() {}
+	}
+	interval := cfg.RefundSweepInterval
+	if interval <= 0 {
+		interval = defaultRefundSweepInterval
+	}
+	after := cfg.RefundSweepAfter
+	if after != 0 && after < api.MinRefundSweepAfter {
+		slog.Warn("REFUND_SWEEP_AFTER below minimum, using minimum", "value", after, "min", api.MinRefundSweepAfter)
+		after = api.MinRefundSweepAfter
+	}
+	sweepCfg := api.RefundSweepConfig{After: after, AlertAttempts: cfg.RefundSweepAlertAttempts}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runEvery(ctx, interval, func(ctx context.Context) {
+			res, err := server.SweepStaleRefunds(ctx, time.Now(), sweepCfg)
+			if err != nil {
+				slog.Error("refund sweep failed", "error", err)
+				return
+			}
+			if res.Claimed > 0 {
+				slog.Info("refund sweep", "claimed", res.Claimed, "succeeded", res.Succeeded, "pending", res.Pending,
+					"failed", res.Failed, "expired", res.Expired, "already_resolved", res.Resolved, "unknown", res.Unknown, "alerted", res.Alerted)
+			}
+		})
+	}()
+	return func() { <-done }
+}
+
 // CFDI worker defaults.
 const (
 	defaultCFDIGlobalInterval = time.Hour
@@ -930,6 +989,7 @@ func main() {
 	waitAcquirer := StartAcquirerSettlementWatcher(dispatcherCtx, cfg, db)
 	wait69B := StartSAT69BWorker(dispatcherCtx, cfg, server)
 	waitCFDI := StartCFDIWorkers(dispatcherCtx, cfg, server)
+	waitRefunds := StartRefundSweeper(dispatcherCtx, cfg, server)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -974,6 +1034,7 @@ func main() {
 			waitAcquirer()
 			wait69B()
 			waitCFDI()
+			waitRefunds()
 			close(dispatcherDone)
 		}()
 		select {

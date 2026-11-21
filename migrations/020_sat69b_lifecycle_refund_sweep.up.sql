@@ -1,4 +1,6 @@
--- 020_sat69b_lifecycle.up.sql (MVP-27): 69-B block lifecycle. See docs/KYB.md.
+-- 020_sat69b_lifecycle_refund_sweep.up.sql
+-- MVP-27: 69-B block lifecycle (docs/KYB.md). MVP-29: refund request sweep
+-- (docs/ACQUIRER_INTEGRATION.md).
 --
 -- blocked_source records who placed the current block: OPERATOR (backoffice)
 -- or SAT_69B (the re-review after a list load). Only SAT_69B blocks are
@@ -34,3 +36,11 @@ ALTER TABLE sat_blacklist_loads ADD COLUMN IF NOT EXISTS override_changes BOOLEA
 ALTER TABLE sat_blacklist_loads DROP CONSTRAINT IF EXISTS sat_blacklist_loads_status_check;
 ALTER TABLE sat_blacklist_loads ADD CONSTRAINT sat_blacklist_loads_status_check
     CHECK (status IN ('LOADED', 'UNCHANGED', 'REJECTED_SHRINK', 'REJECTED_CHANGES', 'FAILED'));
+
+-- MVP-29: refund requests stuck in REQUESTED (provider outcome unknown) are
+-- re-queried by the sweep; sweep_attempts counts the lookups (alert after N)
+-- and updated_at doubles as the claim lease.
+ALTER TABLE card_payment_refunds ADD COLUMN IF NOT EXISTS sweep_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE card_payment_refunds ADD COLUMN IF NOT EXISTS last_swept_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_card_payment_refunds_requested
+    ON card_payment_refunds(updated_at) WHERE status = 'REQUESTED';

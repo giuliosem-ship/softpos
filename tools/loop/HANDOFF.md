@@ -64,6 +64,27 @@
 - MVP-31: `iss`/`aud` del JWT, tope diario de OTP por número entre instancias y allowlist CORS.
 - Auditoría: la guarda de cambios 69-B no contaba RFCs reemplazados (un archivo del mismo tamaño habría desbloqueado a todos), un operador no podía bloquear a un comercio ya bloqueado por 69-B, y el barrido podía expirar una devolución que el comercio reenviaba.
 
+## Siguiente lote — Lote M, app Android (AND-39..41) — punto de arranque para un contexto nuevo
+Estado al 2026-11-21: `origin/main` = `eff6847` (Lotes A–L publicados y auditados). Backend listo para este lote; solo falta la app (`mobile/android`, paquete `mx.softpos.app`, applicationId `mx.kerno.softpos`).
+
+- **AND-39 Comprobante de venta:** en el detalle de venta usar `GET /api/v1/merchants/{id}/sales/{sale_id}` (`receipt_url`, `receipt_expires_at`, `card` con marca/`masked_pan`/`auth_code`) para compartir el enlace (share sheet de Android) y enviarlo con `POST /api/v1/merchants/{id}/sales/{sale_id}/receipt` `{"email"?,"phone"? (E.164)}` (owner/cashier). Contrato: `docs/CFDI.md` (§ comprobante/autofactura, ~l. 380–440) y `docs/MONEY_FLOWS.md` (~l. 267). Nunca mostrar/guardar más que los últimos 4 dígitos.
+- **AND-40 Ventas facturadas:** la lista y el detalle de ventas traen `invoice_id`, `invoice_kind` (`INDIVIDUAL`/`GLOBAL`/null), `invoice_status` y `credit_notes`. Marcar las ventas facturadas o incluidas en una global, deshabilitar de antemano "Facturar" en esas (hoy se descubre con `409 SALE_ALREADY_INVOICED`) y mostrar las notas de crédito. Cancelar una factura con notas de crédito vivas ahora responde `409 INVOICE_HAS_CREDIT_NOTES`: mapear ese código.
+- **AND-41 Nombre del comercio:** el login/refresh devuelve `memberships[].merchant_name` (`docs/AUTH.md` ~l. 84); usarlo en el selector de comercio (fallback al id si viene vacío). Desde el Lote L los access tokens llevan `aud`: un 401 tras el deploy se recupera con el refresh existente (verificar que la app lo haga).
+- Al terminar, quitar del gap analysis la fila F9 "Ventas incluidas en factura global sin marca en la app" y actualizar `docs/ANDROID_APP.md`.
+
+**Proceso (igual que Lotes F/H/J):** worktree propio (`git worktree add -b feat/android-m ../SoftPOS-wt-android-m main`), subagente implementador (spec → RED → GREEN) y luego un auditor independiente que corrige cada defecto con prueba que falla primero. Fixtures de contrato capturados del backend real (ver `docs/ANDROID_APP.md` § Contract tests), no escritos a mano. Commits en inglés `feat(android): ... [AND-39]` con `Co-Authored-By`. Validación: `cd mobile/android && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease` (el release no debe contener strings dev/mock) + `go build ./...` del backend. Merge a `main`, poda del gap analysis en el mismo lote y push por SHA (`git push origin <sha>:main` tras `git merge-base --is-ancestor origin/main <sha>`).
+
+## Pendientes sin terceros (después del Lote M)
+- Devoluciones `PENDING` sin webhook final: extender el barrido de MVP-29 (fila F10).
+- Re-postear el apartado ISR del split cuando la factura sale a persona moral (fila F8 "Retención en el split").
+- Exportación de `operator_audit_log` a almacenamiento WORM y roles separados de migración/app (F11).
+- Worker de notas de crédito sin leader lock (seguro solo por llaves de idempotencia); índice de ventas sin factura para el worker de la global.
+- Ventas en contracargo revertido nunca se facturan; hold para ventas liberadas por motivo 04 que se quieran facturar nominativas (decisión del contador).
+- `gofmt` de archivos previos (incl. `pkg/api/server.go`), sobre al CSD con `merchant_id` como AAD, test con latencia de 300 ms posiblemente flaky (`TestSTPAbonoWebhook_SuccessAndIdempotency`).
+
+## Pendientes que dependen del usuario o de terceros
+Procesador + SDK Tap to Pay, STP real, PAC real, proveedor KYC, SMS/WhatsApp/email, KMS, revisión del contador (lista de decisiones en F7 del gap analysis), asesoría legal (figura, PLD, datos personales, custodia de fondos), infraestructura/CD y rotar los secretos que siguen en el historial de git (`docker-compose.yml` anterior al Lote D).
+
 ## Qué sigue — Fase 2 (gap analysis §7)
 - Rieles reales: adaptador del procesador elegido (el flujo backend ya existe sobre el puerto) + su SDK en la app, STP real (abonos, `registraOrden`, consulta de estado de órdenes para el reconciliador de payouts, CEP, devoluciones).
 - Payout automático diario y conciliación STP/banco vs. ledger (la del procesador ya existe).

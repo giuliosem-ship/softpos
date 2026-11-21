@@ -21,3 +21,20 @@ func TestReceipts_TokenNotInRequestLogs(t *testing.T) {
 		t.Fatalf("request log: %s", out)
 	}
 }
+
+// TestReceipts_AutofacturaFormBodyBounded: the public form is parsed with
+// the same 8 KiB bound as the JSON body (ParseForm alone reads up to 10 MB).
+func TestReceipts_AutofacturaFormBodyBounded(t *testing.T) {
+	f := setupReceiptServer(t)
+	s := f.s
+	_, d, body := saleDetail(t, s, f.speiSale(t, "RCPTBIG001", 11600))
+	if d.ReceiptURL == "" {
+		t.Fatalf("receipt: %s", body)
+	}
+	big := "rfc=EKU9003173C9&nombre=" + strings.Repeat("A", 64<<10)
+	req := httptest.NewRequest(http.MethodPost, d.ReceiptURL+"/invoice", strings.NewReader(big))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if rec := serve(s, req); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_FORM") {
+		t.Fatalf("oversized form: %d %s", rec.Code, rec.Body.String())
+	}
+}

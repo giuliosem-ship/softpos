@@ -444,6 +444,7 @@ func (s *Server) HandleReceiptInvoice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, body)
 	}
 	var receptor fiscal.Receptor
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	if form {
 		if err := r.ParseForm(); err != nil {
 			reply(http.StatusBadRequest, map[string]any{"error": "INVALID_FORM"})
@@ -451,7 +452,7 @@ func (s *Server) HandleReceiptInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 		receptor = fiscal.Receptor{RFC: r.PostFormValue("rfc"), Nombre: r.PostFormValue("nombre"), RegimenFiscal: r.PostFormValue("regimen_fiscal"),
 			CodigoPostal: r.PostFormValue("codigo_postal"), UsoCFDI: r.PostFormValue("uso_cfdi"), Email: r.PostFormValue("email")}
-	} else if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&receptor); err != nil {
+	} else if err := json.NewDecoder(r.Body).Decode(&receptor); err != nil {
 		reply(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
 		return
 	}

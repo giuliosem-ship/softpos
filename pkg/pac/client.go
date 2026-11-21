@@ -121,6 +121,7 @@ type MockSAT struct {
 
 type mockCFDI struct {
 	totalCents  int64
+	emisorRFC   string
 	receptorRFC string
 	estado      string
 	cancel      string
@@ -185,8 +186,11 @@ func (m *MockPACClient) SAT() *MockSAT { return m.sat }
 
 // mockComprobante reads the attributes the mock needs from a sealed CFDI.
 type mockComprobante struct {
-	Sello    string `xml:"Sello,attr"`
-	Total    string `xml:"Total,attr"`
+	Sello  string `xml:"Sello,attr"`
+	Total  string `xml:"Total,attr"`
+	Emisor struct {
+		Rfc string `xml:"Rfc,attr"`
+	} `xml:"Emisor"`
 	Receptor struct {
 		Rfc string `xml:"Rfc,attr"`
 	} `xml:"Receptor"`
@@ -258,7 +262,7 @@ func (m *MockPACClient) Stamp(ctx context.Context, signedXML []byte) (*PACRespon
 		SelloSAT:         selloSAT,
 	}
 	m.sat.mu.Lock()
-	m.sat.cfdis[timbre.UUID] = &mockCFDI{totalCents: parseCents(comp.Total), receptorRFC: comp.Receptor.Rfc, estado: EstadoVigente}
+	m.sat.cfdis[timbre.UUID] = &mockCFDI{totalCents: parseCents(comp.Total), emisorRFC: comp.Emisor.Rfc, receptorRFC: comp.Receptor.Rfc, estado: EstadoVigente}
 	m.sat.mu.Unlock()
 
 	return &PACResponse{
@@ -311,7 +315,9 @@ func (m *MockPACClient) Status(ctx context.Context, req StatusRequest) (*StatusR
 	m.sat.mu.Lock()
 	defer m.sat.mu.Unlock()
 	c, ok := m.sat.cfdis[req.UUID]
-	if !ok {
+	// Like the SAT ConsultaCFDIService, the expression must match the
+	// stamped CFDI (re, rr, tt and id); otherwise it is "No Encontrado".
+	if !ok || !strings.EqualFold(c.emisorRFC, req.EmisorRFC) || !strings.EqualFold(c.receptorRFC, req.ReceptorRFC) || c.totalCents != req.TotalCents {
 		return &StatusResponse{Estado: EstadoNoEncontrado}, nil
 	}
 	if c.cancel == CancelacionEnProceso && m.sat.now().Sub(c.requestedAt) > 72*time.Hour {

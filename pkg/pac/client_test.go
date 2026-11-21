@@ -103,7 +103,7 @@ func TestInjectTimbreFiscal(t *testing.T) {
 
 func stampMock(t *testing.T, c pac.PACClient, total, receptor string) string {
 	t.Helper()
-	x := `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Sello="SELLO" Total="` + total + `"><cfdi:Receptor Rfc="` + receptor + `"/></cfdi:Comprobante>`
+	x := `<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Sello="SELLO" Total="` + total + `"><cfdi:Emisor Rfc="GARM850101ABC"/><cfdi:Receptor Rfc="` + receptor + `"/></cfdi:Comprobante>`
 	resp, err := c.Stamp(context.Background(), []byte(x))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestMockPAC_CancelAndStatusFollowSATRules(t *testing.T) {
 	if resp, err := orch.Cancel(ctx, req); err != nil || resp.State != pac.CancelCanceled {
 		t.Fatalf("<= $1,000 cancels without acceptance: %+v %v", resp, err)
 	}
-	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: small}); st.Estado != pac.EstadoCancelado {
+	if st, _ := orch.Status(ctx, pac.StatusRequest{EmisorRFC: "GARM850101ABC", ReceptorRFC: "EKU9003173C9", TotalCents: 99999, UUID: small}); st.Estado != pac.EstadoCancelado {
 		t.Fatalf("status: %+v", st)
 	}
 
@@ -141,7 +141,7 @@ func TestMockPAC_CancelAndStatusFollowSATRules(t *testing.T) {
 	if !sat.ResolveCancellation(big, false) {
 		t.Fatal("resolve")
 	}
-	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: big}); st.Estado != pac.EstadoVigente || st.EstatusCancelacion != pac.CancelacionRechazada {
+	if st, _ := orch.Status(ctx, pac.StatusRequest{EmisorRFC: "GARM850101ABC", ReceptorRFC: "EKU9003173C9", TotalCents: 500000, UUID: big}); st.Estado != pac.EstadoVigente || st.EstatusCancelacion != pac.CancelacionRechazada {
 		t.Fatalf("rejected: %+v", st)
 	}
 
@@ -149,8 +149,11 @@ func TestMockPAC_CancelAndStatusFollowSATRules(t *testing.T) {
 	req.UUID = expiring
 	_, _ = orch.Cancel(ctx, req)
 	now = now.Add(73 * time.Hour)
-	if st, _ := orch.Status(ctx, pac.StatusRequest{UUID: expiring}); st.Estado != pac.EstadoCancelado || st.EstatusCancelacion != pac.CancelacionPlazoVencido {
+	if st, _ := orch.Status(ctx, pac.StatusRequest{EmisorRFC: "GARM850101ABC", ReceptorRFC: "EKU9003173C9", TotalCents: 500000, UUID: expiring}); st.Estado != pac.EstadoCancelado || st.EstatusCancelacion != pac.CancelacionPlazoVencido {
 		t.Fatalf("plazo vencido: %+v", st)
+	}
+	if st, _ := orch.Status(ctx, pac.StatusRequest{ReceptorRFC: "EKU9003173C9", TotalCents: 500000, UUID: expiring}); st.Estado != pac.EstadoNoEncontrado {
+		t.Fatalf("status without the emisor RFC must not match (SAT expression re/rr/tt/id): %+v", st)
 	}
 	global := stampMock(t, primary, "9000.00", "XAXX010101000")
 	req.UUID = global

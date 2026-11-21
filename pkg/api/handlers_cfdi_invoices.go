@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -888,9 +889,9 @@ func (s *Server) PollCancellations(ctx context.Context) (int, error) {
 	}
 	resolved := 0
 	for _, rec := range recs {
-		var receptor fiscal.Receptor
-		_ = json.Unmarshal(rec.Receptor, &receptor)
-		st, err := s.pacClient().Status(ctx, pac.StatusRequest{ReceptorRFC: receptor.RFC, UUID: rec.UUID, TotalCents: rec.TotalCents})
+		// The SAT query expression needs re, rr, tt and id of the stamped CFDI.
+		emisorRFC, receptorRFC := stampedParties(rec.XML)
+		st, err := s.pacClient().Status(ctx, pac.StatusRequest{EmisorRFC: emisorRFC, ReceptorRFC: receptorRFC, UUID: rec.UUID, TotalCents: rec.TotalCents})
 		if err != nil || st == nil {
 			slog.Warn("CFDI status query failed", "invoice_id", rec.ID, "error", err)
 			continue
@@ -912,6 +913,20 @@ func (s *Server) PollCancellations(ctx context.Context) (int, error) {
 		slog.Info("CFDI cancellation resolved", "invoice_id", rec.ID, "uuid", rec.UUID, "accepted", accepted)
 	}
 	return resolved, nil
+}
+
+// stampedParties returns the emisor and receptor RFCs of a stamped CFDI.
+func stampedParties(doc []byte) (emisorRFC, receptorRFC string) {
+	var c struct {
+		Emisor struct {
+			Rfc string `xml:"Rfc,attr"`
+		} `xml:"Emisor"`
+		Receptor struct {
+			Rfc string `xml:"Rfc,attr"`
+		} `xml:"Receptor"`
+	}
+	_ = xml.Unmarshal(doc, &c)
+	return c.Emisor.Rfc, c.Receptor.Rfc
 }
 
 // ---------------------------------------------------------------------------

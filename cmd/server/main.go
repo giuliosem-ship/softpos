@@ -121,6 +121,9 @@ type Config struct {
 	// polling of cancellations waiting for the receptor's acceptance.
 	CFDIGlobalInvoiceInterval time.Duration // CFDI_GLOBAL_INVOICE_INTERVAL, default 1h
 	CFDICancelPollInterval    time.Duration // CFDI_CANCEL_POLL_INTERVAL, default 15m
+	// CFDICreditNoteInterval: credit-note worker (MVP-23; refunds and
+	// chargebacks after the sale was invoiced -> CFDI de egreso).
+	CFDICreditNoteInterval time.Duration // CFDI_CREDIT_NOTE_INTERVAL, default 1m
 }
 
 func LoadConfigFromEnv() Config {
@@ -242,6 +245,7 @@ func LoadConfigFromEnv() Config {
 		SAT69BMaxShrinkPct:        shrinkPct,
 		CFDIGlobalInvoiceInterval: parseDurationEnv("CFDI_GLOBAL_INVOICE_INTERVAL"),
 		CFDICancelPollInterval:    parseDurationEnv("CFDI_CANCEL_POLL_INTERVAL"),
+		CFDICreditNoteInterval:    parseDurationEnv("CFDI_CREDIT_NOTE_INTERVAL"),
 		Port:                      port,
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
 		SQLDriver:                 sqlDriver,
@@ -750,6 +754,7 @@ func StartAcquirerSettlementWatcher(ctx context.Context, cfg Config, db *sql.DB)
 const (
 	defaultCFDIGlobalInterval = time.Hour
 	defaultCFDICancelPoll     = 15 * time.Minute
+	defaultCFDICreditNotes    = time.Minute
 )
 
 // runEvery calls fn now and then every interval until ctx is cancelled.
@@ -769,8 +774,10 @@ func runEvery(ctx context.Context, interval time.Duration, fn func(context.Conte
 
 // StartCFDIWorkers launches the factura global worker (issues each closed
 // period's global CFDI and retries PENDING ones) and the cancellation
-// poller (resolves CANCEL_REQUESTED invoices from the SAT status). The
-// returned wait function blocks until both loops exit after ctx is cancelled.
+// poller (resolves CANCEL_REQUESTED invoices from the SAT status) and the
+// credit-note worker (CFDI de egreso for refunds / chargebacks of invoiced
+// sales). The returned wait function blocks until the loops exit after ctx
+// is cancelled.
 func StartCFDIWorkers(ctx context.Context, cfg Config, server *api.Server) (wait func()) {
 	if server == nil {
 		return func() {}
@@ -782,7 +789,11 @@ func StartCFDIWorkers(ctx context.Context, cfg Config, server *api.Server) (wait
 	if pollEvery <= 0 {
 		pollEvery = defaultCFDICancelPoll
 	}
-	done := make(chan struct{}, 2)
+	creditEvery := cfg.CFDICreditNoteInterval
+	if creditEvery <= 0 {
+		creditEvery = defaultCFDICreditNotes
+	}
+	done := make(chan struct{}, 3)
 	go func() {
 		defer func() { done <- struct{}{} }()
 		runEvery(ctx, globalEvery, func(ctx context.Context) {
@@ -804,7 +815,17 @@ func StartCFDIWorkers(ctx context.Context, cfg Config, server *api.Server) (wait
 			}
 		})
 	}()
-	return func() { <-done; <-done }
+	go func() {
+		defer func() { done <- struct{}{} }()
+		runEvery(ctx, creditEvery, func(ctx context.Context) {
+			if n, err := server.ProcessCreditNotes(ctx, time.Now()); err != nil {
+				slog.Error("credit note run failed", "error", err)
+			} else if n > 0 {
+				slog.Info("credit notes issued", "count", n)
+			}
+		})
+	}()
+	return func() { <-done; <-done; <-done }
 }
 
 // defaultSAT69BRefresh is how often the 69-B worker re-downloads the list.

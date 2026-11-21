@@ -16,7 +16,7 @@ type InvoiceLine struct {
 	IVACents  int64 // IVA trasladado 16 %
 }
 
-// InvoiceSpec describes a CFDI de ingreso to build.
+// InvoiceSpec describes a CFDI de ingreso (or, with Egreso, de egreso) to build.
 type InvoiceSpec struct {
 	Serie, Folio    string
 	Fecha           time.Time // rendered in America/Mexico_City
@@ -36,7 +36,21 @@ type InvoiceSpec struct {
 	RetainISR bool
 	// Replaces are UUIDs this CFDI substitutes (TipoRelacion 04).
 	Replaces []string
+	// Egreso builds a CFDI de egreso (nota de crédito, TipoDeComprobante E)
+	// for a refund / chargeback after the sale was invoiced: concepto
+	// 84111506 / ACT with Descripcion, same IVA / ISR rules, related to the
+	// credited CFDI with TipoRelacion 01 (CreditNoteOf, required).
+	Egreso       bool
+	CreditNoteOf []string
 }
+
+// Concepto keys of a nota de crédito (CFDI de egreso): c_ClaveProdServ
+// 84111506 "Servicios de facturación" and c_ClaveUnidad ACT (Guía de
+// llenado del Anexo 20, devoluciones / descuentos / bonificaciones).
+const (
+	EgresoClaveProdServ = "84111506"
+	EgresoClaveUnidad   = "ACT"
+)
 
 // InvoiceTotals are the computed amounts.
 type InvoiceTotals struct {
@@ -61,7 +75,14 @@ func BuildInvoiceComprobante(spec InvoiceSpec) (*CFDIComprobante, InvoiceTotals,
 		return nil, tot, ErrInvalidCFDIData
 	}
 	clave, unidad, desc := spec.ClaveProdServ, spec.ClaveUnidad, spec.Descripcion
-	if spec.Global != nil {
+	tipo := "I"
+	switch {
+	case spec.Egreso:
+		if len(spec.CreditNoteOf) == 0 {
+			return nil, tot, fmt.Errorf("%w: a CFDI de egreso must relate the credited CFDI", ErrInvalidCFDIData)
+		}
+		tipo, clave, unidad = "E", EgresoClaveProdServ, EgresoClaveUnidad
+	case spec.Global != nil:
 		clave, unidad, desc = "01010101", "ACT", "Venta"
 	}
 	if clave == "" || unidad == "" || desc == "" {
@@ -102,15 +123,21 @@ func BuildInvoiceComprobante(spec InvoiceSpec) (*CFDIComprobante, InvoiceTotals,
 		Version: "4.0", Serie: spec.Serie, Folio: spec.Folio,
 		Fecha:     spec.Fecha.In(MexicoCityLocation()).Format("2006-01-02T15:04:05"),
 		FormaPago: formaPago, SubTotal: FormatCents(tot.SubtotalCents), Moneda: "MXN", Total: FormatCents(tot.TotalCents),
-		TipoDeComprobante: "I", Exportacion: "01", MetodoPago: "PUE", LugarExpedicion: spec.LugarExpedicion,
+		TipoDeComprobante: tipo, Exportacion: "01", MetodoPago: "PUE", LugarExpedicion: spec.LugarExpedicion,
 		InformacionGlobal: spec.Global, Emisor: spec.Emisor, Receptor: spec.Receptor, Conceptos: conceptos, Impuestos: impuestos,
 	}
-	if len(spec.Replaces) > 0 {
-		rel := CFDIRelacionados{TipoRelacion: "04"}
-		for _, u := range spec.Replaces {
+	for _, r := range []struct {
+		tipo  string
+		uuids []string
+	}{{"01", spec.CreditNoteOf}, {"04", spec.Replaces}} {
+		if len(r.uuids) == 0 {
+			continue
+		}
+		rel := CFDIRelacionados{TipoRelacion: r.tipo}
+		for _, u := range r.uuids {
 			rel.Relacionados = append(rel.Relacionados, CFDIRelacionadoUUID{UUID: u})
 		}
-		comp.CfdiRelacionados = []CFDIRelacionados{rel}
+		comp.CfdiRelacionados = append(comp.CfdiRelacionados, rel)
 	}
 	return comp, tot, nil
 }

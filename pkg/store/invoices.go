@@ -21,6 +21,9 @@ import (
 const (
 	InvoiceIndividual = "INDIVIDUAL"
 	InvoiceGlobal     = "GLOBAL"
+	// InvoiceCreditNote is a nota de crédito (CFDI de egreso, MVP-23): its
+	// lines are stored inactive, so it never holds a sale.
+	InvoiceCreditNote = "CREDIT_NOTE"
 
 	InvoicePending         = "PENDING"
 	InvoiceStamped         = "STAMPED"
@@ -71,6 +74,7 @@ type InvoiceRecord struct {
 	Receptor               json.RawMessage
 	GlobalPeriod           string
 	ReplacesInvoiceID      string
+	RelatedInvoiceID       string // CREDIT_NOTE: the credited invoice (TipoRelacion 01)
 	XML                    []byte
 	SealedAt               *time.Time
 	ErrorCode              string
@@ -116,8 +120,26 @@ type InvoiceQuery struct {
 	MerchantID string   // "" = every merchant (backoffice / workers)
 	Statuses   []string // empty = any
 	Kind       string
-	Before     *SalesCursor
-	Limit      int
+	// RelatedInvoiceID lists the credit notes of one invoice.
+	RelatedInvoiceID string
+	Before           *SalesCursor
+	Limit            int
+}
+
+// SaleInvoiceLink is a sale's line in an invoice: its active link (the
+// invoice that holds it) or a credit note crediting it.
+type SaleInvoiceLink struct {
+	SaleID           string
+	InvoiceID        string
+	Kind             string
+	Status           string
+	UUID             string
+	RelatedInvoiceID string
+	Active           bool
+	BaseCents        int64
+	IVACents         int64
+	TotalCents       int64 // invoice total
+	CreatedAt        time.Time
 }
 
 // InvoiceRepository persists invoices.
@@ -139,6 +161,9 @@ type InvoiceRepository interface {
 	InvoiceLines(ctx context.Context, invoiceID string) ([]InvoiceSaleLine, error)
 	// ActiveInvoicesForSales maps each sale with an active link to its invoice.
 	ActiveInvoicesForSales(ctx context.Context, merchantID string, saleIDs []string) (map[string]string, error)
+	// SaleInvoiceLinks returns, for the given sales, their active links and
+	// every credit-note line (oldest first).
+	SaleInvoiceLinks(ctx context.Context, merchantID string, saleIDs []string) ([]SaleInvoiceLink, error)
 	// ClaimStamping takes the stamping lease of a PENDING or FAILED invoice
 	// whose lease expired (attempts+1). A FAILED one goes back to PENDING
 	// and re-links its sales (*SaleInvoicedError if one was taken).
@@ -172,7 +197,7 @@ func NewSQLInvoiceRepository(db *sql.DB) *SQLInvoiceRepository { return &SQLInvo
 
 const invoiceColumns = `id, merchant_id, kind, status, idempotency_key, request_hash, serie, folio, COALESCE(uuid, ''),
 	subtotal_cents, iva_cents, isr_retenido_cents, total_cents, forma_pago, receptor_json, global_period, replaces_invoice_id,
-	xml, sealed_at, error_code, error_detail, stamp_attempts, stamp_lease_until, cancel_motivo, cancel_folio_sustitucion,
+	related_invoice_id, xml, sealed_at, error_code, error_detail, stamp_attempts, stamp_lease_until, cancel_motivo, cancel_folio_sustitucion,
 	cancel_status, cancel_requested_at, cancel_resolved_at, emailed_at, created_at, stamped_at, updated_at`
 
 func utcPtr(t sql.NullTime) *time.Time {
@@ -189,7 +214,7 @@ func scanInvoice(s rowScanner) (InvoiceRecord, error) {
 	var sealed, lease, creq, cres, emailed, stamped sql.NullTime
 	err := s.Scan(&r.ID, &r.MerchantID, &r.Kind, &r.Status, &r.IdempotencyKey, &r.RequestHash, &r.Serie, &r.Folio, &r.UUID,
 		&r.SubtotalCents, &r.IVACents, &r.ISRRetenidoCents, &r.TotalCents, &r.FormaPago, &receptor, &r.GlobalPeriod, &r.ReplacesInvoiceID,
-		&r.XML, &sealed, &r.ErrorCode, &r.ErrorDetail, &r.StampAttempts, &lease, &r.CancelMotivo, &r.CancelFolioSustitucion,
+		&r.RelatedInvoiceID, &r.XML, &sealed, &r.ErrorCode, &r.ErrorDetail, &r.StampAttempts, &lease, &r.CancelMotivo, &r.CancelFolioSustitucion,
 		&r.CancelStatus, &creq, &cres, &emailed, &r.CreatedAt, &stamped, &r.UpdatedAt)
 	if err != nil {
 		return r, err
@@ -265,11 +290,11 @@ func (r *SQLInvoiceRepository) CreateInvoice(ctx context.Context, rec InvoiceRec
 	rec.CreatedAt, rec.UpdatedAt = now, now
 	res, err := tx.ExecContext(ctx, `INSERT INTO invoices (id, merchant_id, kind, status, idempotency_key, request_hash, serie, folio,
 		subtotal_cents, iva_cents, isr_retenido_cents, total_cents, forma_pago, receptor_json, global_period, replaces_invoice_id,
-		stamp_attempts, stamp_lease_until, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19) ON CONFLICT DO NOTHING`,
+		related_invoice_id, stamp_attempts, stamp_lease_until, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20) ON CONFLICT DO NOTHING`,
 		rec.ID, rec.MerchantID, rec.Kind, rec.Status, rec.IdempotencyKey, rec.RequestHash, rec.Serie, rec.Folio,
 		rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents, rec.FormaPago, []byte(rec.Receptor), rec.GlobalPeriod,
-		rec.ReplacesInvoiceID, rec.StampAttempts, rec.StampLeaseUntil, now)
+		rec.ReplacesInvoiceID, rec.RelatedInvoiceID, rec.StampAttempts, rec.StampLeaseUntil, now)
 	if err != nil {
 		return InvoiceRecord{}, fmt.Errorf("insert invoice: %w", err)
 	}
@@ -290,9 +315,10 @@ func (r *SQLInvoiceRepository) CreateInvoice(ctx context.Context, rec InvoiceRec
 			return InvoiceRecord{}, fmt.Errorf("transfer sales: %w", err)
 		}
 	}
+	active := rec.Kind != InvoiceCreditNote
 	for i, l := range lines {
 		res, err := tx.ExecContext(ctx, `INSERT INTO invoice_sales (invoice_id, merchant_id, sale_id, position, base_cents, iva_cents, active)
-			VALUES ($1, $2, $3, $4, $5, $6, TRUE) ON CONFLICT DO NOTHING`, rec.ID, rec.MerchantID, l.SaleID, i, l.BaseCents, l.IVACents)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`, rec.ID, rec.MerchantID, l.SaleID, i, l.BaseCents, l.IVACents, active)
 		if err != nil {
 			return InvoiceRecord{}, fmt.Errorf("link sale: %w", err)
 		}
@@ -340,6 +366,9 @@ func (r *SQLInvoiceRepository) ListInvoices(ctx context.Context, q InvoiceQuery)
 	}
 	if q.Kind != "" {
 		conds = append(conds, "kind = "+arg(q.Kind))
+	}
+	if q.RelatedInvoiceID != "" {
+		conds = append(conds, "related_invoice_id = "+arg(q.RelatedInvoiceID))
 	}
 	if q.Before != nil {
 		conds = append(conds, fmt.Sprintf("(created_at, id) < (%s, %s)", arg(q.Before.CreatedAt.UTC()), arg(q.Before.ID)))
@@ -403,6 +432,32 @@ func (r *SQLInvoiceRepository) ActiveInvoicesForSales(ctx context.Context, merch
 	return out, rows.Err()
 }
 
+func (r *SQLInvoiceRepository) SaleInvoiceLinks(ctx context.Context, merchantID string, saleIDs []string) ([]SaleInvoiceLink, error) {
+	if len(saleIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT s.sale_id, i.id, i.kind, i.status, COALESCE(i.uuid, ''), i.related_invoice_id, s.active,
+		s.base_cents, s.iva_cents, i.total_cents, i.created_at
+		FROM invoice_sales s JOIN invoices i ON i.id = s.invoice_id
+		WHERE s.merchant_id = $1 AND s.sale_id = ANY($2) AND (s.active OR i.kind = 'CREDIT_NOTE')
+		ORDER BY i.created_at, i.id`, merchantID, saleIDs)
+	if err != nil {
+		return nil, fmt.Errorf("sale invoice links: %w", err)
+	}
+	defer rows.Close()
+	var out []SaleInvoiceLink
+	for rows.Next() {
+		var l SaleInvoiceLink
+		if err := rows.Scan(&l.SaleID, &l.InvoiceID, &l.Kind, &l.Status, &l.UUID, &l.RelatedInvoiceID, &l.Active,
+			&l.BaseCents, &l.IVACents, &l.TotalCents, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		l.CreatedAt = l.CreatedAt.UTC()
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 func (r *SQLInvoiceRepository) ClaimStamping(ctx context.Context, merchantID, id string, until time.Time) (InvoiceRecord, bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -419,7 +474,7 @@ func (r *SQLInvoiceRepository) ClaimStamping(ctx context.Context, merchantID, id
 	if err != nil || !found {
 		return InvoiceRecord{}, false, err
 	}
-	if rec.Status == InvoiceFailed {
+	if rec.Status == InvoiceFailed && rec.Kind != InvoiceCreditNote {
 		res, err := tx.ExecContext(ctx, `UPDATE invoice_sales s SET active = TRUE WHERE s.invoice_id = $1 AND NOT s.active
 			AND NOT EXISTS (SELECT 1 FROM invoice_sales o WHERE o.merchant_id = s.merchant_id AND o.sale_id = s.sale_id AND o.active)`, id)
 		if err != nil {
@@ -543,6 +598,7 @@ func (m *MemoryInvoiceRepository) CreateInvoice(_ context.Context, rec InvoiceRe
 			return m.withSales(r), ErrInvoiceExists
 		}
 	}
+	credit := rec.Kind == InvoiceCreditNote
 	if rec.Kind == InvoiceGlobal {
 		for _, r := range m.recs {
 			if r.MerchantID == rec.MerchantID && r.Kind == InvoiceGlobal && r.GlobalPeriod == rec.GlobalPeriod && r.Live() {
@@ -557,7 +613,7 @@ func (m *MemoryInvoiceRepository) CreateInvoice(_ context.Context, rec InvoiceRe
 		}
 	}
 	for _, l := range lines {
-		if h := m.holder(rec.MerchantID, l.SaleID); h != "" && !(h == rec.ReplacesInvoiceID && transfer[l.SaleID]) {
+		if h := m.holder(rec.MerchantID, l.SaleID); h != "" && !credit && !(h == rec.ReplacesInvoiceID && transfer[l.SaleID]) {
 			return InvoiceRecord{}, &SaleInvoicedError{SaleID: l.SaleID, InvoiceID: h}
 		}
 	}
@@ -572,7 +628,7 @@ func (m *MemoryInvoiceRepository) CreateInvoice(_ context.Context, rec InvoiceRe
 	now := time.Now().UTC()
 	rec.CreatedAt, rec.UpdatedAt = now, now
 	for _, l := range lines {
-		m.links[rec.ID] = append(m.links[rec.ID], &memLink{InvoiceSaleLine: l, merchantID: rec.MerchantID, active: true})
+		m.links[rec.ID] = append(m.links[rec.ID], &memLink{InvoiceSaleLine: l, merchantID: rec.MerchantID, active: !credit})
 	}
 	m.recs[rec.ID] = rec
 	return m.withSales(rec), nil
@@ -616,6 +672,7 @@ func (m *MemoryInvoiceRepository) ListInvoices(_ context.Context, q InvoiceQuery
 	var out []InvoiceRecord
 	for _, r := range m.recs {
 		if (q.MerchantID != "" && r.MerchantID != q.MerchantID) || (q.Kind != "" && r.Kind != q.Kind) ||
+			(q.RelatedInvoiceID != "" && r.RelatedInvoiceID != q.RelatedInvoiceID) ||
 			(len(q.Statuses) > 0 && !containsStr(q.Statuses, r.Status)) || !q.Before.admits(r.CreatedAt, r.ID) {
 			continue
 		}
@@ -664,6 +721,34 @@ func (m *MemoryInvoiceRepository) ActiveInvoicesForSales(_ context.Context, merc
 	return out, nil
 }
 
+func (m *MemoryInvoiceRepository) SaleInvoiceLinks(_ context.Context, merchantID string, saleIDs []string) ([]SaleInvoiceLink, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := map[string]bool{}
+	for _, s := range saleIDs {
+		want[s] = true
+	}
+	var out []SaleInvoiceLink
+	for id, ls := range m.links {
+		r := m.recs[id]
+		for _, l := range ls {
+			if l.merchantID != merchantID || !want[l.SaleID] || !(l.active || r.Kind == InvoiceCreditNote) {
+				continue
+			}
+			out = append(out, SaleInvoiceLink{SaleID: l.SaleID, InvoiceID: id, Kind: r.Kind, Status: r.Status, UUID: r.UUID,
+				RelatedInvoiceID: r.RelatedInvoiceID, Active: l.active, BaseCents: l.BaseCents, IVACents: l.IVACents,
+				TotalCents: r.TotalCents, CreatedAt: r.CreatedAt})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].InvoiceID < out[j].InvoiceID
+	})
+	return out, nil
+}
+
 func (m *MemoryInvoiceRepository) ClaimStamping(_ context.Context, merchantID, id string, until time.Time) (InvoiceRecord, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -673,7 +758,7 @@ func (m *MemoryInvoiceRepository) ClaimStamping(_ context.Context, merchantID, i
 		(r.StampLeaseUntil != nil && r.StampLeaseUntil.After(now)) {
 		return InvoiceRecord{}, false, nil
 	}
-	if r.Status == InvoiceFailed {
+	if r.Status == InvoiceFailed && r.Kind != InvoiceCreditNote {
 		for _, l := range m.links[id] {
 			if !l.active {
 				if h := m.holder(r.MerchantID, l.SaleID); h != "" {
@@ -709,6 +794,7 @@ func (m *MemoryInvoiceRepository) UpdateInvoice(_ context.Context, rec InvoiceRe
 	rec.MerchantID, rec.Kind, rec.IdempotencyKey, rec.RequestHash, rec.Serie, rec.Folio = cur.MerchantID, cur.Kind, cur.IdempotencyKey, cur.RequestHash, cur.Serie, cur.Folio
 	rec.SubtotalCents, rec.IVACents, rec.ISRRetenidoCents, rec.TotalCents = cur.SubtotalCents, cur.IVACents, cur.ISRRetenidoCents, cur.TotalCents
 	rec.FormaPago, rec.Receptor, rec.GlobalPeriod, rec.ReplacesInvoiceID, rec.StampAttempts = cur.FormaPago, cur.Receptor, cur.GlobalPeriod, cur.ReplacesInvoiceID, cur.StampAttempts
+	rec.RelatedInvoiceID = cur.RelatedInvoiceID
 	rec.CreatedAt, rec.UpdatedAt = cur.CreatedAt, time.Now().UTC()
 	rec.XML = append([]byte(nil), rec.XML...)
 	m.recs[rec.ID] = rec

@@ -14,7 +14,7 @@ func TestStartCFDIWorkers_RunAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	wait := StartCFDIWorkers(ctx, Config{CFDIGlobalInvoiceInterval: 10 * time.Millisecond, CFDICancelPollInterval: 10 * time.Millisecond}, server)
+	wait := StartCFDIWorkers(ctx, Config{CFDIGlobalInvoiceInterval: 10 * time.Millisecond, CFDICancelPollInterval: 10 * time.Millisecond, CFDICreditNoteInterval: 10 * time.Millisecond}, server)
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	done := make(chan struct{})

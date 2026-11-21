@@ -4,8 +4,9 @@ Kerno issues CFDI 4.0 for its merchants (RESICO persona física at MVP):
 individual invoices requested for one or more sales, and the periodic
 **factura global** for sales to the general public. Stamping goes through
 the `pac.PACClient` port (only a mock exists until a PAC is contracted).
-Fiscal rules here still need validation by an accountant (see the gap
-analysis, F8/F12).
+Refunds and chargebacks after invoicing produce notas de crédito (CFDI de
+egreso, MVP-23). Fiscal rules here still need validation by an accountant
+(see the gap analysis, F7/F8/F12).
 
 ## Cadena original and sello
 
@@ -235,6 +236,67 @@ a sale must be issued within the same month; afterwards the merchant can
 cancel the global with **motivo 04** (frees its sales; the next worker run
 re-issues the global for the sales not invoiced meanwhile) and then invoice
 the sale individually. Accountant validation pending.
+
+### Notas de crédito (CFDI de egreso, MVP-23)
+
+A refund (`payment.refunded`) or chargeback (`chargeback.opened`) of a card
+sale **after** the sale was invoiced (individually or in a factura global)
+produces a CFDI de egreso automatically:
+
+- **Durable job, same transaction as the money:** the webhook transaction
+  that posts the ledger reversal also inserts a `credit_note_jobs` row
+  (migration 018; unique per merchant, sale, source kind `REFUND` /
+  `CHARGEBACK` and provider refund / chargeback id), recording the movement
+  amount and the sale's net collected gross right after it (`captured −
+  refunded − charged back`). No PAC call happens inside the webhook.
+- **Worker** (`Server.ProcessCreditNotes`, `CFDI_CREDIT_NOTE_INTERVAL`,
+  default 1 m) takes PENDING jobs oldest first (a sale's jobs strictly in
+  order) and looks at the sale's active invoice:
+  - none → after a 5 min grace (an invoice being created with amounts read
+    just before the movement) `NOT_REQUIRED`: the sale is invoiced later by
+    its net amount (refund before invoice);
+  - not `STAMPED` yet (`PENDING`, `CANCEL_REQUESTED`) → retried with backoff
+    (1 m doubling up to 1 h);
+  - `STAMPED` → credit = `min(movement, invoiced line gross − earlier credit
+    notes of that line − net after the movement)`; ≤ 0 → `NOT_REQUIRED` (the
+    invoice was already net of it). Otherwise a `CREDIT_NOTE` invoice is
+    created (idempotency key `cn:<kind>:<sale>:<source id>`: one credit note
+    per refund / chargeback, even with concurrent workers) and stamped
+    through `pac.PACClient`; the job becomes `ISSUED`.
+- **The egreso:** `TipoDeComprobante="E"`, serie `E` (own folio sequence),
+  `CfdiRelacionados TipoRelacion="01"` with the credited invoice's UUID,
+  `MetodoPago` PUE, `FormaPago` 04, one concepto `84111506` / `ACT`
+  ("Devolución de venta" / "Contracargo de venta", `NoIdentificacion` = sale
+  id), IVA 16 % trasladado. Amounts in int64 cents: base = credit × line base
+  / line gross rounded half-up, IVA = credit − base (re-split with the RESICO
+  16 % formula if outside the SAT limits); the last credit of a line takes
+  exactly its remaining base and IVA, so the credit notes of a line add up to
+  it to the cent. ISR retention 1.25 % (half-up) when the credited invoice
+  withheld it. Receptor: the credited invoice's, with `UsoCFDI` G02
+  ("Devoluciones, descuentos o bonificaciones") when the catalog allows it
+  for the receptor's régimen (otherwise its original uso); for a factura
+  global, `XAXX010101000` / `PUBLICO EN GENERAL` / S01 with the global's
+  `InformacionGlobal`. Its invoice lines are stored **inactive** (a credit
+  note never holds a sale) and the invoice API returns it with
+  `"kind":"CREDIT_NOTE"` and `related_invoice_id`. XML / PDF / email as any
+  invoice. Golden tests: two egreso variants plus the built ones match the
+  official XSLT.
+- **Failures:** PAC unavailable → the credit note stays `PENDING` and the
+  worker retries it; SAT rejection → `FAILED`, retried from the backoffice
+  (`POST /api/v1/backoffice/invoices/{id}/retry`, same as failed stamps).
+- **Chargeback reversed (`chargeback.reversed`) — decision:** Kerno does
+  **not** re-invoice automatically. A job still PENDING becomes
+  `NOT_REQUIRED` (funds came back before any egreso); an `ISSUED` one is
+  flagged `CHARGEBACK_REVERSED`, an `ALERT` is logged and operators see it in
+  `GET /api/v1/backoffice/credit-notes?flagged=true` (also `status=`,
+  `merchant_id=`, `limit=`) to issue a new CFDI de ingreso manually with the
+  accountant's guidance. If the reversal races a worker issuing the egreso,
+  the job ends `ISSUED` and still flagged.
+- **Limitations (accountant to confirm):** egreso vs. cancelación con
+  sustitución; clave 84111506 / ACT and InformacionGlobal on the egreso of a
+  global; G02; the egreso of a credited invoice later replaced with motivo 01
+  stays related to the canceled UUID (the replacement is built from the net
+  amount, so it is not credited twice, but the old egreso is not canceled).
 
 ### Backoffice
 

@@ -1276,6 +1276,20 @@
       "test_results": "go vet ./... clean; go test -race -count=1 ./... all ok; PGIntegration all pass (new: InvoiceLifecycle with 8 concurrent invoices of one sale -> exactly one, cancel frees the sale, global, restart); XSLT golden incl. built individual/global invoices; node --test web/pos/softpos_sdk.test.js 8/8.",
       "audit_notes": "Real PAC and email provider not contracted (mock + LogMailer). The ISR retention for PM receptors is in the CFDI but the original ledger split is not re-posted. Card FormaPago is always 04 (credit vs debit not exposed by the processor port). Individual invoices of sales already in a global are rejected; motivo 04 cancels the global. Accountant validation pending.",
       "priority": 82
+    },
+    {
+      "id": "MVP-23",
+      "component": "fiscal",
+      "title": "Credit notes: CFDI de egreso (tipo E, relación 01) for refunds / chargebacks after invoicing, via a durable job",
+      "status": "completed",
+      "files": {
+        "tests": "pkg/api/credit_notes_test.go, pkg/fiscal/invoice_test.go, pkg/fiscal/cadena_xslt_test.go, cmd/server/credit_notes_integration_test.go, cmd/server/cfdi_worker_test.go",
+        "implementation": "migrations/018_credit_notes_and_global_parts.*.sql, pkg/store/credit_notes.go, pkg/store/invoices.go, pkg/store/money.go, pkg/store/money_memory.go, pkg/fiscal/invoice.go, pkg/api/handlers_credit_notes.go, pkg/api/handlers_acquirer_events.go, pkg/api/handlers_cfdi_invoices.go, pkg/api/handlers_backoffice.go, cmd/server/main.go, cmd/server/config_guard.go, .env.example, docs/CFDI.md, docs/BACKOFFICE.md, docs/KERNO_MVP_GAP_ANALYSIS.md"
+      },
+      "spec": "payment.refunded / chargeback.opened enqueue a credit_note_jobs row in the same money transaction as the ledger reversal (unique per merchant/sale/source; amount + net collected after the movement). Worker ProcessCreditNotes (CFDI_CREDIT_NOTE_INTERVAL, 1m): per sale in order; no active invoice -> NOT_REQUIRED after a 5 min grace; invoice not STAMPED -> backoff; credit = min(movement, line gross - earlier credit notes - net after) -> CREDIT_NOTE invoice (serie E, idempotency key cn:<kind>:<sale>:<id>, inactive lines) stamped through PACClient: TipoDeComprobante E, CfdiRelacionados 01, 84111506/ACT, proportional half-up base/IVA (exact remainder on the last credit), ISR 1.25% when the credited invoice withheld it, UsoCFDI G02 when allowed, público en general + InformacionGlobal for a global. PENDING retried by the worker, FAILED via backoffice retry. chargeback.reversed: PENDING job -> NOT_REQUIRED, ISSUED job flagged CHARGEBACK_REVERSED + ALERT, listed in GET /api/v1/backoffice/credit-notes (no automatic re-invoicing).",
+      "test_results": "go vet clean; go test -race all ok; PGIntegration CreditNoteJobsExactlyOnce (concurrent duplicate refund deliveries -> one job; rolled-back refund leaves none; 3 concurrent workers -> one stamped egreso; chargeback opened+reversed -> NOT_REQUIRED + flag); xsltproc golden 14 variants + built egresos.",
+      "audit_notes": "Accountant to confirm egreso (vs. cancelación con sustitución), 84111506/ACT, G02 and InformacionGlobal on the egreso of a global. A credited invoice later replaced with motivo 01 keeps its egreso related to the canceled UUID. Reversal racing an issuing worker ends ISSUED and flagged.",
+      "priority": 83
     }
   ]
 }

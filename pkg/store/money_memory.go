@@ -44,6 +44,8 @@ type MemoryMoneyStore struct {
 	card        memCardState            // processor card payments (card_payments_memory.go)
 	sales       []SaleRecord            // credited SPEI / CoDi sales (sales.go)
 	saleIDs     map[string]bool
+	creditJobs  []CreditNoteJob // credit_notes.go
+	creditSeq   int64
 }
 
 var (
@@ -160,6 +162,8 @@ type memMoneyTx struct {
 	payouts     map[string]PayoutRecord
 	card        memCardTxState
 	sales       []SaleRecord
+	creditJobs  []CreditNoteJob
+	creditFlags []memCreditUpdate
 }
 
 func payoutKey(merchantID, idemKey string) string { return merchantID + "\x00" + idemKey }
@@ -455,6 +459,7 @@ func (t *memMoneyTx) commit(ctx context.Context) error {
 			t.store.sales = append(t.store.sales, sr)
 		}
 	}
+	t.commitCreditJobs()
 	t.store.events = append(t.store.events, t.events...)
 	return nil
 }

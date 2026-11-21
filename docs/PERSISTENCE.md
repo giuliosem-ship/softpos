@@ -77,6 +77,10 @@ Notes:
   `docs/CFDI.md`) and 017 (`invoices`, `invoice_sales` with a unique active
   link per sale, `invoice_folios`; `store.InvoiceRepository`:
   `store.SQLInvoiceRepository` / `store.MemoryInvoiceRepository`).
+- Batch K: migration 018 (`invoices.kind` `CREDIT_NOTE` +
+  `related_invoice_id`; `credit_note_jobs`, written in the money transaction
+  of a refund / chargeback, `store.CreditNoteJobRepository` on
+  `SQLMoneyStore` / `MemoryMoneyStore`).
 - Still in memory (later batches): RBF loans (`rbf.Engine`; `SQLRBFRepository`
   exists but is not wired), CEP tracking of disbursements.
 - Payment state change, ledger journal, RESICO monthly accumulator,

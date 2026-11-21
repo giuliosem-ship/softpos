@@ -72,3 +72,62 @@ func TestSATVerificationURL(t *testing.T) {
 		t.Fatal("& must be escaped")
 	}
 }
+
+// TestBuildInvoiceComprobante_Egreso: a nota de crédito is a CFDI de egreso
+// (TipoDeComprobante E) related to the credited CFDI with TipoRelacion 01,
+// concepto 84111506 / ACT, proportional ISR retention; to the general
+// public it keeps the InformacionGlobal of the credited factura global.
+func TestBuildInvoiceComprobante_Egreso(t *testing.T) {
+	spec := invoiceSpec()
+	spec.Serie, spec.Folio, spec.Egreso = "E", "1", true
+	spec.Descripcion = "Devolucion de venta"
+	spec.Receptor.UsoCFDI = "G02"
+	spec.Lines = []fiscal.InvoiceLine{{SaleID: "cp_1", BaseCents: 5000, IVACents: 800}}
+	spec.CreditNoteOf = []string{"5FB2822E-396D-4725-8521-CDC4BDD20CCF"}
+	comp, tot, err := fiscal.BuildInvoiceComprobante(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp.TipoDeComprobante != "E" || comp.MetodoPago != "PUE" || len(comp.CfdiRelacionados) != 1 || comp.CfdiRelacionados[0].TipoRelacion != "01" ||
+		comp.CfdiRelacionados[0].Relacionados[0].UUID != spec.CreditNoteOf[0] {
+		t.Fatalf("egreso header: %+v", comp)
+	}
+	c := comp.Conceptos[0]
+	if c.ClaveProdServ != "84111506" || c.ClaveUnidad != "ACT" || c.Descripcion != "Devolucion de venta" || c.NoIdentificacion != "cp_1" {
+		t.Fatalf("egreso concepto: %+v", c)
+	}
+	// ISR 1.25 % of 50.00 = 0.625 -> 0.63 half-up.
+	if tot.SubtotalCents != 5000 || tot.IVACents != 800 || tot.ISRRetenidoCents != 63 || tot.TotalCents != 5800-63 {
+		t.Fatalf("egreso totals: %+v", tot)
+	}
+	noRel := spec
+	noRel.CreditNoteOf = nil
+	if _, _, err := fiscal.BuildInvoiceComprobante(noRel); err == nil {
+		t.Fatal("an egreso must relate the credited CFDI")
+	}
+
+	g := spec
+	g.RetainISR = false
+	g.Receptor = fiscal.PublicoEnGeneral("06000")
+	g.Global = &fiscal.CFDIInformacionGlobal{Periodicidad: "04", Meses: "10", Anio: 2026}
+	gc, gt, err := fiscal.BuildInvoiceComprobante(g)
+	if err != nil || gt.ISRRetenidoCents != 0 || gc.InformacionGlobal == nil || gc.Conceptos[0].ClaveProdServ != "84111506" || gc.TipoDeComprobante != "E" {
+		t.Fatalf("egreso to the general public: %+v %v", gc, err)
+	}
+
+	bin := xsltproc(t)
+	xslt := satXSLT(t)
+	for _, c := range []*fiscal.CFDIComprobante{comp, gc} {
+		c.NoCertificado = "30001000000500003416"
+		doc, err := fiscal.BuildCFDI40XML(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(doc), `TipoDeComprobante="E"`) || !strings.Contains(string(doc), `TipoRelacion="01"`) {
+			t.Fatalf("egreso XML: %s", doc)
+		}
+		if got, want := fiscal.BuildCadenaOriginal(c), runXSLT(t, bin, xslt, doc); got != want {
+			t.Fatalf("egreso cadena differs from the SAT XSLT\n go: %s\nsat: %s", got, want)
+		}
+	}
+}

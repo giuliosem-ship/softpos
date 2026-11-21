@@ -87,6 +87,13 @@ type MoneyTx interface {
 	// transaction commits.
 	EnqueueEvent(ctx context.Context, eventType, aggregateID string, payload any) error
 
+	// EnqueueCreditNoteJob records a PENDING credit-note job for a refund /
+	// chargeback (idempotent on merchant, sale, source kind and source id).
+	EnqueueCreditNoteJob(ctx context.Context, job CreditNoteJob) error
+	// FlagChargebackReversed flags the job of a reversed chargeback (a
+	// PENDING one becomes NOT_REQUIRED); found=false if there is none.
+	FlagChargebackReversed(ctx context.Context, merchantID, saleID, chargebackID string) (CreditNoteJob, bool, error)
+
 	// RecordSale stores a credited SPEI abono / CoDi confirmation in the sales
 	// view (merchant_sales; idempotent on the sale id).
 	RecordSale(ctx context.Context, s SaleRecord) error

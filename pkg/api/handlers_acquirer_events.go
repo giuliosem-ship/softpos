@@ -109,7 +109,7 @@ func writeAcquirerEventError(w http.ResponseWriter, provider string, e acquirer.
 }
 
 // applyCardMoneyEvent handles refunds and chargebacks of a locked card payment.
-func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *store.CardPaymentRecord, e acquirer.Event, _ *cardEventEffects) (bool, error) {
+func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *store.CardPaymentRecord, e acquirer.Event, fx *cardEventEffects) (bool, error) {
 	switch e.Type {
 	case acquirer.EventRefunded:
 		if !cp.Status.Captured() {
@@ -141,6 +141,11 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 			if cp.RefundedCents == cp.CapturedCents {
 				cp.Status = store.CardRefunded
 			}
+		}
+		// Nota de crédito: a durable job, resolved by the credit-note worker
+		// (an egreso only if the sale was already invoiced; docs/CFDI.md).
+		if err := enqueueCreditNote(ctx, tx, cp, store.CreditSourceRefund, e.RefundID, e.AmountCents); err != nil {
+			return false, err
 		}
 		if req, ok, err := refundRequestOf(ctx, tx, cp, e); err != nil {
 			return false, err
@@ -196,6 +201,9 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		}
 		cp.ChargebackCents += e.AmountCents
 		cp.Status = store.CardChargeback
+		if err := enqueueCreditNote(ctx, tx, cp, store.CreditSourceChargeback, e.ChargebackID, e.AmountCents); err != nil {
+			return false, err
+		}
 		bal, err := tx.LockAccountBalances(ctx, avail)
 		if err != nil {
 			return false, err
@@ -222,11 +230,27 @@ func (s *Server) applyCardMoneyEvent(ctx context.Context, tx store.MoneyTx, cp *
 		if cp.ChargebackCents == 0 {
 			cp.Status = store.CardChargebackReversed
 		}
+		// Documented decision: a credit note already issued for the
+		// chargeback is not undone (no automatic re-invoicing); the job is
+		// flagged for an operator. A job not yet issued becomes NOT_REQUIRED.
+		if job, found, err := tx.FlagChargebackReversed(ctx, cp.MerchantID, cp.ID, e.ChargebackID); err != nil {
+			return false, err
+		} else if found && job.Status == store.CreditJobIssued {
+			fx.alerts = append(fx.alerts, "chargeback "+e.ChargebackID+" reversed after credit note "+job.CreditNoteInvoiceID+
+				" of "+cp.ID+": review in the backoffice (no automatic re-invoicing)")
+		}
 		return true, tx.EnqueueEvent(ctx, "card_payment.chargeback_reversed", cp.ID, map[string]any{
 			"card_payment_id": cp.ID, "merchant_id": cp.MerchantID, "chargeback_id": e.ChargebackID, "amount_cents": e.AmountCents,
 		})
 	}
 	return false, errUnsupportedEvent
+}
+
+// enqueueCreditNote records the credit-note job of a refund / chargeback of
+// cp (already updated with the movement) in the money transaction.
+func enqueueCreditNote(ctx context.Context, tx store.MoneyTx, cp *store.CardPaymentRecord, kind, sourceID string, cents int64) error {
+	return tx.EnqueueCreditNoteJob(ctx, store.CreditNoteJob{MerchantID: cp.MerchantID, SaleID: cp.ID, SourceKind: kind, SourceID: sourceID,
+		AmountCents: cents, NetAfterCents: max(0, cp.CapturedCents-cp.RefundedCents-cp.ChargebackCents)})
 }
 
 // refundRequestOf locks the refund request a refund event refers to: by the

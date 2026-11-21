@@ -78,24 +78,26 @@ type InvoiceCancellation struct {
 
 // InvoiceResponse is the invoice shape of the API.
 type InvoiceResponse struct {
-	InvoiceID         string               `json:"invoice_id"`
-	Kind              string               `json:"kind"` // INDIVIDUAL | GLOBAL
-	Status            string               `json:"status"`
-	UUID              string               `json:"uuid,omitempty"`
-	Serie             string               `json:"serie,omitempty"`
-	Folio             string               `json:"folio,omitempty"`
-	TotalCents        int64                `json:"total_cents"`
-	SubtotalCents     int64                `json:"subtotal_cents"`
-	IVACents          int64                `json:"iva_cents"`
-	ISRRetenidoCents  int64                `json:"isr_retenido_cents"`
-	Receptor          json.RawMessage      `json:"receptor"`
-	SaleIDs           []string             `json:"sale_ids"`
-	CreatedAt         string               `json:"created_at"`
-	StampedAt         string               `json:"stamped_at,omitempty"`
-	Error             string               `json:"error,omitempty"`
-	GlobalPeriod      string               `json:"global_period,omitempty"`
-	ReplacesInvoiceID string               `json:"replaces_invoice_id,omitempty"`
-	Cancellation      *InvoiceCancellation `json:"cancellation,omitempty"`
+	InvoiceID         string          `json:"invoice_id"`
+	Kind              string          `json:"kind"` // INDIVIDUAL | GLOBAL | CREDIT_NOTE
+	Status            string          `json:"status"`
+	UUID              string          `json:"uuid,omitempty"`
+	Serie             string          `json:"serie,omitempty"`
+	Folio             string          `json:"folio,omitempty"`
+	TotalCents        int64           `json:"total_cents"`
+	SubtotalCents     int64           `json:"subtotal_cents"`
+	IVACents          int64           `json:"iva_cents"`
+	ISRRetenidoCents  int64           `json:"isr_retenido_cents"`
+	Receptor          json.RawMessage `json:"receptor"`
+	SaleIDs           []string        `json:"sale_ids"`
+	CreatedAt         string          `json:"created_at"`
+	StampedAt         string          `json:"stamped_at,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	GlobalPeriod      string          `json:"global_period,omitempty"`
+	ReplacesInvoiceID string          `json:"replaces_invoice_id,omitempty"`
+	// RelatedInvoiceID: the invoice a CREDIT_NOTE credits (TipoRelacion 01).
+	RelatedInvoiceID string               `json:"related_invoice_id,omitempty"`
+	Cancellation     *InvoiceCancellation `json:"cancellation,omitempty"`
 }
 
 func rfc3339(t *time.Time) string {
@@ -109,7 +111,7 @@ func invoiceResponse(r store.InvoiceRecord) InvoiceResponse {
 	out := InvoiceResponse{InvoiceID: r.ID, Kind: r.Kind, Status: r.Status, UUID: r.UUID, Serie: r.Serie,
 		TotalCents: r.TotalCents, SubtotalCents: r.SubtotalCents, IVACents: r.IVACents, ISRRetenidoCents: r.ISRRetenidoCents,
 		Receptor: r.Receptor, SaleIDs: r.SaleIDs, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339), StampedAt: rfc3339(r.StampedAt),
-		Error: r.ErrorCode, GlobalPeriod: r.GlobalPeriod, ReplacesInvoiceID: r.ReplacesInvoiceID}
+		Error: r.ErrorCode, GlobalPeriod: r.GlobalPeriod, ReplacesInvoiceID: r.ReplacesInvoiceID, RelatedInvoiceID: r.RelatedInvoiceID}
 	if r.Folio > 0 {
 		out.Folio = strconv.FormatInt(r.Folio, 10)
 	}
@@ -505,7 +507,17 @@ func (s *Server) sealedXML(ctx context.Context, rec store.InvoiceRecord, signer 
 	if rec.Kind == store.InvoiceGlobal {
 		global = globalInfo(rec.GlobalPeriod)
 	}
-	comp, tot, err := fiscal.BuildInvoiceComprobante(s.invoiceSpec(rec, emisor, receptor, lines, replacesUUID, global, now))
+	spec := s.invoiceSpec(rec, emisor, receptor, lines, replacesUUID, global, now)
+	if rec.Kind == store.InvoiceCreditNote {
+		credited, found, err := s.invoiceRepo().GetInvoice(ctx, rec.MerchantID, rec.RelatedInvoiceID)
+		if err != nil || !found {
+			return nil, nil, fmt.Errorf("credited invoice %s not found: %v", rec.RelatedInvoiceID, err)
+		}
+		if spec, err = s.creditNoteSpec(rec, emisor, credited, lines, now); err != nil {
+			return nil, nil, err
+		}
+	}
+	comp, tot, err := fiscal.BuildInvoiceComprobante(spec)
 	if err != nil {
 		return nil, nil, err
 	}

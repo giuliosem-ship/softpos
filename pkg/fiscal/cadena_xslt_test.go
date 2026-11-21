@@ -118,6 +118,31 @@ func goldenVariants() []goldenVariant {
 		c.Descuento = "0.00"
 		c.Conceptos[0].Descuento = "0.00"
 	})
+	add("CFDI de egreso (nota de credito) relacion 01 with ISR retention", func(c *fiscal.CFDIComprobante) {
+		c.Serie, c.Folio, c.TipoDeComprobante = "E", "3", "E"
+		c.Receptor.UsoCFDI = "G02"
+		c.SubTotal, c.Total = "50.00", "57.38"
+		c.CfdiRelacionados = []fiscal.CFDIRelacionados{{TipoRelacion: "01", Relacionados: []fiscal.CFDIRelacionadoUUID{
+			{UUID: "5FB2822E-396D-4725-8521-CDC4BDD20CCF"}}}}
+		c.Conceptos = []fiscal.CFDIConcepto{{ClaveProdServ: "84111506", NoIdentificacion: "cp_0123456789abcdef", Cantidad: "1",
+			ClaveUnidad: "ACT", Descripcion: "Devolucion de venta", ValorUnitario: "50.00", Importe: "50.00", ObjetoImp: "02",
+			Impuestos: &fiscal.CFDIConceptoImpuestos{Traslados: []fiscal.CFDITraslado{tras16("50.00", "8.00")},
+				Retenciones: []fiscal.CFDIRetencionConcepto{{Base: "50.00", Impuesto: "001", TipoFactor: "Tasa", TasaOCuota: "0.012500", Importe: "0.62"}}}}}
+		c.Impuestos = &fiscal.CFDIImpuestos{TotalImpuestosRetenidos: "0.62", TotalImpuestosTrasladados: "8.00",
+			Retenciones: []fiscal.CFDIRetencion{{Impuesto: "001", Importe: "0.62"}}, Traslados: []fiscal.CFDITraslado{tras16("50.00", "8.00")}}
+	})
+	add("CFDI de egreso to publico en general (factura global) with InformacionGlobal", func(c *fiscal.CFDIComprobante) {
+		c.Serie, c.Folio, c.TipoDeComprobante = "E", "4", "E"
+		c.InformacionGlobal = &fiscal.CFDIInformacionGlobal{Periodicidad: "04", Meses: "10", Anio: 2026}
+		c.Receptor = fiscal.PublicoEnGeneral("06000")
+		c.SubTotal, c.Total = "25.50", "29.58"
+		c.CfdiRelacionados = []fiscal.CFDIRelacionados{{TipoRelacion: "01", Relacionados: []fiscal.CFDIRelacionadoUUID{
+			{UUID: "1C2E1E4A-0B39-4F2B-8C55-5A0B9D1E7A10"}}}}
+		c.Conceptos = []fiscal.CFDIConcepto{{ClaveProdServ: "84111506", NoIdentificacion: "cp_fedcba9876543210", Cantidad: "1",
+			ClaveUnidad: "ACT", Descripcion: "Contracargo de venta", ValorUnitario: "25.50", Importe: "25.50", ObjetoImp: "02",
+			Impuestos: &fiscal.CFDIConceptoImpuestos{Traslados: []fiscal.CFDITraslado{tras16("25.50", "4.08")}}}}
+		c.Impuestos = &fiscal.CFDIImpuestos{TotalImpuestosTrasladados: "4.08", Traslados: []fiscal.CFDITraslado{tras16("25.50", "4.08")}}
+	})
 	add("moneda USD with TipoCambio and Confirmacion", func(c *fiscal.CFDIComprobante) {
 		c.Moneda, c.TipoCambio, c.Confirmacion = "USD", "17.2512", "A1b2C"
 		c.Receptor.ResidenciaFiscal, c.Receptor.NumRegIdTrib = "USA", "123456789"

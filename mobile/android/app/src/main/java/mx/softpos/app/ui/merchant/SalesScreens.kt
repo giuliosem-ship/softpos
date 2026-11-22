@@ -1,5 +1,8 @@
 package mx.softpos.app.ui.merchant
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,7 +43,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import mx.softpos.app.R
 import mx.softpos.app.core.money.MoneyFormatter
 import mx.softpos.app.payments.Sale
+import mx.softpos.app.payments.SaleInvoiceMark
 import mx.softpos.app.payments.SaleKind
+import mx.softpos.app.payments.invoiceMark
 import mx.softpos.app.payments.SaleStatus
 import mx.softpos.app.payments.SaleStatusGroup
 
@@ -82,7 +87,10 @@ fun SalesScreen(
             items(state.sales, key = { it.id }) { sale ->
                 ListItem(
                     headlineContent = { Text(MoneyFormatter.formatMxn(sale.amountCents)) },
-                    supportingContent = { Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))) },
+                    supportingContent = {
+                        val mark = sale.invoiceMark().labelRes()?.let { " · " + stringResource(it) }.orEmpty()
+                        Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status)) + mark)
+                    },
                     trailingContent = { Text(sale.createdAt.take(10)) },
                     leadingContent = selection?.let { sel ->
                         {
@@ -110,7 +118,12 @@ fun SalesScreen(
 }
 
 @Composable
-fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoice: ((String) -> Unit)? = null) {
+fun SaleDetailScreen(
+    viewModel: SaleDetailViewModel,
+    onBack: () -> Unit,
+    onInvoice: ((String) -> Unit)? = null,
+    onOpenInvoice: (String) -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
     var confirm by remember { mutableStateOf<RefundChoice?>(null) }
@@ -131,7 +144,13 @@ fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoi
             )
             Text(stringResource(R.string.sale_id, sale.id))
             if (sale.createdAt.isNotBlank()) Text(stringResource(R.string.sale_date, sale.createdAt))
-            if (onInvoice != null && sale.copy(status = status).isInvoiceable()) {
+            sale.card?.let { card ->
+                card.last4?.let { Text(stringResource(R.string.sale_card, card.brand.uppercase(), it)) }
+                if (card.authCode.isNotBlank()) Text(stringResource(R.string.sale_auth_code, card.authCode))
+            }
+            SaleInvoiceSection(sale, onOpenInvoice)
+            // Disabled beforehand for sales already in an invoice or the factura global.
+            if (onInvoice != null && state.canInvoice) {
                 OutlinedButton(onClick = { onInvoice(sale.id) }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.invoice_action))
                 }
@@ -143,6 +162,7 @@ fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoi
         state.lastRefund?.let {
             Text(stringResource(R.string.refund_requested, MoneyFormatter.formatMxn(it.amountCents)))
         }
+        state.receiptUrl?.let { url -> ReceiptSection(state, viewModel, url) }
         if (state.canRefund) {
             RefundSection(state, viewModel, onConfirm = { confirm = it })
         }
@@ -188,6 +208,107 @@ private fun CardPaymentDetail(p: CardPayment) {
         Text(stringResource(R.string.sale_tax_set_aside, MoneyFormatter.formatMxn(it.taxEscrowCents)))
         Text(stringResource(R.string.sale_net, MoneyFormatter.formatMxn(it.netAvailableCents)))
     }
+}
+
+@Composable
+private fun SaleInvoiceSection(sale: Sale, onOpenInvoice: (String) -> Unit) {
+    val invoiceId = sale.invoiceId
+    sale.invoiceMark().labelRes()?.let { label ->
+        Text(stringResource(label), style = MaterialTheme.typography.titleMedium)
+        if (invoiceId != null) {
+            TextButton(onClick = { onOpenInvoice(invoiceId) }) {
+                Text(stringResource(if (sale.invoiceMark() == SaleInvoiceMark.IN_GLOBAL) R.string.sale_open_global else R.string.sale_open_invoice))
+            }
+        }
+    }
+    if (sale.creditNotes.isNotEmpty()) {
+        Text(stringResource(R.string.sale_credit_notes), style = MaterialTheme.typography.titleMedium)
+        sale.creditNotes.forEach { cn ->
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.sale_credit_note, MoneyFormatter.formatMxn(cn.totalCents))) },
+                supportingContent = { Text(stringResource(mx.softpos.app.ui.fiscal.invoiceStatusRes(cn.status)) + (cn.uuid?.let { " · $it" }.orEmpty())) },
+                modifier = Modifier.clickable { onOpenInvoice(cn.invoiceId) }
+            )
+        }
+    }
+}
+
+internal fun SaleInvoiceMark.labelRes(): Int? = when (this) {
+    SaleInvoiceMark.NONE -> null
+    SaleInvoiceMark.INVOICING -> R.string.sale_mark_invoicing
+    SaleInvoiceMark.INVOICED -> R.string.sale_mark_invoiced
+    SaleInvoiceMark.CANCELING -> R.string.sale_mark_canceling
+    SaleInvoiceMark.IN_GLOBAL -> R.string.sale_mark_in_global
+}
+
+@Composable
+private fun ReceiptSection(state: SaleDetailUiState, vm: SaleDetailViewModel, url: String) {
+    val context = LocalContext.current
+    val amount = state.sale?.let { MoneyFormatter.formatMxn(it.amountCents) }.orEmpty()
+    val shareText = stringResource(R.string.receipt_share_text, amount, url)
+    val subject = stringResource(R.string.receipt_share_subject)
+    val chooserTitle = stringResource(R.string.receipt_share)
+    Text(stringResource(R.string.receipt_title), style = MaterialTheme.typography.titleMedium)
+    state.sale?.receiptExpiresAt?.takeIf { it.isNotBlank() }?.let { Text(stringResource(R.string.receipt_expires, it.take(10))) }
+    Button(
+        onClick = {
+            // Plain text share sheet (WhatsApp, SMS, email…): only the public link, no tenant data.
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, subject)
+                putExtra(Intent.EXTRA_TEXT, shareText)
+            }
+            try {
+                context.startActivity(Intent.createChooser(send, chooserTitle))
+            } catch (_: ActivityNotFoundException) {
+                // nothing to share with
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(stringResource(R.string.receipt_share)) }
+    if (!state.canSendReceipt) return
+    OutlinedTextField(
+        value = state.receiptEmail,
+        onValueChange = vm::onReceiptEmail,
+        label = { Text(stringResource(R.string.receipt_email_label)) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = state.receiptPhone,
+        onValueChange = vm::onReceiptPhone,
+        label = { Text(stringResource(R.string.receipt_phone_label)) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedButton(
+        onClick = vm::sendReceipt,
+        enabled = !state.isSendingReceipt,
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(stringResource(R.string.receipt_send)) }
+    if (state.isSendingReceipt) CircularProgressIndicator()
+    state.receiptSent?.forEach { (channel, ok) ->
+        val name = stringResource(if (channel == "sms") R.string.receipt_channel_sms else R.string.receipt_channel_email)
+        Text(
+            stringResource(if (ok) R.string.receipt_sent_ok else R.string.receipt_sent_failed, name),
+            color = if (ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+        )
+    }
+    state.receiptError?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error) }
+}
+
+private fun ReceiptError.messageRes(): Int = when (this) {
+    ReceiptError.NO_DESTINATION -> R.string.receipt_error_no_destination
+    ReceiptError.INVALID_EMAIL -> R.string.receipt_error_email
+    ReceiptError.INVALID_PHONE -> R.string.receipt_error_phone
+    ReceiptError.NOT_CONFIRMED -> R.string.receipt_error_not_confirmed
+    ReceiptError.NOT_ALLOWED -> R.string.receipt_error_not_allowed
+    ReceiptError.NOT_CONFIGURED -> R.string.receipt_error_not_configured
+    ReceiptError.SEND_FAILED -> R.string.receipt_error_send_failed
+    ReceiptError.NETWORK -> R.string.error_network
+    ReceiptError.UNKNOWN -> R.string.error_unknown
 }
 
 @Composable

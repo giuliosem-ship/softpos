@@ -10,6 +10,8 @@ import mx.softpos.app.core.network.NETWORK_ERROR_CODE
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
 import mx.softpos.app.payments.Sale
 import mx.softpos.app.payments.SalesApi
+import mx.softpos.app.payments.SendReceiptRequest
+import mx.softpos.app.payments.SendReceiptResponse
 import mx.softpos.app.payments.SalesPage
 import mx.softpos.app.ui.charge.FakeMerchantApi
 import org.junit.jupiter.api.AfterEach
@@ -54,6 +56,9 @@ class MerchantViewModelsTest {
             cursors += before
             return pages[before]?.let { ApiResult.Success(it, 200) } ?: ApiResult.Error(404, "HTTP_404", "")
         }
+        override fun getSale(merchantId: String, saleId: String): ApiResult<Sale> = ApiResult.Error(404, "SALE_NOT_FOUND", "")
+        override fun sendReceipt(merchantId: String, saleId: String, request: SendReceiptRequest): ApiResult<SendReceiptResponse> =
+            ApiResult.Error(404, "SALE_NOT_FOUND", "")
     }
 
     @Test
@@ -77,6 +82,27 @@ class MerchantViewModelsTest {
 
         vm.load() // refresh starts over from the first page
         assertEquals(listOf(s1, s2), vm.state.value.sales)
+    }
+
+    @Test
+    fun refreshDropsSelectedSalesThatGotInvoicedMeanwhile() {
+        val free = Sale("s1", "spei", "RECEIVED", 500)
+        val other = Sale("s2", "spei", "RECEIVED", 700)
+        val api = object : SalesApi by PagedSales(emptyMap()) {
+            var page = SalesPage(listOf(free, other))
+            override fun listSales(merchantId: String, limit: Int, before: String?): ApiResult<SalesPage> = ApiResult.Success(page, 200)
+        }
+        val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
+        vm.load()
+        vm.startSelection()
+        vm.toggle("s1")
+        vm.toggle("s2")
+        assertEquals(setOf("s1", "s2"), vm.state.value.selection)
+
+        // s1 went into the factura global before the refresh: it must not stay selected.
+        api.page = SalesPage(listOf(free.copy(invoiceId = "inv_g", invoiceKind = "GLOBAL", invoiceStatus = "STAMPED"), other))
+        vm.load()
+        assertEquals(setOf("s2"), vm.state.value.selection)
     }
 
     @Test

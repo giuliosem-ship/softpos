@@ -260,7 +260,12 @@ fun InvoicesScreen(viewModel: InvoicesViewModel, onOpen: (String) -> Unit, onBac
 }
 
 @Composable
-fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit, onReplace: (String) -> Unit = {}) {
+fun InvoiceDetailScreen(
+    viewModel: InvoiceDetailViewModel,
+    onBack: () -> Unit,
+    onReplace: (String) -> Unit = {},
+    onOpenInvoice: (String) -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(Unit) { viewModel.load() }
@@ -328,7 +333,10 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit, o
             if (state.downloading != null) CircularProgressIndicator()
             if (state.downloadFailed) Text(stringResource(R.string.invoice_download_failed), color = MaterialTheme.colorScheme.error)
             if (state.canCancel || state.isCanceling) {
-                CancelSection(state, viewModel, onConfirm = { confirmCancel = true }, onReplace = { onReplace(inv.invoiceId) })
+                CancelSection(
+                    state, viewModel, onConfirm = { confirmCancel = true }, onReplace = { onReplace(inv.invoiceId) },
+                    onOpenCreditNote = onOpenInvoice
+                )
             }
         }
         TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
@@ -351,7 +359,13 @@ fun InvoiceDetailScreen(viewModel: InvoiceDetailViewModel, onBack: () -> Unit, o
 }
 
 @Composable
-private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewModel, onConfirm: () -> Unit, onReplace: () -> Unit) {
+private fun CancelSection(
+    state: InvoiceDetailUiState,
+    vm: InvoiceDetailViewModel,
+    onConfirm: () -> Unit,
+    onReplace: () -> Unit,
+    onOpenCreditNote: (String) -> Unit
+) {
     Text(stringResource(R.string.invoice_cancel_title), style = MaterialTheme.typography.titleMedium)
     state.motivoOptions.forEach { code ->
         Row(
@@ -382,6 +396,11 @@ private fun CancelSection(state: InvoiceDetailUiState, vm: InvoiceDetailViewMode
     }
     if (state.isCanceling) CircularProgressIndicator()
     state.cancelError?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error) }
+    state.blockingCreditNoteId?.let { id ->
+        OutlinedButton(onClick = { onOpenCreditNote(id) }, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.invoice_open_credit_note))
+        }
+    }
 }
 
 private fun motivoRes(code: String): Int = when (code) {
@@ -425,4 +444,5 @@ private fun CancelError.messageRes(): Int = when (this) {
     CancelError.REPLACEMENT_NOT_STAMPED -> R.string.invoice_error_replacement_not_stamped
     CancelError.NOT_CANCELABLE -> R.string.invoice_error_not_cancelable
     CancelError.REJECTED -> R.string.invoice_error_cancel_rejected
+    CancelError.HAS_CREDIT_NOTES -> R.string.invoice_error_has_credit_notes
 }

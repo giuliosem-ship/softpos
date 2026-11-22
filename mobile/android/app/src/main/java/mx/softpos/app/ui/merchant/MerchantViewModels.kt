@@ -113,9 +113,14 @@ data class SalesUiState(
     val isSelecting: Boolean get() = selection != null
 }
 
-/** Sales that can go on a CFDI: money actually received (the backend re-checks, `409 SALE_ALREADY_INVOICED`). */
+/**
+ * Sales that can go on a CFDI: money actually received and not already in an
+ * active invoice (individual or factura global). The backend re-checks
+ * (`409 SALE_ALREADY_INVOICED`) for a list that went stale.
+ */
 fun Sale.isInvoiceable(): Boolean =
-    SaleStatus.group(status).let { it == SaleStatusGroup.APPROVED || it == SaleStatusGroup.PARTIALLY_REFUNDED }
+    invoiceId.isNullOrBlank() &&
+        SaleStatus.group(status).let { it == SaleStatusGroup.APPROVED || it == SaleStatusGroup.PARTIALLY_REFUNDED }
 
 /** Sales history with cursor pagination (`next_cursor` → `before`). */
 class SalesViewModel(
@@ -141,7 +146,10 @@ class SalesViewModel(
                 is ApiResult.Success -> SalesUiState(
                     sales = result.data.items,
                     nextCursor = result.data.nextCursor,
-                    selection = _state.value.selection?.let { sel -> sel.filterTo(HashSet()) { id -> result.data.items.any { it.id == id } } }
+                    // A selected sale that got invoiced meanwhile (e.g. the factura global) is dropped.
+                    selection = _state.value.selection?.let { sel ->
+                        sel.filterTo(HashSet()) { id -> result.data.items.any { it.id == id && it.isInvoiceable() } }
+                    }
                 )
                 is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
             }

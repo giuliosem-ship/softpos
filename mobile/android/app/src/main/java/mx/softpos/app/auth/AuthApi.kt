@@ -11,12 +11,20 @@ import mx.softpos.app.core.network.toJsonBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** One `(user, merchant, role)` link (`merchant_memberships`). */
+/**
+ * One `(user, merchant, role)` link (`merchant_memberships`). [merchantName]
+ * is the business name the backend adds on login/refresh (docs/AUTH.md);
+ * empty when it could not be read and in sessions saved before AND-41.
+ */
 @Serializable
 data class MembershipInfo(
     @SerialName("merchant_id") val merchantId: String,
-    @SerialName("role") val role: String = ""
-)
+    @SerialName("role") val role: String = "",
+    @SerialName("merchant_name") val merchantName: String = ""
+) {
+    /** Name for the picker, or null to fall back to the merchant id. */
+    val displayName: String? get() = merchantName.trim().ifBlank { null }
+}
 
 /** Token pair returned by `/otp/verify` and `/refresh` (docs/AUTH.md). */
 @Serializable

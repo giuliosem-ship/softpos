@@ -95,8 +95,12 @@ fun MerchantPickerScreen(viewModel: MerchantPickerViewModel, onLogout: (() -> Un
         LazyColumn(Modifier.weight(1f)) {
             items(state.memberships, key = { it.merchantId }) { m ->
                 ListItem(
-                    headlineContent = { Text(stringResource(R.string.picker_merchant, m.merchantId)) },
-                    supportingContent = { Text(stringResource(roleRes(m.role))) },
+                    // Business name from the token pair; the id when the backend sent none.
+                    headlineContent = { Text(m.displayName ?: stringResource(R.string.picker_merchant, m.merchantId)) },
+                    supportingContent = {
+                        val role = stringResource(roleRes(m.role))
+                        Text(if (m.displayName != null) "$role · ${m.merchantId}" else role)
+                    },
                     trailingContent = {
                         when {
                             state.switchingTo == m.merchantId -> CircularProgressIndicator()

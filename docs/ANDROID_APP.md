@@ -72,6 +72,11 @@ also validates the wrapper jar against Gradle's published checksums.
   `TokenPair.toString()` / `StoredSession.toString()` never print tokens.
 - `AuthInterceptor` adds `Authorization: Bearer` and refreshes proactively 30 s
   before expiry; `TokenAuthenticator` refreshes once on 401 and retries once.
+  This also covers the backend's `iss`/`aud` check (MVP-31): an access token
+  minted before that deploy, or for another audience, gets the gate's `401
+  {"error":"unauthorized"}`; refresh tokens are opaque, so the one refresh
+  returns a valid token and the request is retried (verified against the
+  captured 401 in `contract/AuthContractTest`; no app change was needed).
 - Storage: `EncryptedTokenStore` keeps only AES-256-GCM ciphertext in private
   SharedPreferences; the key is generated in the Android Keystore
   (`AndroidKeystoreKeys`). Interfaces (`TokenStore`, `SecretCipher`,
@@ -118,8 +123,16 @@ also validates the wrapper jar against Gradle's published checksums.
 `GET /api/v1/merchants/{id}/sales?limit=50&before=<cursor>` →
 `{"items":[{id, kind:"card"|"spei"|"codi", status, amount_cents, created_at, card_payment_id?,
 invoice_id, invoice_kind, invoice_status, credit_notes?}], "next_cursor"}` (invoice fields since
-the backend Lote K, `null` when not invoiced; the app does not use them yet, see
-`docs/MONEY_FLOWS.md`).
+the backend Lote K, explicit `null` when not invoiced; see `docs/MONEY_FLOWS.md`).
+`invoice_*` is the **active** invoice holding the sale (`PENDING` / `STAMPED` /
+`CANCEL_REQUESTED`; a `FAILED` or canceled one frees it). The list marks each
+sale (`SaleInvoiceMark`): *Facturando* (individual `PENDING`), *Facturada*,
+*Factura en cancelación* (`CANCEL_REQUESTED`) or *En factura global*
+(`invoice_kind GLOBAL`). Those sales are not invoiceable: their checkbox and
+*Facturar* in the detail are disabled beforehand. The detail links to the
+invoice (*Ver factura* / *Ver factura global*) and lists its `credit_notes`
+(`{invoice_id, status, uuid?, related_invoice_id, total_cents}`, Long cents),
+each opening the credit note in *Facturas*.
 Statuses: card = `card_payments.status`; SPEI and CoDi rows come from
 `merchant_sales`, which only holds credited money (`RECEIVED` / `CONFIRMED`,
 both shown as approved). A card intent that was never tapped stays `CREATED`
@@ -148,16 +161,45 @@ request is shown as such; the money moves when the processor's
 `REFUNDED`, `CHARGEBACK` (amount debited from the available balance) and
 `CHARGEBACK_REVERSED` have their own labels.
 
+### Sale receipt (`payments/SalesApi.kt`, contract in `docs/CFDI.md` § Comprobante de venta)
+
+The detail re-reads the sale with `GET /api/v1/merchants/{id}/sales/{sale_id}`
+(the list's copy is shown meanwhile and kept if that call fails; after a
+process death the detail loads from it alone). A confirmed sale carries
+`receipt_url` + `receipt_expires_at` and, for card sales, `card {brand,
+masked_pan "**** 1234", auth_code}` (an untapped intent sends an empty `card`
+object; SPEI/CoDi send none). PCI: `SaleCard.sanitized()` keeps only the last
+4 digits whatever the backend sends, and `toString()` prints brand + last 4
+only; nothing is persisted. With `RECEIPT_BASE_URL` unset the backend sends
+a relative `/r/…`: `HttpSalesApi` resolves it against the API base URL so the
+shared link always works.
+- *Compartir comprobante*: plain-text `ACTION_SEND` share sheet with the
+  amount and the public link (WhatsApp, SMS, email…). No tenant data.
+- *Enviar comprobante* (owner and cashier; hidden for operators, the backend
+  enforces `requireRole(owner, cashier)` too): optional email and Mexican
+  mobile (10 digits → E.164 `+52…`, same rule as login) → `POST …/sales/
+  {sale_id}/receipt {"email"?,"phone"?}` (empty fields are not sent) →
+  `200 {receipt_url, expires_at, sent:{email,sms}}` shown per channel. No
+  Idempotency-Key (the backend just sends again; the button is disabled while
+  sending). Errors: `502` with the same body (`sent` says which channel
+  failed; only the failed channel's input is kept for *Reintentar*, so a
+  retry never resends the one that went out), `422 RECEIPT_DESTINATION_INVALID
+  {fields}`, `409 SALE_NOT_CONFIRMED`, `403 ROLE_FORBIDDEN`, `503
+  RECEIPTS_NOT_CONFIGURED`.
+
 ### Merchant picker
 
-The token pair's `memberships` (`merchant_id`, `role`) are stored in the
-encrypted session. When login returns no `merchant_id` and there are several
+The token pair's `memberships` (`merchant_id`, `role`, `merchant_name`) are
+stored in the encrypted session. When login returns no `merchant_id` and there are several
 memberships, the picker is shown before the app; *Perfil → Cambiar de
 comercio* opens it too. Choosing calls `POST /api/v1/auth/refresh
 {refresh_token, merchant_id}` under the same single-flight lock as the 401
 refresh; only a `401` ends the session (`403 NOT_A_MERCHANT_MEMBER`, 429 or
-5xx keep the current one). Merchants are listed by id and role: the backend
-has no endpoint that names merchants outside the current tenant.
+5xx keep the current one). Merchants are listed by `merchant_name` (the
+business name the backend adds on login and refresh, `docs/AUTH.md`) with role
+and id below; when the name is empty — the backend could not read the
+merchant, or a session saved before batch M — the row falls back to
+"Comercio <id>" until the next refresh brings the names.
 
 ### KYB onboarding (`ui/onboarding/`, `kyb/KybApi.kt`)
 
@@ -277,6 +319,9 @@ until the field is cleared — a platform limitation.)
   has 72 h; the backend poller resolves it) replaces the shown invoice.
   Errors: `422 CANCEL_INVALID {fields}` (`REPLACEMENT_NOT_STAMPED` has its own
   message), `422 CANCEL_REJECTED`, `409 INVOICE_NOT_CANCELABLE` (reloads),
+  `409 INVOICE_HAS_CREDIT_NOTES {credit_note_id}` (a live nota de crédito
+  relates to the CFDI: "cancélalas primero" + *Ver nota de crédito*, which
+  opens it to cancel it first; no reload),
   `502 PAC_UNAVAILABLE`, `403 ROLE_FORBIDDEN`. Cancel carries no
   Idempotency-Key: a repeat answers `409`, never a second PAC call.
 - Motivo `01` (substitute): *Emitir factura sustituta* opens the form for the
@@ -284,9 +329,9 @@ until the field is cleared — a platform limitation.)
   `replaces_invoice_id` (TipoRelacion 04, the substitute takes over the
   sales). Once it is `STAMPED`, *Cancelar la factura original* returns to the
   original with motivo `01` and `folio_sustitucion` = the substitute UUID.
-- Sales already in the factura global are only detected at create time (the
-  409 above): the sales API exposes no invoice link, so the list cannot grey
-  them out beforehand.
+- Sales already invoiced or in the factura global are greyed out beforehand
+  (see *Sales*); the `409 SALE_ALREADY_INVOICED` mapping stays for a list
+  that went stale.
 
 ### Contract tests
 
@@ -304,6 +349,16 @@ cancel `200`/`202`/`409`/`422`/`502`/`403`; catalogs) and exercised by
 `contract/FiscalContractTest` (request method, path, query,
 `Idempotency-Key`, multipart part names `cer`/`key`/`password` — the names
 the handler reads —, JSON body keys, the motivo 01 flow).
+Batch M (`sale_detail_*`, `sale_not_found_404.json`, `receipt_send_*`,
+`sales_invoiced_page.json`, `invoice_cancel_has_credit_notes_409.json`,
+`auth_refresh_memberships_200.json`, `auth_unauthorized_401.json`) are
+written by `TestCaptureAndroidFixtures` (`pkg/api/android_fixtures_capture_test.go`,
+skipped unless `ANDROID_FIXTURES_DIR` is set):
+`ANDROID_FIXTURES_DIR=$PWD/mobile/android/app/src/test/resources/contract go test -count=1 -run TestCaptureAndroidFixtures ./pkg/api/`.
+Token values in the token pair are replaced with placeholders; ids, receipt
+tokens and timestamps change on every capture, so the tests read them from
+the fixture instead of hard-coding them. `contract/ReceiptContractTest`
+covers the sale detail and the receipt send.
 `ui/fiscal/FileProviderHygieneTest` asserts both FileProviders are not
 exported and that the invoice one maps only `cache/invoices/`. CSD tests use a
 synthetic certificate built in memory (`fiscal/TestCertificates`): no `.cer`
@@ -330,4 +385,4 @@ the backend tests when a response struct changes.
 3. **Signing and distribution**: upload key in CI secrets, Play App Signing,
    internal/closed track, forced minimum version (targetSdk is already 36).
 4. **Crash reporting / telemetry** (Crashlytics or Sentry) with PII scrubbing.
-5. Re-verify the batch J fiscal fixtures against the real handlers; F10 sale receipt.
+5. Move the batch G/J fixtures to `TestCaptureAndroidFixtures` too, so every contract fixture is regenerated by one command.

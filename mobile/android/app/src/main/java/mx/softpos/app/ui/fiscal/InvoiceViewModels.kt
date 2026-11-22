@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import mx.softpos.app.core.network.ApiResult
+import mx.softpos.app.core.network.KernoJson
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
 import mx.softpos.app.fiscal.CancelInvoiceRequest
 import mx.softpos.app.fiscal.CancelMotivo
@@ -103,7 +106,12 @@ enum class CancelError {
     /** `409 INVOICE_NOT_CANCELABLE`: already canceled / being canceled (the invoice is reloaded). */
     NOT_CANCELABLE,
     /** `422 CANCEL_REJECTED`: the SAT / PAC refused it; the CFDI stays valid. */
-    REJECTED
+    REJECTED,
+    /**
+     * `409 INVOICE_HAS_CREDIT_NOTES {credit_note_id}`: a live nota de crédito
+     * relates to this CFDI; it must be canceled first.
+     */
+    HAS_CREDIT_NOTES
 }
 
 data class InvoiceDetailUiState(
@@ -118,13 +126,19 @@ data class InvoiceDetailUiState(
     val motivo: String = CancelMotivo.WITHOUT_RELATION,
     val folioSustitucion: String = "",
     val isCanceling: Boolean = false,
-    val cancelError: CancelError? = null
+    val cancelError: CancelError? = null,
+    /** With [CancelError.HAS_CREDIT_NOTES]: the credit note to open and cancel first. */
+    val blockingCreditNoteId: String? = null
 ) {
     /** Only a stamped CFDI can be canceled, and only by the owner (backend enforces it too). */
     val canCancel: Boolean get() = isOwner && invoice?.isStamped == true && !isCanceling
     val needsFolio: Boolean get() = motivo == CancelMotivo.WITH_RELATION
     val motivoOptions: List<String> get() = CancelMotivo.allowedFor(invoice)
 }
+
+private fun ApiResult.Error.creditNoteId(): String? = runCatching {
+    KernoJson.parseToJsonElement(message).jsonObject["credit_note_id"]?.jsonPrimitive?.content
+}.getOrNull()?.takeIf { it.isNotBlank() }
 
 class InvoiceDetailViewModel(
     private val invoiceId: String,
@@ -187,7 +201,7 @@ class InvoiceDetailViewModel(
     fun consumeShare() = _state.update { it.copy(share = null) }
 
     fun onMotivo(code: String) {
-        _state.update { if (code in it.motivoOptions) it.copy(motivo = code, cancelError = null) else it }
+        _state.update { if (code in it.motivoOptions) it.copy(motivo = code, cancelError = null, blockingCreditNoteId = null) else it }
     }
 
     fun onFolio(value: String) =
@@ -202,13 +216,16 @@ class InvoiceDetailViewModel(
             return
         }
         val request = CancelInvoiceRequest(s.motivo, s.folioSustitucion.uppercase().takeIf { s.needsFolio })
-        _state.update { it.copy(isCanceling = true, cancelError = null) }
+        _state.update { it.copy(isCanceling = true, cancelError = null, blockingCreditNoteId = null) }
         viewModelScope.launch {
             val r = withContext(io) { api.cancel(id, invoiceId, request) }
             _state.update {
                 when (r) {
                     is ApiResult.Success -> it.copy(isCanceling = false, invoice = r.data, folioSustitucion = "")
-                    is ApiResult.Error -> it.copy(isCanceling = false, cancelError = r.toCancelError())
+                    is ApiResult.Error -> it.copy(
+                        isCanceling = false, cancelError = r.toCancelError(),
+                        blockingCreditNoteId = if (r.errorCode == "INVOICE_HAS_CREDIT_NOTES") r.creditNoteId() else null
+                    )
                 }
             }
             if (r is ApiResult.Error && r.errorCode == "INVOICE_NOT_CANCELABLE") load()
@@ -219,6 +236,7 @@ class InvoiceDetailViewModel(
         statusCode == NETWORK_ERROR_STATUS -> CancelError.NETWORK
         statusCode == 403 -> CancelError.NOT_ALLOWED
         errorCode == "INVOICE_NOT_CANCELABLE" -> CancelError.NOT_CANCELABLE
+        errorCode == "INVOICE_HAS_CREDIT_NOTES" -> CancelError.HAS_CREDIT_NOTES
         errorCode == "CANCEL_REJECTED" -> CancelError.REJECTED
         errorCode == "CANCEL_INVALID" && message.contains("REPLACEMENT_NOT_STAMPED") -> CancelError.REPLACEMENT_NOT_STAMPED
         statusCode in 400..499 -> CancelError.INVALID

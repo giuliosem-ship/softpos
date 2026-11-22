@@ -182,7 +182,8 @@ shared link always works.
   `200 {receipt_url, expires_at, sent:{email,sms}}` shown per channel. No
   Idempotency-Key (the backend just sends again; the button is disabled while
   sending). Errors: `502` with the same body (`sent` says which channel
-  failed; inputs kept for *Reintentar*), `422 RECEIPT_DESTINATION_INVALID
+  failed; only the failed channel's input is kept for *Reintentar*, so a
+  retry never resends the one that went out), `422 RECEIPT_DESTINATION_INVALID
   {fields}`, `409 SALE_NOT_CONFIRMED`, `403 ROLE_FORBIDDEN`, `503
   RECEIPTS_NOT_CONFIGURED`.
 

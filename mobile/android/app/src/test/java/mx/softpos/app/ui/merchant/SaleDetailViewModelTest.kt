@@ -12,6 +12,7 @@ import mx.softpos.app.payments.CardPaymentStatus
 import mx.softpos.app.payments.FakeCardBackend
 import mx.softpos.app.payments.FakeSalesApi
 import mx.softpos.app.payments.SaleCard
+import mx.softpos.app.payments.SendReceiptRequest
 import mx.softpos.app.payments.SendReceiptResponse
 import mx.softpos.app.payments.Sale
 import org.junit.jupiter.api.AfterEach
@@ -223,6 +224,25 @@ class SaleDetailViewModelTest {
         assertEquals(ReceiptError.NOT_CONFIGURED, sendWith(ApiResult.Error(503, "RECEIPTS_NOT_CONFIGURED", "")).receiptError)
         assertEquals(ReceiptError.NETWORK, sendWith(ApiResult.Error(NETWORK_ERROR_STATUS, NETWORK_ERROR_CODE, "")).receiptError)
         assertEquals(ReceiptError.UNKNOWN, sendWith(ApiResult.Error(500, "HTTP_500", "")).receiptError)
+    }
+
+    @Test
+    fun retryAfterPartialFailureOnlyResendsTheFailedChannel() {
+        sales.details["s1"] = detailed()
+        val vm = vm()
+        sales.sendAnswers += ApiResult.Error(
+            502, "HTTP_502",
+            """{"receipt_url":"/r/tok","expires_at":"2027-02-20T04:28:54Z","sent":{"email":true,"sms":false}}"""
+        )
+        vm.onReceiptEmail("a@example.com")
+        vm.onReceiptPhone("5512345678")
+        vm.sendReceipt()
+        assertEquals(ReceiptError.SEND_FAILED, vm.state.value.receiptError)
+        assertEquals("", vm.state.value.receiptEmail, "the email already went out")
+        assertEquals("5512345678", vm.state.value.receiptPhone, "kept for a retry")
+
+        vm.sendReceipt()
+        assertEquals(SendReceiptRequest(email = null, phone = "+525512345678"), sales.sends.last().second)
     }
 
     private companion object {

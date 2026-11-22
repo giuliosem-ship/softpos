@@ -167,7 +167,15 @@ class SaleDetailViewModel(
             _state.update {
                 when (r) {
                     is ApiResult.Success -> it.copy(isSendingReceipt = false, receiptSent = r.data.sent, receiptEmail = "", receiptPhone = "")
-                    is ApiResult.Error -> it.copy(isSendingReceipt = false, receiptError = r.toReceiptError(), receiptSent = r.receiptSendResult()?.sent)
+                    is ApiResult.Error -> {
+                        // 502: clear the channels that did go out so a retry does not send them twice.
+                        val sent = r.receiptSendResult()?.sent
+                        it.copy(
+                            isSendingReceipt = false, receiptError = r.toReceiptError(), receiptSent = sent,
+                            receiptEmail = if (sent?.get("email") == true) "" else it.receiptEmail,
+                            receiptPhone = if (sent?.get("sms") == true) "" else it.receiptPhone
+                        )
+                    }
                 }
             }
         }

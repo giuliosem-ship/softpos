@@ -72,6 +72,11 @@ also validates the wrapper jar against Gradle's published checksums.
   `TokenPair.toString()` / `StoredSession.toString()` never print tokens.
 - `AuthInterceptor` adds `Authorization: Bearer` and refreshes proactively 30 s
   before expiry; `TokenAuthenticator` refreshes once on 401 and retries once.
+  This also covers the backend's `iss`/`aud` check (MVP-31): an access token
+  minted before that deploy, or for another audience, gets the gate's `401
+  {"error":"unauthorized"}`; refresh tokens are opaque, so the one refresh
+  returns a valid token and the request is retried (verified against the
+  captured 401 in `contract/AuthContractTest`; no app change was needed).
 - Storage: `EncryptedTokenStore` keeps only AES-256-GCM ciphertext in private
   SharedPreferences; the key is generated in the Android Keystore
   (`AndroidKeystoreKeys`). Interfaces (`TokenStore`, `SecretCipher`,
@@ -183,14 +188,17 @@ shared link always works.
 
 ### Merchant picker
 
-The token pair's `memberships` (`merchant_id`, `role`) are stored in the
-encrypted session. When login returns no `merchant_id` and there are several
+The token pair's `memberships` (`merchant_id`, `role`, `merchant_name`) are
+stored in the encrypted session. When login returns no `merchant_id` and there are several
 memberships, the picker is shown before the app; *Perfil → Cambiar de
 comercio* opens it too. Choosing calls `POST /api/v1/auth/refresh
 {refresh_token, merchant_id}` under the same single-flight lock as the 401
 refresh; only a `401` ends the session (`403 NOT_A_MERCHANT_MEMBER`, 429 or
-5xx keep the current one). Merchants are listed by id and role: the backend
-has no endpoint that names merchants outside the current tenant.
+5xx keep the current one). Merchants are listed by `merchant_name` (the
+business name the backend adds on login and refresh, `docs/AUTH.md`) with role
+and id below; when the name is empty — the backend could not read the
+merchant, or a session saved before batch M — the row falls back to
+"Comercio <id>" until the next refresh brings the names.
 
 ### KYB onboarding (`ui/onboarding/`, `kyb/KybApi.kt`)
 

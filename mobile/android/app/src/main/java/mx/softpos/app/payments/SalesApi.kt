@@ -26,12 +26,49 @@ data class Sale(
     @SerialName("amount_cents") val amountCents: Long,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("card_payment_id") val cardPaymentId: String? = null,
+    /** Active invoice holding the sale (`PENDING` / `STAMPED` / `CANCEL_REQUESTED`); null = not invoiced. */
+    @SerialName("invoice_id") val invoiceId: String? = null,
+    /** `INDIVIDUAL` or `GLOBAL` (factura global). */
+    @SerialName("invoice_kind") val invoiceKind: String? = null,
+    @SerialName("invoice_status") val invoiceStatus: String? = null,
+    /** Notas de crédito (CFDI de egreso) crediting the sale after refunds / chargebacks. */
+    @SerialName("credit_notes") val creditNotes: List<SaleCreditNote> = emptyList(),
     /** Card sales only: brand, `**** 1234`, authorization code (never more than the last 4 digits). */
     @SerialName("card") val card: SaleCard? = null,
     /** Public receipt (autofactura) link of a confirmed sale; absolute once read through [HttpSalesApi]. */
     @SerialName("receipt_url") val receiptUrl: String? = null,
     @SerialName("receipt_expires_at") val receiptExpiresAt: String? = null
 )
+
+/** A nota de crédito of a sale; [relatedInvoiceId] is the CFDI it credits. Money in Long cents. */
+@Serializable
+data class SaleCreditNote(
+    @SerialName("invoice_id") val invoiceId: String,
+    @SerialName("status") val status: String,
+    @SerialName("uuid") val uuid: String? = null,
+    @SerialName("related_invoice_id") val relatedInvoiceId: String = "",
+    @SerialName("total_cents") val totalCents: Long = 0L
+)
+
+/** How a sale is shown with respect to invoicing. */
+enum class SaleInvoiceMark {
+    NONE,
+    /** Individual CFDI being stamped (`PENDING`). */
+    INVOICING,
+    INVOICED,
+    /** The individual CFDI is being canceled (`CANCEL_REQUESTED`): still holds the sale. */
+    CANCELING,
+    /** Included in the factura global of its period. */
+    IN_GLOBAL
+}
+
+fun Sale.invoiceMark(): SaleInvoiceMark = when {
+    invoiceId.isNullOrBlank() -> SaleInvoiceMark.NONE
+    invoiceKind.equals("GLOBAL", ignoreCase = true) -> SaleInvoiceMark.IN_GLOBAL
+    invoiceStatus.equals("PENDING", ignoreCase = true) -> SaleInvoiceMark.INVOICING
+    invoiceStatus.equals("CANCEL_REQUESTED", ignoreCase = true) -> SaleInvoiceMark.CANCELING
+    else -> SaleInvoiceMark.INVOICED
+}
 
 /**
  * Card data of a sale. The backend only stores the last 4 digits; [sanitized]

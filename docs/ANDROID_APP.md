@@ -118,8 +118,16 @@ also validates the wrapper jar against Gradle's published checksums.
 `GET /api/v1/merchants/{id}/sales?limit=50&before=<cursor>` →
 `{"items":[{id, kind:"card"|"spei"|"codi", status, amount_cents, created_at, card_payment_id?,
 invoice_id, invoice_kind, invoice_status, credit_notes?}], "next_cursor"}` (invoice fields since
-the backend Lote K, `null` when not invoiced; the app does not use them yet, see
-`docs/MONEY_FLOWS.md`).
+the backend Lote K, explicit `null` when not invoiced; see `docs/MONEY_FLOWS.md`).
+`invoice_*` is the **active** invoice holding the sale (`PENDING` / `STAMPED` /
+`CANCEL_REQUESTED`; a `FAILED` or canceled one frees it). The list marks each
+sale (`SaleInvoiceMark`): *Facturando* (individual `PENDING`), *Facturada*,
+*Factura en cancelación* (`CANCEL_REQUESTED`) or *En factura global*
+(`invoice_kind GLOBAL`). Those sales are not invoiceable: their checkbox and
+*Facturar* in the detail are disabled beforehand. The detail links to the
+invoice (*Ver factura* / *Ver factura global*) and lists its `credit_notes`
+(`{invoice_id, status, uuid?, related_invoice_id, total_cents}`, Long cents),
+each opening the credit note in *Facturas*.
 Statuses: card = `card_payments.status`; SPEI and CoDi rows come from
 `merchant_sales`, which only holds credited money (`RECEIVED` / `CONFIRMED`,
 both shown as approved). A card intent that was never tapped stays `CREATED`
@@ -302,6 +310,9 @@ until the field is cleared — a platform limitation.)
   has 72 h; the backend poller resolves it) replaces the shown invoice.
   Errors: `422 CANCEL_INVALID {fields}` (`REPLACEMENT_NOT_STAMPED` has its own
   message), `422 CANCEL_REJECTED`, `409 INVOICE_NOT_CANCELABLE` (reloads),
+  `409 INVOICE_HAS_CREDIT_NOTES {credit_note_id}` (a live nota de crédito
+  relates to the CFDI: "cancélalas primero" + *Ver nota de crédito*, which
+  opens it to cancel it first; no reload),
   `502 PAC_UNAVAILABLE`, `403 ROLE_FORBIDDEN`. Cancel carries no
   Idempotency-Key: a repeat answers `409`, never a second PAC call.
 - Motivo `01` (substitute): *Emitir factura sustituta* opens the form for the
@@ -309,9 +320,9 @@ until the field is cleared — a platform limitation.)
   `replaces_invoice_id` (TipoRelacion 04, the substitute takes over the
   sales). Once it is `STAMPED`, *Cancelar la factura original* returns to the
   original with motivo `01` and `folio_sustitucion` = the substitute UUID.
-- Sales already in the factura global are only detected at create time (the
-  409 above): the sales API exposes no invoice link, so the list cannot grey
-  them out beforehand.
+- Sales already invoiced or in the factura global are greyed out beforehand
+  (see *Sales*); the `409 SALE_ALREADY_INVOICED` mapping stays for a list
+  that went stale.
 
 ### Contract tests
 

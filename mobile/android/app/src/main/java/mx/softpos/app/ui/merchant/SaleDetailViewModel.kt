@@ -69,6 +69,8 @@ data class SaleDetailUiState(
     val canRefund: Boolean get() = isOwner && refundableCents > 0L
     /** Absolute link of the public receipt; null before the sale is confirmed or without receipts. */
     val receiptUrl: String? get() = sale?.receiptUrl?.takeIf { it.isNotBlank() }
+    /** *Facturar*: invoiceable with the payment's current status (a refund may have changed it). */
+    val canInvoice: Boolean get() = sale?.let { it.copy(status = payment?.status ?: it.status).isInvoiceable() } == true
     /** Owners and cashiers send receipts (`requireRole(owner, cashier)` in the backend). */
     val canSendReceipt: Boolean get() = receiptUrl != null && role in RECEIPT_ROLES
 

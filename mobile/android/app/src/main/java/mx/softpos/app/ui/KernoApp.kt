@@ -163,7 +163,10 @@ private fun MerchantApp(container: AppContainer) {
                         container::currentRole, container.devCardSimulator
                     )
                 }
-                SaleDetailScreen(vm, onBack = { nav.popBackStack() }, onInvoice = { nav.navigate(Routes.invoiceNew(listOf(it))) })
+                SaleDetailScreen(
+                    vm, onBack = { nav.popBackStack() }, onInvoice = { nav.navigate(Routes.invoiceNew(listOf(it))) },
+                    onOpenInvoice = { nav.navigate(Routes.invoiceDetail(it)) }
+                )
             }
             composable(Routes.SETTINGS) {
                 val vm = viewModel {
@@ -223,7 +226,10 @@ private fun MerchantApp(container: AppContainer) {
                         substituteUuid = substitute
                     )
                 }
-                InvoiceDetailScreen(vm, onBack = { nav.popBackStack() }, onReplace = { nav.navigate(Routes.invoiceReplacement(it)) })
+                InvoiceDetailScreen(
+                    vm, onBack = { nav.popBackStack() }, onReplace = { nav.navigate(Routes.invoiceReplacement(it)) },
+                    onOpenInvoice = { nav.navigate(Routes.invoiceDetail(it)) }
+                )
             }
             composable(Routes.PICKER) {
                 val vm = viewModel {

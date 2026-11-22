@@ -113,9 +113,14 @@ data class SalesUiState(
     val isSelecting: Boolean get() = selection != null
 }
 
-/** Sales that can go on a CFDI: money actually received (the backend re-checks, `409 SALE_ALREADY_INVOICED`). */
+/**
+ * Sales that can go on a CFDI: money actually received and not already in an
+ * active invoice (individual or factura global). The backend re-checks
+ * (`409 SALE_ALREADY_INVOICED`) for a list that went stale.
+ */
 fun Sale.isInvoiceable(): Boolean =
-    SaleStatus.group(status).let { it == SaleStatusGroup.APPROVED || it == SaleStatusGroup.PARTIALLY_REFUNDED }
+    invoiceId.isNullOrBlank() &&
+        SaleStatus.group(status).let { it == SaleStatusGroup.APPROVED || it == SaleStatusGroup.PARTIALLY_REFUNDED }
 
 /** Sales history with cursor pagination (`next_cursor` → `before`). */
 class SalesViewModel(

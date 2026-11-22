@@ -135,6 +135,16 @@
     <string name="receipt_error_not_allowed">Tu rol no puede enviar comprobantes.</string>
     <string name="receipt_error_not_configured">Los comprobantes no están disponibles por ahora.</string>
     <string name="receipt_error_send_failed">No se pudo enviar por algún medio. Reintenta.</string>
+    <string name="sale_mark_invoicing">Facturando</string>
+    <string name="sale_mark_invoiced">Facturada</string>
+    <string name="sale_mark_canceling">Factura en cancelación</string>
+    <string name="sale_mark_in_global">En factura global</string>
+    <string name="sale_open_invoice">Ver factura</string>
+    <string name="sale_open_global">Ver factura global</string>
+    <string name="sale_credit_notes">Notas de crédito</string>
+    <string name="sale_credit_note">Nota de crédito por %1$s</string>
+    <string name="invoice_error_has_credit_notes">Esta factura tiene notas de crédito vigentes: cancélalas primero.</string>
+    <string name="invoice_open_credit_note">Ver nota de crédito</string>
     <string name="sale_captured">Cobrado: %1$s</string>
     <string name="sale_refunded">Devuelto: %1$s</string>
     <string name="sale_chargeback_open">Contracargo abierto: se descontaron %1$s de tu disponible.</string>

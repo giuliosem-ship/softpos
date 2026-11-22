@@ -43,7 +43,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import mx.softpos.app.R
 import mx.softpos.app.core.money.MoneyFormatter
 import mx.softpos.app.payments.Sale
+import mx.softpos.app.payments.SaleInvoiceMark
 import mx.softpos.app.payments.SaleKind
+import mx.softpos.app.payments.invoiceMark
 import mx.softpos.app.payments.SaleStatus
 import mx.softpos.app.payments.SaleStatusGroup
 
@@ -85,7 +87,10 @@ fun SalesScreen(
             items(state.sales, key = { it.id }) { sale ->
                 ListItem(
                     headlineContent = { Text(MoneyFormatter.formatMxn(sale.amountCents)) },
-                    supportingContent = { Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status))) },
+                    supportingContent = {
+                        val mark = sale.invoiceMark().labelRes()?.let { " · " + stringResource(it) }.orEmpty()
+                        Text(stringResource(sale.kindRes()) + " · " + stringResource(statusRes(sale.status)) + mark)
+                    },
                     trailingContent = { Text(sale.createdAt.take(10)) },
                     leadingContent = selection?.let { sel ->
                         {
@@ -113,7 +118,12 @@ fun SalesScreen(
 }
 
 @Composable
-fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoice: ((String) -> Unit)? = null) {
+fun SaleDetailScreen(
+    viewModel: SaleDetailViewModel,
+    onBack: () -> Unit,
+    onInvoice: ((String) -> Unit)? = null,
+    onOpenInvoice: (String) -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
     var confirm by remember { mutableStateOf<RefundChoice?>(null) }
@@ -138,7 +148,9 @@ fun SaleDetailScreen(viewModel: SaleDetailViewModel, onBack: () -> Unit, onInvoi
                 card.last4?.let { Text(stringResource(R.string.sale_card, card.brand.uppercase(), it)) }
                 if (card.authCode.isNotBlank()) Text(stringResource(R.string.sale_auth_code, card.authCode))
             }
-            if (onInvoice != null && sale.copy(status = status).isInvoiceable()) {
+            SaleInvoiceSection(sale, onOpenInvoice)
+            // Disabled beforehand for sales already in an invoice or the factura global.
+            if (onInvoice != null && state.canInvoice) {
                 OutlinedButton(onClick = { onInvoice(sale.id) }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.invoice_action))
                 }
@@ -196,6 +208,37 @@ private fun CardPaymentDetail(p: CardPayment) {
         Text(stringResource(R.string.sale_tax_set_aside, MoneyFormatter.formatMxn(it.taxEscrowCents)))
         Text(stringResource(R.string.sale_net, MoneyFormatter.formatMxn(it.netAvailableCents)))
     }
+}
+
+@Composable
+private fun SaleInvoiceSection(sale: Sale, onOpenInvoice: (String) -> Unit) {
+    val invoiceId = sale.invoiceId
+    sale.invoiceMark().labelRes()?.let { label ->
+        Text(stringResource(label), style = MaterialTheme.typography.titleMedium)
+        if (invoiceId != null) {
+            TextButton(onClick = { onOpenInvoice(invoiceId) }) {
+                Text(stringResource(if (sale.invoiceMark() == SaleInvoiceMark.IN_GLOBAL) R.string.sale_open_global else R.string.sale_open_invoice))
+            }
+        }
+    }
+    if (sale.creditNotes.isNotEmpty()) {
+        Text(stringResource(R.string.sale_credit_notes), style = MaterialTheme.typography.titleMedium)
+        sale.creditNotes.forEach { cn ->
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.sale_credit_note, MoneyFormatter.formatMxn(cn.totalCents))) },
+                supportingContent = { Text(stringResource(mx.softpos.app.ui.fiscal.invoiceStatusRes(cn.status)) + (cn.uuid?.let { " · $it" }.orEmpty())) },
+                modifier = Modifier.clickable { onOpenInvoice(cn.invoiceId) }
+            )
+        }
+    }
+}
+
+internal fun SaleInvoiceMark.labelRes(): Int? = when (this) {
+    SaleInvoiceMark.NONE -> null
+    SaleInvoiceMark.INVOICING -> R.string.sale_mark_invoicing
+    SaleInvoiceMark.INVOICED -> R.string.sale_mark_invoiced
+    SaleInvoiceMark.CANCELING -> R.string.sale_mark_canceling
+    SaleInvoiceMark.IN_GLOBAL -> R.string.sale_mark_in_global
 }
 
 @Composable

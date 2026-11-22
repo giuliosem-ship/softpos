@@ -152,12 +152,16 @@ private fun MerchantApp(container: AppContainer) {
                 )
             }
             composable(Routes.SALE_DETAIL) { entry ->
-                // The list's ViewModel holds the loaded sale; the detail reads the card payment.
+                // The list's ViewModel holds the loaded sale; the detail re-reads it (receipt, card) and the card payment.
                 val parent = remember(entry) { nav.getBackStackEntry(Routes.SALES) }
                 val list = viewModel(parent) { SalesViewModel(container.salesApi, container::currentMerchantId) }
-                val sale = list.sale(entry.arguments?.getString("saleId").orEmpty())
+                val saleId = entry.arguments?.getString("saleId").orEmpty()
+                val sale = list.sale(saleId)
                 val vm = viewModel(entry) {
-                    SaleDetailViewModel(sale, container.cardPaymentsApi, container::currentRole, container.devCardSimulator)
+                    SaleDetailViewModel(
+                        saleId, sale, container.salesApi, container::currentMerchantId, container.cardPaymentsApi,
+                        container::currentRole, container.devCardSimulator
+                    )
                 }
                 SaleDetailScreen(vm, onBack = { nav.popBackStack() }, onInvoice = { nav.navigate(Routes.invoiceNew(listOf(it))) })
             }

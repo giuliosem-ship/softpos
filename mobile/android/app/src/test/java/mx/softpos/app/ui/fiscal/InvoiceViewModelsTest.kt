@@ -19,7 +19,6 @@ import mx.softpos.app.fiscal.Persona
 import mx.softpos.app.fiscal.SatCatalogCache
 import mx.softpos.app.fiscal.stamped
 import mx.softpos.app.payments.Sale
-import mx.softpos.app.payments.SalesApi
 import mx.softpos.app.payments.SalesPage
 import mx.softpos.app.ui.merchant.SalesViewModel
 import org.junit.jupiter.api.AfterEach
@@ -249,12 +248,9 @@ class InvoiceViewModelsTest {
 
     @Test
     fun salesMultiSelectOnlyInvoiceable() {
-        val sales = object : SalesApi {
-            override fun listSales(merchantId: String, limit: Int, before: String?) = ApiResult.Success(
-                SalesPage(listOf(Sale("s1", "card", "CAPTURED", 100), Sale("s2", "card", "DECLINED", 100), Sale("s3", "spei", "RECEIVED", 100))),
-                200
-            )
-        }
+        val sales = mx.softpos.app.payments.FakeSalesApi(
+            page = SalesPage(listOf(Sale("s1", "card", "CAPTURED", 100), Sale("s2", "card", "DECLINED", 100), Sale("s3", "spei", "RECEIVED", 100)))
+        )
         val vm = SalesViewModel(sales, { "mer_1" }, dispatcher)
         vm.load()
         vm.toggle("s1")

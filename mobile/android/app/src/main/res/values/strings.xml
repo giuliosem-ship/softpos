@@ -114,6 +114,27 @@
     <string name="role_unknown">Sin rol</string>
 
     <!-- Devoluciones -->
+    <string name="sale_card">Tarjeta: %1$s **** %2$s</string>
+    <string name="sale_auth_code">Autorización: %1$s</string>
+    <string name="receipt_title">Comprobante</string>
+    <string name="receipt_expires">Enlace válido hasta %1$s</string>
+    <string name="receipt_share">Compartir comprobante</string>
+    <string name="receipt_share_subject">Comprobante de venta</string>
+    <string name="receipt_share_text">Comprobante de su compra por %1$s. Ahí mismo puede pedir su factura: %2$s</string>
+    <string name="receipt_email_label">Correo del cliente (opcional)</string>
+    <string name="receipt_phone_label">Celular del cliente, 10 dígitos (opcional)</string>
+    <string name="receipt_send">Enviar comprobante</string>
+    <string name="receipt_channel_email">correo</string>
+    <string name="receipt_channel_sms">SMS</string>
+    <string name="receipt_sent_ok">Enviado por %1$s.</string>
+    <string name="receipt_sent_failed">No se pudo enviar por %1$s. Reintenta.</string>
+    <string name="receipt_error_no_destination">Escribe un correo o un celular.</string>
+    <string name="receipt_error_email">Revisa el correo.</string>
+    <string name="receipt_error_phone">Escribe un celular de 10 dígitos.</string>
+    <string name="receipt_error_not_confirmed">La venta aún no está cobrada: el comprobante se genera al confirmarse.</string>
+    <string name="receipt_error_not_allowed">Tu rol no puede enviar comprobantes.</string>
+    <string name="receipt_error_not_configured">Los comprobantes no están disponibles por ahora.</string>
+    <string name="receipt_error_send_failed">No se pudo enviar por algún medio. Reintenta.</string>
     <string name="sale_captured">Cobrado: %1$s</string>
     <string name="sale_refunded">Devuelto: %1$s</string>
     <string name="sale_chargeback_open">Contracargo abierto: se descontaron %1$s de tu disponible.</string>

@@ -10,6 +10,9 @@ import mx.softpos.app.core.network.NETWORK_ERROR_CODE
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
 import mx.softpos.app.payments.CardPaymentStatus
 import mx.softpos.app.payments.FakeCardBackend
+import mx.softpos.app.payments.FakeSalesApi
+import mx.softpos.app.payments.SaleCard
+import mx.softpos.app.payments.SendReceiptResponse
 import mx.softpos.app.payments.Sale
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -30,8 +33,10 @@ class SaleDetailViewModelTest {
 
     private val cardSale = Sale("s1", "card", "CAPTURED", 25_000, cardPaymentId = "cp_9")
 
-    private fun vm(role: String = "owner", sale: Sale? = cardSale) =
-        SaleDetailViewModel(sale, backend, { role }, backend, dispatcher) { "rk_${++keys}" }.also { it.load() }
+    private val sales = FakeSalesApi()
+
+    private fun vm(role: String = "owner", sale: Sale? = cardSale, saleId: String = sale?.id ?: "s1") =
+        SaleDetailViewModel(saleId, sale, sales, { "mer_1" }, backend, { role }, backend, dispatcher) { "rk_${++keys}" }.also { it.load() }
 
     @Test
     fun ownerRefundsInFullAndSeesRefundedState() {
@@ -81,7 +86,7 @@ class SaleDetailViewModelTest {
             override fun refund(id: String, idempotencyKey: String, amountCents: Long?) =
                 backend.refund(id, idempotencyKey, amountCents).also { seen += idempotencyKey }
         }
-        val vm = SaleDetailViewModel(cardSale, api, { "owner" }, null, dispatcher) { "rk_${++keys}" }
+        val vm = SaleDetailViewModel(cardSale.id, cardSale, sales, { "mer_1" }, api, { "owner" }, null, dispatcher) { "rk_${++keys}" }
         vm.load()
         vm.refundAll(); assertEquals(RefundError.NETWORK, vm.state.value.refundError)
         vm.refundAll(); assertEquals(RefundError.ACQUIRER_UNAVAILABLE, vm.state.value.refundError)
@@ -113,5 +118,114 @@ class SaleDetailViewModelTest {
         val spei = vm(sale = Sale("s2", "spei", "RECEIVED", 100))
         assertNull(spei.state.value.payment)
         assertFalse(spei.state.value.canRefund)
+    }
+
+    private val receiptUrl = "https://pagos.kerno.mx/r/tok"
+    private fun detailed(status: String = "CAPTURED") = cardSale.copy(
+        status = status, receiptUrl = receiptUrl, receiptExpiresAt = "2027-02-20T04:28:54Z",
+        card = SaleCard(brand = "visa", maskedPan = "**** 4242", authCode = "A3723F")
+    )
+
+    @Test
+    fun detailIsReadFromTheBackendWithReceiptAndCard() {
+        backend.seedCaptured("cp_9", 25_000)
+        sales.details["s1"] = detailed()
+        val vm = vm(role = "cashier")
+        assertEquals(listOf("mer_1" to "s1"), sales.detailCalls)
+        val s = vm.state.value
+        assertEquals(receiptUrl, s.receiptUrl)
+        assertEquals("4242", s.sale?.card?.last4)
+        assertTrue(s.canSendReceipt, "cashiers send receipts too")
+        assertEquals(25_000L, s.payment?.capturedCents, "the card payment is still read")
+    }
+
+    @Test
+    fun detailWithoutListEntryLoadsFromTheBackend() {
+        backend.seedCaptured("cp_9", 25_000)
+        sales.details["s1"] = detailed()
+        val vm = vm(sale = null, saleId = "s1")
+        assertEquals("s1", vm.state.value.sale?.id)
+        assertEquals(25_000L, vm.state.value.payment?.capturedCents)
+
+        val missing = vm(sale = null, saleId = "nope")
+        assertNull(missing.state.value.sale)
+        assertEquals(LoadError.NOT_AVAILABLE, missing.state.value.error)
+    }
+
+    @Test
+    fun detailFailureKeepsTheListSaleWithoutReceipt() {
+        backend.seedCaptured("cp_9", 25_000)
+        val vm = vm() // no detail in the fake -> 404
+        assertEquals(cardSale.id, vm.state.value.sale?.id)
+        assertNull(vm.state.value.error)
+        assertNull(vm.state.value.receiptUrl)
+        assertFalse(vm.state.value.canSendReceipt)
+    }
+
+    @Test
+    fun operatorCannotSendAndUnconfirmedHasNoReceipt() {
+        sales.details["s1"] = detailed()
+        assertFalse(vm(role = "operator").state.value.canSendReceipt)
+        sales.details["s1"] = cardSale.copy(status = "CREATED")
+        val created = vm()
+        assertNull(created.state.value.receiptUrl)
+        assertFalse(created.state.value.canSendReceipt)
+    }
+
+    @Test
+    fun sendReceiptValidatesAndNormalizesThePhone() {
+        sales.details["s1"] = detailed()
+        val vm = vm()
+        vm.sendReceipt()
+        assertEquals(ReceiptError.NO_DESTINATION, vm.state.value.receiptError)
+        vm.onReceiptEmail("no-es-correo")
+        vm.sendReceipt()
+        assertEquals(ReceiptError.INVALID_EMAIL, vm.state.value.receiptError)
+        vm.onReceiptEmail("")
+        vm.onReceiptPhone("55 1234")
+        vm.sendReceipt()
+        assertEquals(ReceiptError.INVALID_PHONE, vm.state.value.receiptError)
+        assertTrue(sales.sends.isEmpty())
+
+        vm.onReceiptPhone("55 1234 5678")
+        vm.onReceiptEmail(" cliente@example.com ")
+        vm.sendReceipt()
+        val (id, req) = sales.sends.single()
+        assertEquals("s1", id)
+        assertEquals("+525512345678", req.phone)
+        assertEquals("cliente@example.com", req.email)
+        val s = vm.state.value
+        assertNull(s.receiptError)
+        assertEquals(mapOf("email" to true, "sms" to true), s.receiptSent)
+        assertEquals("", s.receiptEmail, "inputs cleared after sending")
+        assertEquals("", s.receiptPhone)
+    }
+
+    @Test
+    fun sendReceiptMapsBackendAnswers() {
+        sales.details["s1"] = detailed()
+        val vm = vm()
+        fun sendWith(answer: ApiResult<SendReceiptResponse>): SaleDetailUiState {
+            sales.sendAnswers += answer
+            vm.onReceiptEmail("a@example.com")
+            vm.sendReceipt()
+            return vm.state.value
+        }
+        val partial = sendWith(ApiResult.Error(502, "HTTP_502", Fixtures502))
+        assertEquals(ReceiptError.SEND_FAILED, partial.receiptError)
+        assertEquals(mapOf("sms" to false), partial.receiptSent)
+        assertEquals("a@example.com", partial.receiptEmail, "kept for a retry")
+
+        val invalid = sendWith(ApiResult.Error(422, "RECEIPT_DESTINATION_INVALID", """{"error":"RECEIPT_DESTINATION_INVALID","fields":{"phone":"INVALID_FORMAT"}}"""))
+        assertEquals(ReceiptError.INVALID_PHONE, invalid.receiptError)
+        assertEquals(ReceiptError.NOT_CONFIRMED, sendWith(ApiResult.Error(409, "SALE_NOT_CONFIRMED", "")).receiptError)
+        assertEquals(ReceiptError.NOT_ALLOWED, sendWith(ApiResult.Error(403, "ROLE_FORBIDDEN", "")).receiptError)
+        assertEquals(ReceiptError.NOT_CONFIGURED, sendWith(ApiResult.Error(503, "RECEIPTS_NOT_CONFIGURED", "")).receiptError)
+        assertEquals(ReceiptError.NETWORK, sendWith(ApiResult.Error(NETWORK_ERROR_STATUS, NETWORK_ERROR_CODE, "")).receiptError)
+        assertEquals(ReceiptError.UNKNOWN, sendWith(ApiResult.Error(500, "HTTP_500", "")).receiptError)
+    }
+
+    private companion object {
+        val Fixtures502 = mx.softpos.app.contract.Fixtures.read("receipt_send_port_failed_502.json")
     }
 }

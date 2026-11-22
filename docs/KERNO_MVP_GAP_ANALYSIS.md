@@ -191,7 +191,7 @@ Esfuerzo: **S** ≤ 1 semana · **M** 1–3 semanas · **L** > 3 semanas (1 dev)
 
 | Gap | Sev. | Esf. | Detalle / evidencia |
 |---|---|---|---|
-| Ventas incluidas en factura global sin marca en la app | P2 | S | Desde el Lote K el backend expone `invoice_id` / `invoice_kind` / `invoice_status` y notas de crédito por venta (`GET …/sales`, `GET …/sales/{sale_id}`), el nombre del comercio en las membresías y el `receipt_url` para compartir el comprobante. Falta que la app Android los use: deshabilitar "Facturar" en ventas ya facturadas o en una global, mostrar el nombre en el selector de comercio y compartir el comprobante. |
+| Ventas incluidas en factura global sin marca en la app | P2 | S | Desde el Lote K el backend expone `invoice_id` / `invoice_kind` / `invoice_status` y notas de crédito por venta (`GET …/sales`, `GET …/sales/{sale_id}`), y el nombre del comercio en las membresías (el comprobante ya se comparte y envía desde el detalle de venta, AND-39). Falta que la app Android los use: deshabilitar "Facturar" en ventas ya facturadas o en una global y mostrar el nombre en el selector de comercio. |
 | Integrar SDK del procesador | P0 | M | Tap to Pay del proveedor elegido (camino A), incluidos sus requisitos de dispositivo, atestación y permisos. |
 | Play Integrity real | P1 | S | El cliente es lógica pura con interfaz; falta el SDK real de Google (el endpoint de nonce ya existe desde el Lote B). |
 | Firma, distribución y updates | P1 | S | Keystore de firma, Play Console (track interno/cerrado), política de versión mínima forzada. (`targetSdk` 36 y wrapper 8.14.3 con `distributionSha256Sum` resueltos en el Lote H.) |

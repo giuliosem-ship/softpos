@@ -10,6 +10,8 @@ import mx.softpos.app.core.network.NETWORK_ERROR_CODE
 import mx.softpos.app.core.network.NETWORK_ERROR_STATUS
 import mx.softpos.app.payments.Sale
 import mx.softpos.app.payments.SalesApi
+import mx.softpos.app.payments.SendReceiptRequest
+import mx.softpos.app.payments.SendReceiptResponse
 import mx.softpos.app.payments.SalesPage
 import mx.softpos.app.ui.charge.FakeMerchantApi
 import org.junit.jupiter.api.AfterEach
@@ -54,6 +56,9 @@ class MerchantViewModelsTest {
             cursors += before
             return pages[before]?.let { ApiResult.Success(it, 200) } ?: ApiResult.Error(404, "HTTP_404", "")
         }
+        override fun getSale(merchantId: String, saleId: String): ApiResult<Sale> = ApiResult.Error(404, "SALE_NOT_FOUND", "")
+        override fun sendReceipt(merchantId: String, saleId: String, request: SendReceiptRequest): ApiResult<SendReceiptResponse> =
+            ApiResult.Error(404, "SALE_NOT_FOUND", "")
     }
 
     @Test

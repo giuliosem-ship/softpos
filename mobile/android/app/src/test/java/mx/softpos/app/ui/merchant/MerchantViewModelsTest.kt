@@ -85,6 +85,27 @@ class MerchantViewModelsTest {
     }
 
     @Test
+    fun refreshDropsSelectedSalesThatGotInvoicedMeanwhile() {
+        val free = Sale("s1", "spei", "RECEIVED", 500)
+        val other = Sale("s2", "spei", "RECEIVED", 700)
+        val api = object : SalesApi by PagedSales(emptyMap()) {
+            var page = SalesPage(listOf(free, other))
+            override fun listSales(merchantId: String, limit: Int, before: String?): ApiResult<SalesPage> = ApiResult.Success(page, 200)
+        }
+        val vm = SalesViewModel(api, { "mer_1" }, dispatcher)
+        vm.load()
+        vm.startSelection()
+        vm.toggle("s1")
+        vm.toggle("s2")
+        assertEquals(setOf("s1", "s2"), vm.state.value.selection)
+
+        // s1 went into the factura global before the refresh: it must not stay selected.
+        api.page = SalesPage(listOf(free.copy(invoiceId = "inv_g", invoiceKind = "GLOBAL", invoiceStatus = "STAMPED"), other))
+        vm.load()
+        assertEquals(setOf("s2"), vm.state.value.selection)
+    }
+
+    @Test
     fun salesEndpointMissingIsReportedAsNotAvailable() {
         val vm = SalesViewModel(PagedSales(emptyMap()), { "mer_1" }, dispatcher)
         vm.load()

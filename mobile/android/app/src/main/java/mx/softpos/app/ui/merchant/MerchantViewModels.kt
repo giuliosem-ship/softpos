@@ -146,7 +146,10 @@ class SalesViewModel(
                 is ApiResult.Success -> SalesUiState(
                     sales = result.data.items,
                     nextCursor = result.data.nextCursor,
-                    selection = _state.value.selection?.let { sel -> sel.filterTo(HashSet()) { id -> result.data.items.any { it.id == id } } }
+                    // A selected sale that got invoiced meanwhile (e.g. the factura global) is dropped.
+                    selection = _state.value.selection?.let { sel ->
+                        sel.filterTo(HashSet()) { id -> result.data.items.any { it.id == id && it.isInvoiceable() } }
+                    }
                 )
                 is ApiResult.Error -> _state.value.copy(isLoading = false, error = result.toLoadError())
             }

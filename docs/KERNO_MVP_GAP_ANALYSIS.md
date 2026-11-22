@@ -2,7 +2,7 @@
 
 **Fecha de revisión:** 2026-11-19
 **Commit revisado:** `4dacefd` (`main`, sincronizado con `origin/main`, 67 commits desde 2026-09-15)
-**Última actualización:** 2026-11-21 — Lotes K (MVP-23..26: notas de crédito, factura global por partes y `Fecha` por CP, ventas con factura y nombres en membresías, comprobante con autofactura) y L (MVP-27..31: ciclo del bloqueo 69-B, bitácora inmutable, barrido de devoluciones, métricas, endurecimiento de auth) aplicados y auditados; Lote M (AND-39..41: comprobante, ventas facturadas y notas de crédito, nombre del comercio en la app Android) aplicado, auditoría pendiente
+**Última actualización:** 2026-11-21 — Lotes K (MVP-23..26: notas de crédito, factura global por partes y `Fecha` por CP, ventas con factura y nombres en membresías, comprobante con autofactura) y L (MVP-27..31: ciclo del bloqueo 69-B, bitácora inmutable, barrido de devoluciones, métricas, endurecimiento de auth) aplicados y auditados; Lote M (AND-39..41: comprobante, ventas facturadas y notas de crédito, nombre del comercio en la app Android) aplicado y auditado
 **Alcance:** backend Go (`cmd/`, `pkg/`, `migrations/`), app Android (`mobile/android`), Web POS (`web/pos`), docs y orquestador (`tools/loop`).
 
 ---

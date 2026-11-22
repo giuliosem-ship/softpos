@@ -1,5 +1,5 @@
 # Engineering Loop Handoff Checkpoint
-**Actualizado:** 2026-11-21 — Fase 1 cerrada (MVP-01..13, Lotes A–D); Fase 2 en curso: Lotes E (procesador, MVP-14..16), F (app Android, AND-30..32) y G (KYB + backoffice + ventas, MVP-17..19) aplicados y auditados; Lote K (MVP-23..26, CFDI posterior a la venta y comprobante) aplicado, auditoría pendiente
+**Actualizado:** 2026-11-21 — Fase 1 cerrada (MVP-01..13, Lotes A–D); Fase 2/3 en curso: Lotes E–L aplicados y auditados; Lote M (app Android, AND-39..41: comprobante, ventas facturadas y notas de crédito, nombre del comercio) aplicado y auditado en `feat/android-m`, pendiente de merge a `main`
 **Estado real:** prototipo con cimientos de MVP. No hay procesador de tarjetas, PAC ni STP reales: los rieles externos siguen simulados (ver `docs/KERNO_MVP_GAP_ANALYSIS.md`).
 
 ## Cómo se trabaja ahora
@@ -64,17 +64,17 @@
 - MVP-31: `iss`/`aud` del JWT, tope diario de OTP por número entre instancias y allowlist CORS.
 - Auditoría: la guarda de cambios 69-B no contaba RFCs reemplazados (un archivo del mismo tamaño habría desbloqueado a todos), un operador no podía bloquear a un comercio ya bloqueado por 69-B, y el barrido podía expirar una devolución que el comercio reenviaba.
 
-## Siguiente lote — Lote M, app Android (AND-39..41) — punto de arranque para un contexto nuevo
-Estado al 2026-11-21: `origin/main` = `eff6847` (Lotes A–L publicados y auditados). Backend listo para este lote; solo falta la app (`mobile/android`, paquete `mx.softpos.app`, applicationId `mx.kerno.softpos`).
+## Fase 3 — Lote M (app Android, AND-39..41)
+- AND-39: detalle de venta releído con `GET …/sales/{sale_id}` (marca, `**** 1234`, autorización; `SaleCard.sanitized()` deja solo los últimos 4), `receipt_url` relativo resuelto contra la URL base, *Compartir comprobante* (share sheet) y *Enviar comprobante* por correo/SMS (owner/cashier, celular MX → E.164) con mapeo de `502`/`422`/`409`/`403`/`503`.
+- AND-40: ventas marcadas (*Facturando*, *Facturada*, *Factura en cancelación*, *En factura global*), "Facturar" y la casilla deshabilitados de antemano, enlace a la factura/global, notas de crédito por venta y `409 INVOICE_HAS_CREDIT_NOTES {credit_note_id}` con *Ver nota de crédito*. Una factura cancelada o fallida libera la venta (vuelve a ser facturable, igual que en el backend).
+- AND-41: selector de comercio con `merchant_name` (fallback al id; sesiones previas sin nombre hasta el siguiente refresh) y verificación de que el 401 por `aud` (MVP-31) se recupera con el refresh existente (un solo refresh, un reintento).
+- Fixtures de contrato capturados de los handlers reales con `TestCaptureAndroidFixtures` (`pkg/api`, `ANDROID_FIXTURES_DIR=… go test -run TestCaptureAndroidFixtures ./pkg/api/`); la auditoría los regeneró y solo difieren ids, códigos de autorización, UUIDs y orden de membresías.
+- Auditoría `[AND-40-audit]`/`[AND-39-audit]`: una venta seleccionada para facturar que entraba a una factura (p. ej. la global) seguía seleccionada tras refrescar la lista y terminaba en `409 SALE_ALREADY_INVOICED`; tras un `502` parcial el reintento reenviaba también el canal que sí salió (correo duplicado al cliente).
 
-- **AND-39 Comprobante de venta:** en el detalle de venta usar `GET /api/v1/merchants/{id}/sales/{sale_id}` (`receipt_url`, `receipt_expires_at`, `card` con marca/`masked_pan`/`auth_code`) para compartir el enlace (share sheet de Android) y enviarlo con `POST /api/v1/merchants/{id}/sales/{sale_id}/receipt` `{"email"?,"phone"? (E.164)}` (owner/cashier). Contrato: `docs/CFDI.md` (§ comprobante/autofactura, ~l. 380–440) y `docs/MONEY_FLOWS.md` (~l. 267). Nunca mostrar/guardar más que los últimos 4 dígitos.
-- **AND-40 Ventas facturadas:** la lista y el detalle de ventas traen `invoice_id`, `invoice_kind` (`INDIVIDUAL`/`GLOBAL`/null), `invoice_status` y `credit_notes`. Marcar las ventas facturadas o incluidas en una global, deshabilitar de antemano "Facturar" en esas (hoy se descubre con `409 SALE_ALREADY_INVOICED`) y mostrar las notas de crédito. Cancelar una factura con notas de crédito vivas ahora responde `409 INVOICE_HAS_CREDIT_NOTES`: mapear ese código.
-- **AND-41 Nombre del comercio:** el login/refresh devuelve `memberships[].merchant_name` (`docs/AUTH.md` ~l. 84); usarlo en el selector de comercio (fallback al id si viene vacío). Desde el Lote L los access tokens llevan `aud`: un 401 tras el deploy se recupera con el refresh existente (verificar que la app lo haga).
-- Al terminar, quitar del gap analysis la fila F9 "Ventas incluidas en factura global sin marca en la app" y actualizar `docs/ANDROID_APP.md`.
+## Siguiente lote
+Ver "Pendientes sin terceros" abajo.
 
-**Proceso (igual que Lotes F/H/J):** worktree propio (`git worktree add -b feat/android-m ../SoftPOS-wt-android-m main`), subagente implementador (spec → RED → GREEN) y luego un auditor independiente que corrige cada defecto con prueba que falla primero. Fixtures de contrato capturados del backend real (ver `docs/ANDROID_APP.md` § Contract tests), no escritos a mano. Commits en inglés `feat(android): ... [AND-39]` con `Co-Authored-By`. Validación: `cd mobile/android && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease` (el release no debe contener strings dev/mock) + `go build ./...` del backend. Merge a `main`, poda del gap analysis en el mismo lote y push por SHA (`git push origin <sha>:main` tras `git merge-base --is-ancestor origin/main <sha>`).
-
-## Pendientes sin terceros (después del Lote M)
+## Pendientes sin terceros
 - Devoluciones `PENDING` sin webhook final: extender el barrido de MVP-29 (fila F10).
 - Re-postear el apartado ISR del split cuando la factura sale a persona moral (fila F8 "Retención en el split").
 - Exportación de `operator_audit_log` a almacenamiento WORM y roles separados de migración/app (F11).
